@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="CRM Brasileiros no Atacama - Sistema de Gestão Interno">
+    <title>Login — CRM Brasileiros no Atacama</title>
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="/static/css/variables.css">
+    <link rel="stylesheet" href="/static/css/base.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/login.css">
+    
+    <link rel="icon" href="/static/img/logo.png" type="image/png">
+</head>
+<body>
+    <div class="login-container">
+        <!-- Left Panel — Branding -->
+        <div class="login-brand">
+            <div class="brand-content">
+                <div class="brand-logo">
+                    <img src="/static/img/logo.png" alt="Brasileiros no Atacama">
+                </div>
+                <h1 class="brand-title">
+                    Brasileiros <span>no Atacama</span>
+                </h1>
+                <p class="brand-subtitle">
+                    Sistema de gestão interno para transformar sua operação
+                </p>
+            </div>
+
+            <!-- Mountain SVG decoration -->
+            <div class="mountain-decoration">
+                <svg viewBox="0 0 1200 120" preserveAspectRatio="none" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M0 120L200 60L400 90L600 30L800 75L1000 45L1200 80L1200 120L0 120Z" fill="rgba(192,86,33,0.2)"/>
+                    <path d="M0 120L150 80L350 100L550 50L750 85L950 55L1200 90L1200 120L0 120Z" fill="rgba(43,108,176,0.15)"/>
+                    <path d="M0 120L100 95L300 110L500 70L700 100L900 80L1200 105L1200 120L0 120Z" fill="rgba(26,32,44,0.3)"/>
+                </svg>
+            </div>
+        </div>
+
+        <!-- Right Panel — Login Form -->
+        <div class="login-form-panel">
+            <div class="login-form-wrapper">
+                <!-- Mobile Logo -->
+                <div class="mobile-logo">
+                    <img src="/static/img/logo.png" alt="Brasileiros no Atacama">
+                    <div class="mobile-brand-name">Brasileiros no Atacama</div>
+                </div>
+
+                <!-- Header -->
+                <div class="login-form-header">
+                    <h2>Bem-vindo de volta</h2>
+                    <p>Entre com suas credenciais para acessar o sistema</p>
+                </div>
+
+                <!-- Alert -->
+                <div id="loginAlert" class="alert alert-error login-alert hidden">
+                    <span>⚠️</span>
+                    <span id="alertMessage"></span>
+                </div>
+
+                <!-- Form -->
+                <form id="loginForm" class="login-form" novalidate>
+                    <div class="form-group">
+                        <label class="form-label" for="email">Email</label>
+                        <div class="form-input-icon">
+                            <span class="icon">📧</span>
+                            <input 
+                                type="email" 
+                                id="email" 
+                                name="email"
+                                class="form-input" 
+                                placeholder="seu@email.com"
+                                autocomplete="email"
+                                required
+                            >
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="password">Senha</label>
+                        <div class="form-input-icon">
+                            <span class="icon">🔒</span>
+                            <input 
+                                type="password" 
+                                id="password" 
+                                name="password"
+                                class="form-input" 
+                                placeholder="••••••••"
+                                autocomplete="current-password"
+                                required
+                            >
+                            <button type="button" class="toggle-password" id="togglePassword" aria-label="Mostrar senha">👁️</button>
+                        </div>
+                    </div>
+
+                    <div class="login-submit">
+                        <button type="submit" id="submitBtn" class="btn btn-primary btn-block btn-lg">
+                            <span id="btnText">Entrar</span>
+                            <div id="btnSpinner" class="spinner hidden"></div>
+                        </button>
+                    </div>
+                </form>
+
+                <!-- Footer -->
+                <div class="login-footer">
+                    <p>© 2026 Brasileiros no Atacama — CRM Interno</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/auth.js"></script>
+    <script src="/static/js/login.js"></script>
+</body>
+</html>

@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Leads — CRM Brasileiros no Atacama</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="/static/css/variables.css">
+    <link rel="stylesheet" href="/static/css/base.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="icon" href="/static/img/logo.png" type="image/png">
+
+    <style>
+        /* ===== Dashboard Layout (shared) ===== */
+        .dashboard-layout { display: flex; min-height: 100vh; }
+
+        .sidebar {
+            width: 260px;
+            background: linear-gradient(180deg, var(--color-dark) 0%, var(--color-dark-700) 100%);
+            color: var(--color-white);
+            display: flex; flex-direction: column;
+            position: fixed; top: 0; left: 0; bottom: 0;
+            z-index: var(--z-sidebar);
+        }
+        .sidebar-header {
+            padding: var(--space-6);
+            display: flex; align-items: center; gap: var(--space-4);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .sidebar-logo { width: 44px; height: 44px; border-radius: var(--radius-full); overflow: hidden; flex-shrink: 0; }
+        .sidebar-logo img { width: 100%; height: 100%; object-fit: cover; }
+        .sidebar-brand { font-size: var(--font-size-sm); font-weight: var(--font-weight-bold); line-height: 1.3; }
+        .sidebar-brand span { color: var(--color-accent-light); }
+        .sidebar-nav { flex: 1; padding: var(--space-4) 0; overflow-y: auto; }
+        .nav-section { padding: var(--space-2) var(--space-6); margin-top: var(--space-4); }
+        .nav-section-title { font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255,255,255,0.4); margin-bottom: var(--space-2); }
+        .nav-item { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-6); color: rgba(255,255,255,0.7); font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); transition: all var(--transition-fast); cursor: pointer; text-decoration: none; border-left: 3px solid transparent; }
+        .nav-item:hover { background: rgba(255,255,255,0.05); color: var(--color-white); }
+        .nav-item.active { background: rgba(43,108,176,0.15); color: var(--color-white); border-left-color: var(--color-primary-light); }
+        .nav-item .nav-icon { font-size: var(--font-size-lg); width: 24px; text-align: center; }
+        .nav-item .nav-badge { margin-left: auto; background: var(--color-secondary); color: var(--color-white); font-size: var(--font-size-xs); padding: 2px 8px; border-radius: var(--radius-full); font-weight: var(--font-weight-semibold); }
+        .sidebar-footer { padding: var(--space-4) var(--space-6); border-top: 1px solid rgba(255,255,255,0.1); }
+
+        .main-content { flex: 1; margin-left: 260px; display: flex; flex-direction: column; }
+
+        .top-header {
+            height: 64px; background: var(--color-white);
+            border-bottom: 1px solid var(--color-dark-200);
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0 var(--space-8); position: sticky; top: 0; z-index: 100;
+        }
+        .header-left { display: flex; align-items: center; gap: var(--space-4); }
+        .menu-toggle { display: none; background: none; border: none; font-size: var(--font-size-xl); cursor: pointer; padding: var(--space-2); color: var(--color-dark-600); }
+        .page-title { font-size: var(--font-size-lg); font-weight: var(--font-weight-semibold); color: var(--color-dark); }
+        .header-right { display: flex; align-items: center; gap: var(--space-4); }
+        .user-info { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-4); border-radius: var(--radius-lg); cursor: pointer; transition: background var(--transition-fast); }
+        .user-info:hover { background: var(--color-dark-100); }
+        .user-avatar { width: 36px; height: 36px; border-radius: var(--radius-full); background: linear-gradient(135deg, var(--color-primary), var(--color-secondary)); color: var(--color-white); display: flex; align-items: center; justify-content: center; font-weight: var(--font-weight-bold); font-size: var(--font-size-sm); }
+        .user-name { font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); color: var(--color-dark); }
+        .user-role { font-size: var(--font-size-xs); color: var(--color-dark-500); }
+
+        .content-area { flex: 1; padding: var(--space-8); background: var(--color-light); }
+
+        /* ===== Leads Page Specific ===== */
+
+        .leads-header {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: var(--space-6); flex-wrap: wrap; gap: var(--space-4);
+        }
+        .leads-header h1 { font-size: var(--font-size-2xl); font-weight: var(--font-weight-bold); }
+        .leads-actions { display: flex; gap: var(--space-3); flex-wrap: wrap; }
+
+        /* Filters */
+        .filters-bar {
+            background: var(--color-white); border-radius: var(--radius-xl);
+            padding: var(--space-5); margin-bottom: var(--space-6);
+            box-shadow: var(--shadow-sm);
+            display: flex; gap: var(--space-4); flex-wrap: wrap; align-items: flex-end;
+        }
+        .filter-group { display: flex; flex-direction: column; gap: var(--space-1); }
+        .filter-group label { font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); color: var(--color-dark-500); text-transform: uppercase; letter-spacing: 0.05em; }
+        .filter-group input, .filter-group select {
+            padding: var(--space-2) var(--space-3); font-family: var(--font-family);
+            font-size: var(--font-size-sm); border: 1.5px solid var(--color-dark-200);
+            border-radius: var(--radius-md); background: var(--color-white); color: var(--color-dark);
+            outline: none; transition: border-color var(--transition-fast); min-width: 150px;
+        }
+        .filter-group input:focus, .filter-group select:focus { border-color: var(--color-primary); }
+
+        /* Table */
+        .leads-table-wrapper {
+            background: var(--color-white); border-radius: var(--radius-xl);
+            box-shadow: var(--shadow-sm); overflow: hidden;
+        }
+        .table-info {
+            padding: var(--space-4) var(--space-6);
+            border-bottom: 1px solid var(--color-dark-100);
+            display: flex; justify-content: space-between; align-items: center;
+            font-size: var(--font-size-sm); color: var(--color-dark-500);
+        }
+        .leads-table { width: 100%; border-collapse: collapse; }
+        .leads-table th {
+            padding: var(--space-3) var(--space-4);
+            text-align: left; font-size: var(--font-size-xs);
+            font-weight: var(--font-weight-semibold); text-transform: uppercase;
+            letter-spacing: 0.05em; color: var(--color-dark-500);
+            background: var(--color-dark-100); border-bottom: 1px solid var(--color-dark-200);
+            white-space: nowrap;
+        }
+        .leads-table td {
+            padding: var(--space-3) var(--space-4);
+            font-size: var(--font-size-sm); color: var(--color-dark-700);
+            border-bottom: 1px solid var(--color-dark-100);
+            max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .leads-table tr:hover td { background: rgba(43,108,176,0.03); }
+        .leads-table .actions-cell { white-space: nowrap; }
+        .leads-table .actions-cell button {
+            background: none; border: none; cursor: pointer;
+            padding: var(--space-1) var(--space-2); font-size: var(--font-size-base);
+            border-radius: var(--radius-sm); transition: background var(--transition-fast);
+        }
+        .leads-table .actions-cell button:hover { background: var(--color-dark-100); }
+
+        .destino-tag {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 2px 10px; border-radius: var(--radius-full);
+            font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold);
+        }
+        .destino-tag.atacama { background: rgba(192,86,33,0.1); color: var(--color-secondary); }
+        .destino-tag.uyuni { background: rgba(43,108,176,0.1); color: var(--color-primary); }
+        .destino-tag.santiago { background: rgba(56,161,105,0.1); color: var(--color-success); }
+        .destino-tag.outro { background: rgba(113,128,150,0.1); color: var(--color-dark-500); }
+
+        .lead-tag { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: var(--radius-full); font-size: 10px; font-weight: var(--font-weight-semibold); color: #fff; margin: 1px 2px; white-space: nowrap; }
+        .tags-cell { max-width: 180px; overflow: hidden; white-space: normal !important; line-height: 1.8; }
+        .tags-checkboxes { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+        .tag-checkbox-item { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: var(--radius-full); border: 1.5px solid var(--color-dark-200); cursor: pointer; font-size: var(--font-size-xs); font-weight: var(--font-weight-medium); transition: all var(--transition-fast); user-select: none; }
+        .tag-checkbox-item:hover { border-color: var(--color-primary); }
+        .tag-checkbox-item.checked { color: #fff; border-color: transparent; }
+        .tag-checkbox-item input { display: none; }
+
+        .empty-state {
+            text-align: center; padding: var(--space-16);
+            color: var(--color-dark-400);
+        }
+        .empty-state .empty-icon { font-size: 3rem; margin-bottom: var(--space-4); }
+        .empty-state p { font-size: var(--font-size-base); }
+
+        /* Pagination */
+        .pagination {
+            display: flex; justify-content: center; align-items: center;
+            gap: var(--space-2); padding: var(--space-4);
+            border-top: 1px solid var(--color-dark-100);
+        }
+        .pagination button {
+            padding: var(--space-2) var(--space-3); border: 1.5px solid var(--color-dark-200);
+            background: var(--color-white); border-radius: var(--radius-md);
+            cursor: pointer; font-size: var(--font-size-sm); color: var(--color-dark-600);
+            transition: all var(--transition-fast);
+        }
+        .pagination button:hover:not(:disabled) { border-color: var(--color-primary); color: var(--color-primary); }
+        .pagination button:disabled { opacity: 0.4; cursor: not-allowed; }
+        .pagination button.active { background: var(--color-primary); color: var(--color-white); border-color: var(--color-primary); }
+        .pagination span { font-size: var(--font-size-sm); color: var(--color-dark-500); }
+
+        /* ===== Modal ===== */
+        .modal-overlay {
+            display: none; position: fixed; inset: 0;
+            background: rgba(0,0,0,0.5); z-index: var(--z-modal);
+            align-items: center; justify-content: center;
+            backdrop-filter: blur(4px);
+        }
+        .modal-overlay.show { display: flex; }
+        .modal {
+            background: var(--color-white); border-radius: var(--radius-2xl);
+            width: 90%; max-width: 600px; max-height: 90vh;
+            overflow-y: auto; box-shadow: var(--shadow-xl);
+            animation: modalSlideIn 0.3s ease;
+        }
+        @keyframes modalSlideIn {
+            from { opacity: 0; transform: translateY(20px) scale(0.98); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .modal-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: var(--space-6); border-bottom: 1px solid var(--color-dark-100);
+        }
+        .modal-header h3 { font-size: var(--font-size-xl); font-weight: var(--font-weight-bold); }
+        .modal-close {
+            background: none; border: none; font-size: var(--font-size-xl);
+            cursor: pointer; color: var(--color-dark-400); padding: var(--space-2);
+            border-radius: var(--radius-md); transition: all var(--transition-fast);
+        }
+        .modal-close:hover { background: var(--color-dark-100); color: var(--color-dark); }
+        .modal-body { padding: var(--space-6); }
+        .modal-footer {
+            padding: var(--space-4) var(--space-6);
+            border-top: 1px solid var(--color-dark-100);
+            display: flex; justify-content: flex-end; gap: var(--space-3);
+        }
+
+        /* Form grid */
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
+        .form-row .form-group { margin-bottom: var(--space-4); }
+        .form-group.full-width { grid-column: 1 / -1; }
+
+        /* Custom fields editor */
+        .custom-fields-section { margin-top: var(--space-4); }
+        .custom-fields-section h4 {
+            font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold);
+            color: var(--color-dark-500); margin-bottom: var(--space-3);
+            display: flex; align-items: center; gap: var(--space-2);
+        }
+        .custom-field-row {
+            display: flex; gap: var(--space-2); margin-bottom: var(--space-2);
+            align-items: center;
+        }
+        .custom-field-row input {
+            flex: 1; padding: var(--space-2) var(--space-3);
+            font-family: var(--font-family); font-size: var(--font-size-sm);
+            border: 1.5px solid var(--color-dark-200); border-radius: var(--radius-md);
+            outline: none;
+        }
+        .custom-field-row input:focus { border-color: var(--color-primary); }
+        .custom-field-row .remove-field {
+            background: none; border: none; cursor: pointer; color: var(--color-error);
+            font-size: var(--font-size-lg); padding: var(--space-1);
+        }
+        .add-field-btn {
+            font-size: var(--font-size-sm); color: var(--color-primary);
+            background: none; border: 1.5px dashed var(--color-primary);
+            border-radius: var(--radius-md); padding: var(--space-2) var(--space-4);
+            cursor: pointer; transition: all var(--transition-fast);
+            width: 100%;
+        }
+        .add-field-btn:hover { background: rgba(43,108,176,0.05); }
+
+        /* Import */
+        .import-dropzone {
+            border: 2px dashed var(--color-dark-300); border-radius: var(--radius-xl);
+            padding: var(--space-10); text-align: center; cursor: pointer;
+            transition: all var(--transition-base); background: var(--color-light);
+        }
+        .import-dropzone:hover, .import-dropzone.dragover {
+            border-color: var(--color-primary); background: rgba(43,108,176,0.03);
+        }
+        .import-dropzone .drop-icon { font-size: 3rem; margin-bottom: var(--space-3); }
+        .import-dropzone p { color: var(--color-dark-500); font-size: var(--font-size-sm); }
+        .import-dropzone .file-types { font-size: var(--font-size-xs); color: var(--color-dark-400); margin-top: var(--space-2); }
+        .import-file-name {
+            margin-top: var(--space-4); padding: var(--space-3) var(--space-4);
+            background: var(--color-dark-100); border-radius: var(--radius-md);
+            font-size: var(--font-size-sm); display: none; align-items: center;
+            gap: var(--space-2);
+        }
+        .import-file-name.show { display: flex; }
+        .import-results {
+            margin-top: var(--space-4); padding: var(--space-4);
+            border-radius: var(--radius-lg); display: none;
+        }
+        .import-results.show { display: block; }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .sidebar { transform: translateX(-100%); transition: transform var(--transition-base); }
+            .sidebar.open { transform: translateX(0); }
+            .main-content { margin-left: 0; }
+            .menu-toggle { display: block; }
+            .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: calc(var(--z-sidebar) - 1); }
+            .sidebar-overlay.show { display: block; }
+        }
+        @media (max-width: 768px) {
+            .content-area { padding: var(--space-4); }
+            .form-row { grid-template-columns: 1fr; }
+            .filters-bar { flex-direction: column; }
+            .leads-header { flex-direction: column; align-items: flex-start; }
+            .leads-table-wrapper { overflow-x: auto; }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard-layout">
+        <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo"><img src="/static/img/logo.png" alt="Logo"></div>
+                <div class="sidebar-brand">Brasileiros <span>no Atacama</span></div>
+            </div>
+            <nav class="sidebar-nav">
+                <div class="nav-section"><div class="nav-section-title">Principal</div></div>
+                <a href="/dashboard" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
+                <div class="nav-section"><div class="nav-section-title">CRM</div></div>
+                <a href="/leads" class="nav-item active"><span class="nav-icon">👥</span><span>Leads</span></a>
+                <a href="/tags" class="nav-item"><span class="nav-icon">🏷️</span><span>Tags</span></a>
+                <a href="/pipeline" class="nav-item"><span class="nav-icon">🎯</span><span>Pipeline</span></a>
+                <a href="#" class="nav-item" data-coming-soon><span class="nav-icon">📋</span><span>Atividades</span><span class="nav-badge">Em breve</span></a>
+                <div class="nav-section"><div class="nav-section-title">Sistema</div></div>
+                <a href="#" class="nav-item" data-coming-soon><span class="nav-icon">⚙️</span><span>Configurações</span></a>
+                <a href="/docs" class="nav-item" target="_blank"><span class="nav-icon">📖</span><span>API Docs</span></a>
+            </nav>
+            <div class="sidebar-footer">
+                <a href="#" class="nav-item" id="logoutBtn" style="border:none;padding-left:0;">
+                    <span class="nav-icon">🚪</span><span>Sair</span>
+                </a>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="top-header">
+                <div class="header-left">
+                    <button class="menu-toggle" id="menuToggle">☰</button>
+                    <h2 class="page-title">Leads</h2>
+                </div>
+                <div class="header-right">
+                    <div class="user-info">
+                        <div class="user-avatar" id="userAvatar">A</div>
+                        <div>
+                            <div class="user-name" id="userName">Carregando...</div>
+                            <div class="user-role" id="userRole">—</div>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <div class="content-area">
+                <!-- Header -->
+                <div class="leads-header">
+                    <h1>👥 Gestão de Leads</h1>
+                    <div class="leads-actions">
+                        <button class="btn btn-outline btn-sm" onclick="openImportModal()">
+                            📥 Importar
+                        </button>
+                        <button class="btn btn-primary btn-sm" onclick="openLeadModal()">
+                            ➕ Novo Lead
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Filters -->
+                <div class="filters-bar">
+                    <div class="filter-group" style="flex:1;min-width:200px;">
+                        <label>Buscar</label>
+                        <input type="text" id="filterSearch" placeholder="Nome, email ou WhatsApp..." oninput="debounceLoad()">
+                    </div>
+                    <div class="filter-group">
+                        <label>Destino</label>
+                        <select id="filterDestino" onchange="loadLeads()">
+                            <option value="">Todos</option>
+                            <option value="Atacama">Atacama</option>
+                            <option value="Uyuni">Uyuni</option>
+                            <option value="Santiago">Santiago</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Chegada de</label>
+                        <input type="date" id="filterChegadaDe" onchange="loadLeads()">
+                    </div>
+                    <div class="filter-group">
+                        <label>Chegada até</label>
+                        <input type="date" id="filterChegadaAte" onchange="loadLeads()">
+                    </div>
+                    <div class="filter-group">
+                        <button class="btn btn-ghost btn-sm" onclick="clearFilters()">✕ Limpar</button>
+                    </div>
+                </div>
+
+                <!-- Table -->
+                <div class="leads-table-wrapper">
+                    <div class="table-info">
+                        <span id="tableCount">Carregando...</span>
+                    </div>
+                    <table class="leads-table">
+                        <thead>
+                            <tr>
+                                <th>Nome</th>
+                                <th>Email</th>
+                                <th>WhatsApp</th>
+                                <th>Destino</th>
+                                <th>Tags</th>
+                                <th>Funil</th>
+                                <th>Chegada</th>
+                                <th>Partida</th>
+                                <th>Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="leadsTableBody">
+                            <tr><td colspan="9" class="empty-state">
+                                <div class="empty-icon">📭</div>
+                                <p>Carregando leads...</p>
+                            </td></tr>
+                        </tbody>
+                    </table>
+                    <div class="pagination" id="pagination"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Lead Modal (Add/Edit) -->
+    <div class="modal-overlay" id="leadModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="leadModalTitle">Novo Lead</h3>
+                <button class="modal-close" onclick="closeLeadModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div id="leadModalAlert" class="alert alert-error hidden" style="margin-bottom:var(--space-4);">
+                    <span>⚠️</span><span id="leadModalAlertMsg"></span>
+                </div>
+                <form id="leadForm">
+                    <input type="hidden" id="leadId">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" for="leadNome">Nome *</label>
+                            <input type="text" id="leadNome" class="form-input" placeholder="Nome completo" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="leadEmail">Email</label>
+                            <input type="email" id="leadEmail" class="form-input" placeholder="email@exemplo.com">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" for="leadWhatsapp">WhatsApp</label>
+                            <input type="text" id="leadWhatsapp" class="form-input" placeholder="+55 11 99999-9999">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="leadDestino">Destino</label>
+                            <select id="leadDestino" class="form-input">
+                                <option value="">Selecione...</option>
+                                <option value="Atacama">🏜️ Atacama</option>
+                                <option value="Uyuni">🪞 Uyuni</option>
+                                <option value="Santiago">🏙️ Santiago</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" for="leadChegada">Data de Chegada</label>
+                            <input type="date" id="leadChegada" class="form-input">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="leadPartida">Data de Partida</label>
+                            <input type="date" id="leadPartida" class="form-input">
+                        </div>
+                    </div>
+
+                    <!-- Tags -->
+                    <div class="custom-fields-section">
+                        <h4>🏷️ Tags</h4>
+                        <div class="tags-checkboxes" id="leadTagsContainer">Carregando tags...</div>
+                    </div>
+
+                    <!-- Custom Fields -->
+                    <div class="custom-fields-section">
+                        <h4>📝 Campos Personalizados</h4>
+                        <div id="customFieldsContainer"></div>
+                        <button type="button" class="add-field-btn" onclick="addCustomField()">
+                            + Adicionar campo
+                        </button>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeLeadModal()">Cancelar</button>
+                <button class="btn btn-primary" id="leadSaveBtn" onclick="saveLead()">
+                    <span id="leadSaveBtnText">Salvar</span>
+                    <div id="leadSaveSpinner" class="spinner hidden"></div>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Import Modal -->
+    <div class="modal-overlay" id="importModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>📥 Importar Leads</h3>
+                <button class="modal-close" onclick="closeImportModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="import-dropzone" id="importDropzone" onclick="document.getElementById('importFile').click()">
+                    <div class="drop-icon">📂</div>
+                    <p>Arraste um arquivo aqui ou clique para selecionar</p>
+                    <div class="file-types">Formatos: .xlsx, .xls, .csv</div>
+                </div>
+                <input type="file" id="importFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleFileSelect(event)">
+                <div class="import-file-name" id="importFileName">
+                    <span>📄</span><span id="importFileNameText"></span>
+                </div>
+                <div class="import-results" id="importResults"></div>
+                <div style="margin-top:var(--space-4);font-size:var(--font-size-xs);color:var(--color-dark-400);">
+                    <strong>Colunas reconhecidas:</strong> Nome, Email, WhatsApp/Telefone, Destino, Chegada/Check-in, Partida/Check-out<br>
+                    <strong>Colunas extras</strong> são salvas automaticamente como campos personalizados.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeImportModal()">Cancelar</button>
+                <button class="btn btn-primary" id="importBtn" onclick="importFile()" disabled>
+                    <span id="importBtnText">Importar</span>
+                    <div id="importSpinner" class="spinner hidden"></div>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/auth.js"></script>
+    <script>
+    // ─── State ──────────────────────────────────────
+    let currentPage = 0;
+    const PAGE_SIZE = 20;
+    let debounceTimer = null;
+    let selectedFile = null;
+    let allTags = [];
+    let currentLeadTags = [];
+
+    document.addEventListener('DOMContentLoaded', () => {
+        if (!Auth.requireAuth()) return;
+
+        const user = Auth.getUser();
+        if (user) {
+            document.getElementById('userName').textContent = user.nome;
+            document.getElementById('userRole').textContent = user.role === 'admin' ? 'Administrador' : 'Usuário';
+            document.getElementById('userAvatar').textContent = user.nome.charAt(0).toUpperCase();
+        }
+
+        document.getElementById('logoutBtn').addEventListener('click', e => { e.preventDefault(); Auth.logout(); });
+
+        // Mobile sidebar
+        const sidebar = document.getElementById('sidebar');
+        const overlay = document.getElementById('sidebarOverlay');
+        document.getElementById('menuToggle').addEventListener('click', () => {
+            sidebar.classList.toggle('open'); overlay.classList.toggle('show');
+        });
+        overlay.addEventListener('click', () => { sidebar.classList.remove('open'); overlay.classList.remove('show'); });
+
+        // Coming soon
+        document.querySelectorAll('[data-coming-soon]').forEach(item => {
+            item.addEventListener('click', e => { e.preventDefault(); alert('🚧 Funcionalidade em desenvolvimento!'); });
+        });
+
+        // Drag & drop
+        const dz = document.getElementById('importDropzone');
+        dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
+        dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+        dz.addEventListener('drop', e => {
+            e.preventDefault(); dz.classList.remove('dragover');
+            if (e.dataTransfer.files.length) {
+                document.getElementById('importFile').files = e.dataTransfer.files;
+                handleFileSelect({ target: { files: e.dataTransfer.files } });
+            }
+        });
+
+        loadAllTags();
+        loadLeads();
+    });
+
+    // ─── API ────────────────────────────────────────
+
+    async function loadLeads() {
+        const skip = currentPage * PAGE_SIZE;
+        const params = new URLSearchParams({ skip, limit: PAGE_SIZE });
+
+        const search = document.getElementById('filterSearch').value.trim();
+        const destino = document.getElementById('filterDestino').value;
+        const chegadaDe = document.getElementById('filterChegadaDe').value;
+        const chegadaAte = document.getElementById('filterChegadaAte').value;
+
+        if (search) params.set('search', search);
+        if (destino) params.set('destino', destino);
+        if (chegadaDe) params.set('data_chegada_de', chegadaDe);
+        if (chegadaAte) params.set('data_chegada_ate', chegadaAte);
+
+        const resp = await Auth.apiRequest(`/api/leads?${params}`);
+        if (!resp) return;
+        const data = await resp.json();
+
+        renderTable(data);
+        renderPagination(data);
+    }
+
+    function debounceLoad() {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => { currentPage = 0; loadLeads(); }, 300);
+    }
+
+    function clearFilters() {
+        document.getElementById('filterSearch').value = '';
+        document.getElementById('filterDestino').value = '';
+        document.getElementById('filterChegadaDe').value = '';
+        document.getElementById('filterChegadaAte').value = '';
+        currentPage = 0;
+        loadLeads();
+    }
+
+    // ─── Table Rendering ────────────────────────────
+
+    function formatDate(dateStr) {
+        if (!dateStr) return '—';
+        const d = new Date(dateStr + 'T00:00:00');
+        return d.toLocaleDateString('pt-BR');
+    }
+
+    function getDestinoTag(destino) {
+        if (!destino) return '<span class="text-muted">—</span>';
+        const cls = destino.toLowerCase() === 'atacama' ? 'atacama'
+            : destino.toLowerCase() === 'uyuni' ? 'uyuni'
+            : destino.toLowerCase() === 'santiago' ? 'santiago' : 'outro';
+        const icon = cls === 'atacama' ? '🏜️' : cls === 'uyuni' ? '🪞' : cls === 'santiago' ? '🏙️' : '📍';
+        return `<span class="destino-tag ${cls}">${icon} ${destino}</span>`;
+    }
+
+    function renderLeadTags(tags) {
+        if (!tags || tags.length === 0) return '<span class="text-muted">—</span>';
+        return tags.map(t => `<span class="lead-tag" style="background:${esc(t.cor)}">${esc(t.nome)}</span>`).join('');
+    }
+
+    function renderFunis(funis) {
+        if (!funis || funis.length === 0) return '<span class="text-muted">—</span>';
+        return funis.map(f => `<span class="lead-tag" style="background:var(--color-primary);font-size:10px;">${esc(f.funnel_nome)} → ${esc(f.etapa_nome)}</span>`).join('');
+    }
+
+    function renderTable(data) {
+        const tbody = document.getElementById('leadsTableBody');
+        document.getElementById('tableCount').textContent = `${data.total} lead${data.total !== 1 ? 's' : ''} encontrado${data.total !== 1 ? 's' : ''}`;
+
+        if (data.leads.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="9"><div class="empty-state">
+                <div class="empty-icon">📭</div>
+                <p>Nenhum lead encontrado</p>
+            </div></td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = data.leads.map(l => `
+            <tr>
+                <td><strong>${esc(l.nome)}</strong></td>
+                <td>${l.email ? esc(l.email) : '<span class="text-muted">—</span>'}</td>
+                <td>${l.whatsapp ? esc(l.whatsapp) : '<span class="text-muted">—</span>'}</td>
+                <td>${getDestinoTag(l.destino)}</td>
+                <td class="tags-cell">${renderLeadTags(l.tags)}</td>
+                <td class="tags-cell">${renderFunis(l.funis)}</td>
+                <td>${formatDate(l.data_chegada)}</td>
+                <td>${formatDate(l.data_partida)}</td>
+                <td class="actions-cell">
+                    <button title="Editar" onclick="editLead(${l.id})">✏️</button>
+                    <button title="Excluir" onclick="deleteLead(${l.id}, '${esc(l.nome)}')">🗑️</button>
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    function renderPagination(data) {
+        const totalPages = Math.ceil(data.total / PAGE_SIZE);
+        const container = document.getElementById('pagination');
+
+        if (totalPages <= 1) { container.innerHTML = ''; return; }
+
+        let html = `<button ${currentPage === 0 ? 'disabled' : ''} onclick="goToPage(${currentPage - 1})">← Anterior</button>`;
+        html += `<span>Página ${currentPage + 1} de ${totalPages}</span>`;
+        html += `<button ${currentPage >= totalPages - 1 ? 'disabled' : ''} onclick="goToPage(${currentPage + 1})">Próxima →</button>`;
+        container.innerHTML = html;
+    }
+
+    function goToPage(page) { currentPage = page; loadLeads(); }
+
+    function esc(str) {
+        if (!str) return '';
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    // ─── Lead Modal ─────────────────────────────────
+
+    async function loadAllTags() {
+        const resp = await Auth.apiRequest('/api/tags');
+        if (!resp) return;
+        const data = await resp.json();
+        allTags = data.tags || [];
+    }
+
+    function renderTagCheckboxes(selectedIds = []) {
+        const container = document.getElementById('leadTagsContainer');
+        if (allTags.length === 0) {
+            container.innerHTML = '<span style="font-size:var(--font-size-xs);color:var(--color-dark-400)">Nenhuma tag criada. <a href="/tags" style="color:var(--color-primary)">Criar tags</a></span>';
+            return;
+        }
+        container.innerHTML = allTags.map(t => {
+            const checked = selectedIds.includes(t.id);
+            return `<label class="tag-checkbox-item ${checked ? 'checked' : ''}" style="${checked ? 'background:'+t.cor+';' : ''}" onclick="toggleTagCheck(this, '${t.cor}')">
+                <input type="checkbox" value="${t.id}" ${checked ? 'checked' : ''}>
+                ${esc(t.nome)}
+            </label>`;
+        }).join('');
+    }
+
+    function toggleTagCheck(label, cor) {
+        const cb = label.querySelector('input');
+        // Toggle will happen after this click, so check current state
+        setTimeout(() => {
+            if (cb.checked) {
+                label.classList.add('checked');
+                label.style.background = cor;
+            } else {
+                label.classList.remove('checked');
+                label.style.background = '';
+            }
+        }, 0);
+    }
+
+    function openLeadModal(lead = null) {
+        document.getElementById('leadModal').classList.add('show');
+        document.getElementById('leadModalTitle').textContent = lead ? 'Editar Lead' : 'Novo Lead';
+        document.getElementById('leadModalAlert').classList.add('hidden');
+
+        document.getElementById('leadId').value = lead ? lead.id : '';
+        document.getElementById('leadNome').value = lead ? lead.nome : '';
+        document.getElementById('leadEmail').value = lead ? lead.email || '' : '';
+        document.getElementById('leadWhatsapp').value = lead ? lead.whatsapp || '' : '';
+        document.getElementById('leadDestino').value = lead ? lead.destino || '' : '';
+        document.getElementById('leadChegada').value = lead ? lead.data_chegada || '' : '';
+        document.getElementById('leadPartida').value = lead ? lead.data_partida || '' : '';
+
+        // Tags
+        currentLeadTags = lead && lead.tags ? lead.tags.map(t => t.id) : [];
+        renderTagCheckboxes(currentLeadTags);
+
+        // Custom fields
+        const container = document.getElementById('customFieldsContainer');
+        container.innerHTML = '';
+        if (lead && lead.campos_personalizados) {
+            Object.entries(lead.campos_personalizados).forEach(([key, val]) => {
+                addCustomField(key, val);
+            });
+        }
+    }
+
+    function closeLeadModal() {
+        document.getElementById('leadModal').classList.remove('show');
+    }
+
+    async function editLead(id) {
+        const resp = await Auth.apiRequest(`/api/leads/${id}`);
+        if (!resp) return;
+        const lead = await resp.json();
+        openLeadModal(lead);
+    }
+
+    async function saveLead() {
+        const id = document.getElementById('leadId').value;
+        const nome = document.getElementById('leadNome').value.trim();
+
+        if (!nome) {
+            showLeadAlert('Nome é obrigatório');
+            return;
+        }
+
+        // Collect custom fields
+        const campos = {};
+        document.querySelectorAll('.custom-field-row').forEach(row => {
+            const key = row.querySelector('.cf-key').value.trim();
+            const val = row.querySelector('.cf-val').value.trim();
+            if (key) campos[key] = val;
+        });
+
+        const body = {
+            nome,
+            email: document.getElementById('leadEmail').value.trim() || null,
+            whatsapp: document.getElementById('leadWhatsapp').value.trim() || null,
+            destino: document.getElementById('leadDestino').value || null,
+            data_chegada: document.getElementById('leadChegada').value || null,
+            data_partida: document.getElementById('leadPartida').value || null,
+            campos_personalizados: campos,
+        };
+
+        setLeadSaving(true);
+
+        const url = id ? `/api/leads/${id}` : '/api/leads';
+        const method = id ? 'PUT' : 'POST';
+
+        const resp = await Auth.apiRequest(url, { method, body: JSON.stringify(body) });
+        setLeadSaving(false);
+
+        if (!resp) return;
+        if (!resp.ok) {
+            const err = await resp.json();
+            showLeadAlert(err.detail || 'Erro ao salvar');
+            return;
+        }
+
+        // Save tags
+        const savedData = await resp.json();
+        const leadId = savedData.id || id;
+        const selectedTagIds = [];
+        document.querySelectorAll('#leadTagsContainer input:checked').forEach(cb => selectedTagIds.push(parseInt(cb.value)));
+        await Auth.apiRequest(`/api/tags/lead/${leadId}`, { method: 'PUT', body: JSON.stringify({ tag_ids: selectedTagIds }) });
+
+        closeLeadModal();
+        loadLeads();
+    }
+
+    async function deleteLead(id, nome) {
+        if (!confirm(`Desativar o lead "${nome}"?`)) return;
+        const resp = await Auth.apiRequest(`/api/leads/${id}`, { method: 'DELETE' });
+        if (resp && resp.ok) loadLeads();
+    }
+
+    function addCustomField(key = '', value = '') {
+        const container = document.getElementById('customFieldsContainer');
+        const row = document.createElement('div');
+        row.className = 'custom-field-row';
+        row.innerHTML = `
+            <input type="text" class="cf-key" placeholder="Nome do campo" value="${esc(key)}">
+            <input type="text" class="cf-val" placeholder="Valor" value="${esc(value)}">
+            <button type="button" class="remove-field" onclick="this.parentElement.remove()">✕</button>
+        `;
+        container.appendChild(row);
+    }
+
+    function showLeadAlert(msg) {
+        document.getElementById('leadModalAlertMsg').textContent = msg;
+        document.getElementById('leadModalAlert').classList.remove('hidden');
+    }
+
+    function setLeadSaving(saving) {
+        document.getElementById('leadSaveBtn').disabled = saving;
+        document.getElementById('leadSaveBtnText').textContent = saving ? 'Salvando...' : 'Salvar';
+        document.getElementById('leadSaveSpinner').classList.toggle('hidden', !saving);
+    }
+
+    // ─── Import ─────────────────────────────────────
+
+    function openImportModal() {
+        document.getElementById('importModal').classList.add('show');
+        document.getElementById('importResults').classList.remove('show');
+        document.getElementById('importFileName').classList.remove('show');
+        document.getElementById('importBtn').disabled = true;
+        selectedFile = null;
+    }
+
+    function closeImportModal() {
+        document.getElementById('importModal').classList.remove('show');
+    }
+
+    function handleFileSelect(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        selectedFile = file;
+        document.getElementById('importFileNameText').textContent = file.name;
+        document.getElementById('importFileName').classList.add('show');
+        document.getElementById('importBtn').disabled = false;
+        document.getElementById('importResults').classList.remove('show');
+    }
+
+    async function importFile() {
+        if (!selectedFile) return;
+
+        document.getElementById('importBtn').disabled = true;
+        document.getElementById('importBtnText').textContent = 'Importando...';
+        document.getElementById('importSpinner').classList.remove('hidden');
+
+        const formData = new FormData();
+        formData.append('file', selectedFile);
+
+        try {
+            const token = Auth.getToken();
+            const resp = await fetch('/api/leads/import', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` },
+                body: formData,
+            });
+
+            const data = await resp.json();
+            const resultsDiv = document.getElementById('importResults');
+
+            if (!resp.ok) {
+                resultsDiv.className = 'import-results show alert alert-error';
+                resultsDiv.innerHTML = `⚠️ ${data.detail || 'Erro na importação'}`;
+            } else {
+                const hasErrors = data.erros > 0;
+                resultsDiv.className = `import-results show alert ${hasErrors ? 'alert-warning' : 'alert-success'}`;
+                let html = `<strong>${data.importados}</strong> de ${data.total_linhas} leads importados com sucesso.`;
+                if (data.erros > 0) {
+                    html += `<br><strong>${data.erros} erros:</strong><br>`;
+                    html += data.detalhes_erros.slice(0, 10).map(e => `• ${esc(e)}`).join('<br>');
+                }
+                resultsDiv.innerHTML = html;
+                loadLeads();
+            }
+        } catch (err) {
+            const resultsDiv = document.getElementById('importResults');
+            resultsDiv.className = 'import-results show alert alert-error';
+            resultsDiv.innerHTML = '⚠️ Erro de conexão';
+        }
+
+        document.getElementById('importBtnText').textContent = 'Importar';
+        document.getElementById('importSpinner').classList.add('hidden');
+        document.getElementById('importBtn').disabled = false;
+    }
+    </script>
+</body>
+</html>

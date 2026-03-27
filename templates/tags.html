@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tags — CRM Brasileiros no Atacama</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/variables.css">
+    <link rel="stylesheet" href="/static/css/base.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="icon" href="/static/img/logo.png" type="image/png">
+    <style>
+        .dashboard-layout { display: flex; min-height: 100vh; }
+        .sidebar { width: 260px; background: linear-gradient(180deg, var(--color-dark) 0%, var(--color-dark-700) 100%); color: var(--color-white); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: var(--z-sidebar); }
+        .sidebar-header { padding: var(--space-6); display: flex; align-items: center; gap: var(--space-4); border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .sidebar-logo { width: 44px; height: 44px; border-radius: var(--radius-full); overflow: hidden; flex-shrink: 0; }
+        .sidebar-logo img { width: 100%; height: 100%; object-fit: cover; }
+        .sidebar-brand { font-size: var(--font-size-sm); font-weight: var(--font-weight-bold); line-height: 1.3; }
+        .sidebar-brand span { color: var(--color-accent-light); }
+        .sidebar-nav { flex: 1; padding: var(--space-4) 0; overflow-y: auto; }
+        .nav-section { padding: var(--space-2) var(--space-6); margin-top: var(--space-4); }
+        .nav-section-title { font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255,255,255,0.4); margin-bottom: var(--space-2); }
+        .nav-item { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-6); color: rgba(255,255,255,0.7); font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); transition: all var(--transition-fast); cursor: pointer; text-decoration: none; border-left: 3px solid transparent; }
+        .nav-item:hover { background: rgba(255,255,255,0.05); color: var(--color-white); }
+        .nav-item.active { background: rgba(43,108,176,0.15); color: var(--color-white); border-left-color: var(--color-primary-light); }
+        .nav-item .nav-icon { font-size: var(--font-size-lg); width: 24px; text-align: center; }
+        .nav-item .nav-badge { margin-left: auto; background: var(--color-secondary); color: var(--color-white); font-size: var(--font-size-xs); padding: 2px 8px; border-radius: var(--radius-full); font-weight: var(--font-weight-semibold); }
+        .sidebar-footer { padding: var(--space-4) var(--space-6); border-top: 1px solid rgba(255,255,255,0.1); }
+        .main-content { flex: 1; margin-left: 260px; display: flex; flex-direction: column; }
+        .top-header { height: 64px; background: var(--color-white); border-bottom: 1px solid var(--color-dark-200); display: flex; align-items: center; justify-content: space-between; padding: 0 var(--space-8); position: sticky; top: 0; z-index: 100; }
+        .header-left { display: flex; align-items: center; gap: var(--space-4); }
+        .menu-toggle { display: none; background: none; border: none; font-size: var(--font-size-xl); cursor: pointer; padding: var(--space-2); color: var(--color-dark-600); }
+        .page-title { font-size: var(--font-size-lg); font-weight: var(--font-weight-semibold); }
+        .header-right { display: flex; align-items: center; gap: var(--space-4); }
+        .user-info { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-4); border-radius: var(--radius-lg); cursor: pointer; }
+        .user-avatar { width: 36px; height: 36px; border-radius: var(--radius-full); background: linear-gradient(135deg, var(--color-primary), var(--color-secondary)); color: var(--color-white); display: flex; align-items: center; justify-content: center; font-weight: var(--font-weight-bold); font-size: var(--font-size-sm); }
+        .user-name { font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); }
+        .user-role { font-size: var(--font-size-xs); color: var(--color-dark-500); }
+        .content-area { flex: 1; padding: var(--space-8); background: var(--color-light); }
+
+        /* Tags page */
+        .tags-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-6); flex-wrap: wrap; gap: var(--space-4); }
+        .tags-header h1 { font-size: var(--font-size-2xl); font-weight: var(--font-weight-bold); }
+
+        .tags-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: var(--space-4);
+        }
+        .tag-card {
+            background: var(--color-white); border-radius: var(--radius-xl);
+            padding: var(--space-5); box-shadow: var(--shadow-sm);
+            display: flex; align-items: center; gap: var(--space-4);
+            transition: all var(--transition-base); border-left: 4px solid transparent;
+        }
+        .tag-card:hover { box-shadow: var(--shadow-lg); transform: translateY(-1px); }
+        .tag-color-dot {
+            width: 40px; height: 40px; border-radius: var(--radius-lg);
+            flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+            font-size: var(--font-size-lg); color: var(--color-white); font-weight: var(--font-weight-bold);
+        }
+        .tag-card-info { flex: 1; }
+        .tag-card-name { font-size: var(--font-size-base); font-weight: var(--font-weight-semibold); color: var(--color-dark); }
+        .tag-card-meta { font-size: var(--font-size-xs); color: var(--color-dark-400); margin-top: 2px; }
+        .tag-card-actions { display: flex; gap: var(--space-1); }
+        .tag-card-actions button {
+            background: none; border: none; cursor: pointer; padding: var(--space-2);
+            font-size: var(--font-size-base); border-radius: var(--radius-md);
+            transition: background var(--transition-fast);
+        }
+        .tag-card-actions button:hover { background: var(--color-dark-100); }
+
+        .empty-state { text-align: center; padding: var(--space-16); color: var(--color-dark-400); }
+        .empty-state .empty-icon { font-size: 3rem; margin-bottom: var(--space-4); }
+
+        /* Modal */
+        .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: var(--z-modal); align-items: center; justify-content: center; backdrop-filter: blur(4px); }
+        .modal-overlay.show { display: flex; }
+        .modal { background: var(--color-white); border-radius: var(--radius-2xl); width: 90%; max-width: 440px; box-shadow: var(--shadow-xl); animation: modalSlideIn 0.3s ease; }
+        @keyframes modalSlideIn { from { opacity: 0; transform: translateY(20px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        .modal-header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-6); border-bottom: 1px solid var(--color-dark-100); }
+        .modal-header h3 { font-size: var(--font-size-xl); font-weight: var(--font-weight-bold); }
+        .modal-close { background: none; border: none; font-size: var(--font-size-xl); cursor: pointer; color: var(--color-dark-400); padding: var(--space-2); border-radius: var(--radius-md); }
+        .modal-close:hover { background: var(--color-dark-100); }
+        .modal-body { padding: var(--space-6); }
+        .modal-footer { padding: var(--space-4) var(--space-6); border-top: 1px solid var(--color-dark-100); display: flex; justify-content: flex-end; gap: var(--space-3); }
+
+        /* Color picker */
+        .color-picker-grid {
+            display: grid; grid-template-columns: repeat(8, 1fr); gap: var(--space-2);
+            margin-top: var(--space-2);
+        }
+        .color-swatch {
+            width: 36px; height: 36px; border-radius: var(--radius-md); cursor: pointer;
+            border: 3px solid transparent; transition: all var(--transition-fast);
+            display: flex; align-items: center; justify-content: center;
+        }
+        .color-swatch:hover { transform: scale(1.15); }
+        .color-swatch.selected { border-color: var(--color-dark); box-shadow: var(--shadow-md); }
+        .color-swatch .check { color: white; font-size: 14px; font-weight: bold; display: none; }
+        .color-swatch.selected .check { display: block; }
+
+        .tag-preview {
+            margin-top: var(--space-4); padding: var(--space-3);
+            background: var(--color-light); border-radius: var(--radius-lg);
+            text-align: center;
+        }
+        .tag-preview-chip {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 4px 14px; border-radius: var(--radius-full);
+            font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold);
+            color: var(--color-white);
+        }
+
+        @media (max-width: 1024px) {
+            .sidebar { transform: translateX(-100%); transition: transform var(--transition-base); }
+            .sidebar.open { transform: translateX(0); }
+            .main-content { margin-left: 0; }
+            .menu-toggle { display: block; }
+            .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: calc(var(--z-sidebar) - 1); }
+            .sidebar-overlay.show { display: block; }
+        }
+        @media (max-width: 640px) { .content-area { padding: var(--space-4); } .tags-grid { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="dashboard-layout">
+        <div class="sidebar-overlay" id="sidebarOverlay"></div>
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo"><img src="/static/img/logo.png" alt="Logo"></div>
+                <div class="sidebar-brand">Brasileiros <span>no Atacama</span></div>
+            </div>
+            <nav class="sidebar-nav">
+                <div class="nav-section"><div class="nav-section-title">Principal</div></div>
+                <a href="/dashboard" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
+                <div class="nav-section"><div class="nav-section-title">CRM</div></div>
+                <a href="/leads" class="nav-item"><span class="nav-icon">👥</span><span>Leads</span></a>
+                <a href="/tags" class="nav-item active"><span class="nav-icon">🏷️</span><span>Tags</span></a>
+                <a href="/pipeline" class="nav-item"><span class="nav-icon">🎯</span><span>Pipeline</span></a>
+                <a href="#" class="nav-item" data-coming-soon><span class="nav-icon">📋</span><span>Atividades</span><span class="nav-badge">Em breve</span></a>
+                <div class="nav-section"><div class="nav-section-title">Sistema</div></div>
+                <a href="#" class="nav-item" data-coming-soon><span class="nav-icon">⚙️</span><span>Configurações</span></a>
+                <a href="/docs" class="nav-item" target="_blank"><span class="nav-icon">📖</span><span>API Docs</span></a>
+            </nav>
+            <div class="sidebar-footer">
+                <a href="#" class="nav-item" id="logoutBtn" style="border:none;padding-left:0;">
+                    <span class="nav-icon">🚪</span><span>Sair</span>
+                </a>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <header class="top-header">
+                <div class="header-left">
+                    <button class="menu-toggle" id="menuToggle">☰</button>
+                    <h2 class="page-title">Tags</h2>
+                </div>
+                <div class="header-right">
+                    <div class="user-info">
+                        <div class="user-avatar" id="userAvatar">A</div>
+                        <div>
+                            <div class="user-name" id="userName">Carregando...</div>
+                            <div class="user-role" id="userRole">—</div>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <div class="content-area">
+                <div class="tags-header">
+                    <h1>🏷️ Gerenciar Tags</h1>
+                    <button class="btn btn-primary btn-sm" onclick="openTagModal()">➕ Nova Tag</button>
+                </div>
+
+                <div class="tags-grid" id="tagsGrid">
+                    <div class="empty-state"><div class="empty-icon">🏷️</div><p>Carregando tags...</p></div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Tag Modal -->
+    <div class="modal-overlay" id="tagModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="tagModalTitle">Nova Tag</h3>
+                <button class="modal-close" onclick="closeTagModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div id="tagAlert" class="alert alert-error hidden" style="margin-bottom:var(--space-4);">
+                    <span>⚠️</span><span id="tagAlertMsg"></span>
+                </div>
+                <input type="hidden" id="tagId">
+                <div class="form-group">
+                    <label class="form-label" for="tagNome">Nome da Tag</label>
+                    <input type="text" id="tagNome" class="form-input" placeholder="Ex: VIP, Urgente, Retorno..." oninput="updatePreview()">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Cor</label>
+                    <div class="color-picker-grid" id="colorPicker"></div>
+                </div>
+                <div class="tag-preview">
+                    <span>Preview: </span>
+                    <span class="tag-preview-chip" id="tagPreview">Tag</span>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeTagModal()">Cancelar</button>
+                <button class="btn btn-primary" onclick="saveTag()">Salvar</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/auth.js"></script>
+    <script>
+    const COLORS = [
+        '#2B6CB0', '#3182CE', '#2C5282', '#2B6CB0',
+        '#C05621', '#DD6B20', '#9C4221', '#ED8936',
+        '#38A169', '#48BB78', '#276749', '#68D391',
+        '#D69E2E', '#ECC94B', '#B7791F', '#F6E05E',
+        '#E53E3E', '#FC8181', '#C53030', '#FEB2B2',
+        '#805AD5', '#9F7AEA', '#6B46C1', '#D6BCFA',
+        '#D53F8C', '#ED64A6', '#97266D', '#FBB6CE',
+        '#4A5568', '#718096', '#2D3748', '#A0AEC0',
+    ];
+    let selectedColor = COLORS[0];
+
+    document.addEventListener('DOMContentLoaded', () => {
+        if (!Auth.requireAuth()) return;
+        const user = Auth.getUser();
+        if (user) {
+            document.getElementById('userName').textContent = user.nome;
+            document.getElementById('userRole').textContent = user.role === 'admin' ? 'Administrador' : 'Usuário';
+            document.getElementById('userAvatar').textContent = user.nome.charAt(0).toUpperCase();
+        }
+        document.getElementById('logoutBtn').addEventListener('click', e => { e.preventDefault(); Auth.logout(); });
+        const sidebar = document.getElementById('sidebar'), overlay = document.getElementById('sidebarOverlay');
+        document.getElementById('menuToggle').addEventListener('click', () => { sidebar.classList.toggle('open'); overlay.classList.toggle('show'); });
+        overlay.addEventListener('click', () => { sidebar.classList.remove('open'); overlay.classList.remove('show'); });
+        document.querySelectorAll('[data-coming-soon]').forEach(i => i.addEventListener('click', e => { e.preventDefault(); alert('🚧 Em desenvolvimento!'); }));
+
+        buildColorPicker();
+        loadTags();
+    });
+
+    function buildColorPicker() {
+        const grid = document.getElementById('colorPicker');
+        grid.innerHTML = COLORS.map(c =>
+            `<div class="color-swatch ${c === selectedColor ? 'selected' : ''}" style="background:${c}" data-color="${c}" onclick="selectColor('${c}')"><span class="check">✓</span></div>`
+        ).join('');
+    }
+
+    function selectColor(color) {
+        selectedColor = color;
+        document.querySelectorAll('.color-swatch').forEach(s => {
+            s.classList.toggle('selected', s.dataset.color === color);
+        });
+        updatePreview();
+    }
+
+    function updatePreview() {
+        const name = document.getElementById('tagNome').value.trim() || 'Tag';
+        const preview = document.getElementById('tagPreview');
+        preview.textContent = name;
+        preview.style.background = selectedColor;
+    }
+
+    async function loadTags() {
+        const resp = await Auth.apiRequest('/api/tags');
+        if (!resp) return;
+        const data = await resp.json();
+        const grid = document.getElementById('tagsGrid');
+
+        if (data.tags.length === 0) {
+            grid.innerHTML = '<div class="empty-state"><div class="empty-icon">🏷️</div><p>Nenhuma tag criada ainda</p></div>';
+            return;
+        }
+
+        grid.innerHTML = data.tags.map(t => `
+            <div class="tag-card" style="border-left-color:${esc(t.cor)}">
+                <div class="tag-color-dot" style="background:${esc(t.cor)}">${esc(t.nome.charAt(0).toUpperCase())}</div>
+                <div class="tag-card-info">
+                    <div class="tag-card-name">${esc(t.nome)}</div>
+                    <div class="tag-card-meta">${esc(t.cor)}</div>
+                </div>
+                <div class="tag-card-actions">
+                    <button title="Editar" onclick="editTag(${t.id})">✏️</button>
+                    <button title="Excluir" onclick="deleteTag(${t.id}, '${esc(t.nome)}')">🗑️</button>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    function openTagModal(tag = null) {
+        document.getElementById('tagModal').classList.add('show');
+        document.getElementById('tagModalTitle').textContent = tag ? 'Editar Tag' : 'Nova Tag';
+        document.getElementById('tagAlert').classList.add('hidden');
+        document.getElementById('tagId').value = tag ? tag.id : '';
+        document.getElementById('tagNome').value = tag ? tag.nome : '';
+        selectedColor = tag ? tag.cor : COLORS[0];
+        buildColorPicker();
+        updatePreview();
+    }
+
+    function closeTagModal() { document.getElementById('tagModal').classList.remove('show'); }
+
+    async function editTag(id) {
+        const resp = await Auth.apiRequest(`/api/tags/${id}`);
+        if (!resp) return;
+        const tag = await resp.json();
+        openTagModal(tag);
+    }
+
+    async function saveTag() {
+        const id = document.getElementById('tagId').value;
+        const nome = document.getElementById('tagNome').value.trim();
+        if (!nome) {
+            document.getElementById('tagAlertMsg').textContent = 'Nome é obrigatório';
+            document.getElementById('tagAlert').classList.remove('hidden');
+            return;
+        }
+
+        const body = { nome, cor: selectedColor };
+        const url = id ? `/api/tags/${id}` : '/api/tags';
+        const method = id ? 'PUT' : 'POST';
+
+        const resp = await Auth.apiRequest(url, { method, body: JSON.stringify(body) });
+        if (!resp) return;
+        if (!resp.ok) {
+            const err = await resp.json();
+            document.getElementById('tagAlertMsg').textContent = err.detail || 'Erro ao salvar';
+            document.getElementById('tagAlert').classList.remove('hidden');
+            return;
+        }
+        closeTagModal();
+        loadTags();
+    }
+
+    async function deleteTag(id, nome) {
+        if (!confirm(`Excluir a tag "${nome}"? Ela será removida de todos os leads.`)) return;
+        const resp = await Auth.apiRequest(`/api/tags/${id}`, { method: 'DELETE' });
+        if (resp && resp.ok) loadTags();
+    }
+
+    function esc(str) { if (!str) return ''; const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
+    </script>
+</body>
+</html>

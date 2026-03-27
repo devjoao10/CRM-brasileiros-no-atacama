@@ -1,0 +1,266 @@
+/* ============================================
+   LOGIN PAGE
+   ============================================ */
+
+.login-container {
+    display: flex;
+    min-height: 100vh;
+    overflow: hidden;
+}
+
+/* --- Branding Panel (Left) --- */
+
+.login-brand {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, var(--color-dark) 0%, var(--color-primary-dark) 50%, var(--color-secondary-dark) 100%);
+    position: relative;
+    overflow: hidden;
+    padding: var(--space-8);
+}
+
+.login-brand::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle at 30% 70%, rgba(192, 86, 33, 0.15) 0%, transparent 50%),
+                radial-gradient(circle at 70% 30%, rgba(43, 108, 176, 0.2) 0%, transparent 50%);
+    animation: brandGlow 8s ease-in-out infinite alternate;
+}
+
+@keyframes brandGlow {
+    0% { transform: translate(0, 0) rotate(0deg); }
+    100% { transform: translate(2%, 2%) rotate(2deg); }
+}
+
+.login-brand::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 40%;
+    background: linear-gradient(to top, rgba(26, 32, 44, 0.4), transparent);
+}
+
+.brand-content {
+    position: relative;
+    z-index: 1;
+    text-align: center;
+    max-width: 400px;
+}
+
+.brand-logo {
+    width: 160px;
+    height: 160px;
+    margin: 0 auto var(--space-8);
+    border-radius: var(--radius-full);
+    overflow: hidden;
+    box-shadow: 0 0 40px rgba(214, 158, 46, 0.3), 0 0 80px rgba(43, 108, 176, 0.2);
+    animation: logoFloat 3s ease-in-out infinite alternate;
+}
+
+@keyframes logoFloat {
+    0% { transform: translateY(0); }
+    100% { transform: translateY(-8px); }
+}
+
+.brand-logo img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.brand-title {
+    font-size: var(--font-size-3xl);
+    font-weight: var(--font-weight-bold);
+    color: var(--color-white);
+    margin-bottom: var(--space-3);
+    letter-spacing: -0.02em;
+}
+
+.brand-title span {
+    background: linear-gradient(135deg, var(--color-accent-light), var(--color-secondary-light));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.brand-subtitle {
+    font-size: var(--font-size-lg);
+    color: rgba(255, 255, 255, 0.7);
+    font-weight: var(--font-weight-normal);
+    line-height: 1.6;
+}
+
+/* Decorative mountain shapes */
+.mountain-decoration {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 1;
+    height: 120px;
+}
+
+.mountain-decoration svg {
+    width: 100%;
+    height: 100%;
+}
+
+/* --- Form Panel (Right) --- */
+
+.login-form-panel {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-8);
+    background: var(--color-white);
+    position: relative;
+}
+
+.login-form-wrapper {
+    width: 100%;
+    max-width: 420px;
+    animation: formFadeIn 0.6s ease;
+}
+
+@keyframes formFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.login-form-header {
+    margin-bottom: var(--space-8);
+}
+
+.login-form-header h2 {
+    font-size: var(--font-size-2xl);
+    font-weight: var(--font-weight-bold);
+    color: var(--color-dark);
+    margin-bottom: var(--space-2);
+}
+
+.login-form-header p {
+    color: var(--color-dark-500);
+    font-size: var(--font-size-base);
+}
+
+/* Login Form */
+
+.login-form .form-group {
+    margin-bottom: var(--space-6);
+}
+
+.login-form .form-label {
+    color: var(--color-dark-700);
+    font-weight: var(--font-weight-semibold);
+    font-size: var(--font-size-sm);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.login-form .form-input {
+    padding: var(--space-4) var(--space-4) var(--space-4) var(--space-12);
+    font-size: var(--font-size-base);
+    border-radius: var(--radius-xl);
+    border: 2px solid var(--color-dark-200);
+    background: var(--color-light);
+    height: 52px;
+}
+
+.login-form .form-input:focus {
+    background: var(--color-white);
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 4px rgba(43, 108, 176, 0.1);
+}
+
+.login-submit {
+    margin-top: var(--space-8);
+}
+
+.login-submit .btn {
+    height: 52px;
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-semibold);
+    border-radius: var(--radius-xl);
+    letter-spacing: 0.02em;
+}
+
+/* Alert in login */
+.login-alert {
+    margin-bottom: var(--space-6);
+}
+
+/* Mobile Logo (shown only on mobile) */
+.mobile-logo {
+    display: none;
+    text-align: center;
+    margin-bottom: var(--space-6);
+}
+
+.mobile-logo img {
+    width: 80px;
+    height: 80px;
+    border-radius: var(--radius-full);
+    margin: 0 auto;
+    box-shadow: var(--shadow-lg);
+}
+
+.mobile-logo .mobile-brand-name {
+    margin-top: var(--space-3);
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-bold);
+    color: var(--color-dark);
+}
+
+/* --- Footer --- */
+.login-footer {
+    margin-top: var(--space-10);
+    text-align: center;
+    color: var(--color-dark-400);
+    font-size: var(--font-size-sm);
+}
+
+/* --- Responsive --- */
+
+@media (max-width: 1024px) {
+    .login-brand {
+        display: none;
+    }
+
+    .login-form-panel {
+        padding: var(--space-6);
+    }
+
+    .mobile-logo {
+        display: block;
+    }
+}
+
+@media (max-width: 480px) {
+    .login-form-panel {
+        padding: var(--space-4);
+    }
+
+    .login-form-wrapper {
+        max-width: 100%;
+    }
+
+    .login-form-header h2 {
+        font-size: var(--font-size-xl);
+    }
+}

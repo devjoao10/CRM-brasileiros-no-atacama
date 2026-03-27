@@ -1,0 +1,1086 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pipeline — CRM Brasileiros no Atacama</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/variables.css">
+    <link rel="stylesheet" href="/static/css/base.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="icon" href="/static/img/logo.png" type="image/png">
+    <style>
+        /* ===== Layout (shared) ===== */
+        .dashboard-layout { display: flex; min-height: 100vh; }
+        .sidebar { width: 260px; background: linear-gradient(180deg, var(--color-dark) 0%, var(--color-dark-700) 100%); color: var(--color-white); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: var(--z-sidebar); }
+        .sidebar-header { padding: var(--space-6); display: flex; align-items: center; gap: var(--space-4); border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .sidebar-logo { width: 44px; height: 44px; border-radius: var(--radius-full); overflow: hidden; flex-shrink: 0; }
+        .sidebar-logo img { width: 100%; height: 100%; object-fit: cover; }
+        .sidebar-brand { font-size: var(--font-size-sm); font-weight: var(--font-weight-bold); line-height: 1.3; }
+        .sidebar-brand span { color: var(--color-accent-light); }
+        .sidebar-nav { flex: 1; padding: var(--space-4) 0; overflow-y: auto; }
+        .nav-section { padding: var(--space-2) var(--space-6); margin-top: var(--space-4); }
+        .nav-section-title { font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255,255,255,0.4); margin-bottom: var(--space-2); }
+        .nav-item { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-6); color: rgba(255,255,255,0.7); font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); transition: all var(--transition-fast); cursor: pointer; text-decoration: none; border-left: 3px solid transparent; }
+        .nav-item:hover { background: rgba(255,255,255,0.05); color: var(--color-white); }
+        .nav-item.active { background: rgba(43,108,176,0.15); color: var(--color-white); border-left-color: var(--color-primary-light); }
+        .nav-item .nav-icon { font-size: var(--font-size-lg); width: 24px; text-align: center; }
+        .nav-item .nav-badge { margin-left: auto; background: var(--color-secondary); color: var(--color-white); font-size: var(--font-size-xs); padding: 2px 8px; border-radius: var(--radius-full); font-weight: var(--font-weight-semibold); }
+        .sidebar-footer { padding: var(--space-4) var(--space-6); border-top: 1px solid rgba(255,255,255,0.1); }
+        .main-content { flex: 1; margin-left: 260px; display: flex; flex-direction: column; }
+        .top-header { height: 64px; background: var(--color-white); border-bottom: 1px solid var(--color-dark-200); display: flex; align-items: center; justify-content: space-between; padding: 0 var(--space-8); position: sticky; top: 0; z-index: 100; }
+        .header-left { display: flex; align-items: center; gap: var(--space-4); }
+        .menu-toggle { display: none; background: none; border: none; font-size: var(--font-size-xl); cursor: pointer; padding: var(--space-2); color: var(--color-dark-600); }
+        .page-title { font-size: var(--font-size-lg); font-weight: var(--font-weight-semibold); }
+        .header-right { display: flex; align-items: center; gap: var(--space-4); }
+        .user-info { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-4); border-radius: var(--radius-lg); cursor: pointer; }
+        .user-avatar { width: 36px; height: 36px; border-radius: var(--radius-full); background: linear-gradient(135deg, var(--color-primary), var(--color-secondary)); color: var(--color-white); display: flex; align-items: center; justify-content: center; font-weight: var(--font-weight-bold); font-size: var(--font-size-sm); }
+        .user-name { font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); }
+        .user-role { font-size: var(--font-size-xs); color: var(--color-dark-500); }
+        .content-area { flex: 1; padding: var(--space-6) var(--space-8); background: var(--color-light); display: flex; flex-direction: column; overflow: hidden; }
+
+        /* ===== Pipeline ===== */
+        .pipeline-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-4); flex-wrap: wrap; gap: var(--space-3); }
+        .pipeline-header h1 { font-size: var(--font-size-2xl); font-weight: var(--font-weight-bold); }
+        .pipeline-actions { display: flex; gap: var(--space-2); }
+
+        /* Funnel Tabs */
+        .funnel-tabs { display: flex; gap: var(--space-1); background: var(--color-white); padding: var(--space-1); border-radius: var(--radius-xl); box-shadow: var(--shadow-sm); margin-bottom: var(--space-4); overflow-x: auto; flex-shrink: 0; }
+        .funnel-tab { padding: var(--space-2) var(--space-5); border-radius: var(--radius-lg); font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); cursor: pointer; transition: all var(--transition-fast); white-space: nowrap; background: none; border: none; color: var(--color-dark-500); }
+        .funnel-tab:hover { background: var(--color-dark-100); color: var(--color-dark); }
+        .funnel-tab.active { background: var(--color-primary); color: var(--color-white); box-shadow: var(--shadow-md); }
+        .funnel-tab .tab-count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; border-radius: var(--radius-full); font-size: 10px; font-weight: var(--font-weight-bold); margin-left: var(--space-2); background: rgba(255,255,255,0.3); }
+        .funnel-tab.active .tab-count { background: rgba(255,255,255,0.3); }
+        .funnel-tab:not(.active) .tab-count { background: var(--color-dark-200); }
+
+        /* Filter Bar */
+        .filter-bar { display: flex; gap: var(--space-3); background: var(--color-white); padding: var(--space-3) var(--space-4); border-radius: var(--radius-xl); box-shadow: var(--shadow-sm); margin-bottom: var(--space-4); flex-wrap: wrap; align-items: flex-end; flex-shrink: 0; }
+        .filter-group { display: flex; flex-direction: column; gap: 3px; }
+        .filter-group label { font-size: 10px; font-weight: var(--font-weight-bold); text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-dark-400); }
+        .filter-group input, .filter-group select { padding: var(--space-1) var(--space-3); border: 1.5px solid var(--color-dark-200); border-radius: var(--radius-md); font-size: var(--font-size-sm); font-family: var(--font-family); outline: none; height: 34px; }
+        .filter-group input:focus, .filter-group select:focus { border-color: var(--color-primary); }
+        .filter-search { min-width: 180px; }
+        .filter-destino { min-width: 120px; }
+        .filter-days { width: 80px; }
+        .filter-tags-btn { position: relative; padding: var(--space-1) var(--space-3); border: 1.5px solid var(--color-dark-200); border-radius: var(--radius-md); font-size: var(--font-size-sm); font-family: var(--font-family); background: var(--color-white); cursor: pointer; height: 34px; min-width: 110px; text-align: left; color: var(--color-dark-500); }
+        .filter-tags-btn.has-selection { border-color: var(--color-primary); color: var(--color-dark); }
+        .filter-tags-dropdown { display: none; position: absolute; top: 100%; left: 0; min-width: 200px; background: var(--color-white); border-radius: var(--radius-lg); box-shadow: var(--shadow-xl); z-index: 200; padding: var(--space-2); margin-top: 4px; max-height: 220px; overflow-y: auto; }
+        .filter-tags-dropdown.show { display: block; }
+        .filter-tag-option { display: flex; align-items: center; gap: var(--space-2); padding: 4px var(--space-2); border-radius: var(--radius-md); cursor: pointer; font-size: var(--font-size-sm); }
+        .filter-tag-option:hover { background: var(--color-dark-100); }
+        .filter-tag-option input { accent-color: var(--color-primary); }
+        .filter-tag-dot { width: 10px; height: 10px; border-radius: var(--radius-full); flex-shrink: 0; }
+        .filter-clear { background: none; border: none; font-size: var(--font-size-sm); color: var(--color-dark-400); cursor: pointer; padding: var(--space-1) var(--space-2); height: 34px; white-space: nowrap; }
+        .filter-clear:hover { color: var(--color-error); }
+        .filter-count { font-size: var(--font-size-xs); color: var(--color-dark-400); margin-left: auto; padding: var(--space-1); align-self: flex-end; white-space: nowrap; }
+
+        /* Kanban Board */
+        .kanban-board { display: flex; gap: var(--space-4); flex: 1; overflow-x: auto; padding-bottom: var(--space-4); align-items: flex-start; }
+        .kanban-column { min-width: 280px; max-width: 320px; flex: 1; background: var(--color-white); border-radius: var(--radius-xl); box-shadow: var(--shadow-sm); display: flex; flex-direction: column; max-height: calc(100vh - 280px); }
+        .column-header { padding: var(--space-4); border-bottom: 1px solid var(--color-dark-100); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+        .column-title { font-size: var(--font-size-sm); font-weight: var(--font-weight-bold); color: var(--color-dark); }
+        .column-count { background: var(--color-dark-100); color: var(--color-dark-500); font-size: 11px; font-weight: var(--font-weight-bold); padding: 2px 8px; border-radius: var(--radius-full); }
+        .column-body { flex: 1; padding: var(--space-3); overflow-y: auto; min-height: 100px; transition: background var(--transition-fast); }
+        .column-body.drag-over { background: rgba(43,108,176,0.05); border-radius: 0 0 var(--radius-xl) var(--radius-xl); }
+
+        /* Lead Card */
+        .lead-card { background: var(--color-white); border: 1.5px solid var(--color-dark-100); border-radius: var(--radius-lg); padding: var(--space-3); margin-bottom: var(--space-2); cursor: grab; transition: all var(--transition-fast); position: relative; }
+        .lead-card:hover { border-color: var(--color-primary); box-shadow: var(--shadow-md); transform: translateY(-1px); }
+        .lead-card.dragging { opacity: 0.5; transform: rotate(2deg); }
+        .lead-card-name { font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); color: var(--color-dark); margin-bottom: 4px; }
+        .lead-card-info { font-size: 11px; color: var(--color-dark-400); margin-bottom: 4px; }
+        .lead-card-tags { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 6px; }
+        .lead-card-tag { display: inline-flex; padding: 1px 7px; border-radius: var(--radius-full); font-size: 10px; font-weight: var(--font-weight-semibold); color: #fff; }
+        .lead-card-destino { display: inline-flex; align-items: center; gap: 2px; padding: 1px 7px; border-radius: var(--radius-full); font-size: 10px; font-weight: var(--font-weight-semibold); }
+        .lead-card-destino.atacama { background: rgba(192,86,33,0.1); color: var(--color-secondary); }
+        .lead-card-destino.uyuni { background: rgba(43,108,176,0.1); color: var(--color-primary); }
+        .lead-card-destino.santiago { background: rgba(56,161,105,0.1); color: var(--color-success); }
+        .lead-card-destino.outro { background: rgba(113,128,150,0.1); color: var(--color-dark-500); }
+        .lead-card-days { display: inline-flex; align-items: center; gap: 3px; padding: 1px 7px; border-radius: var(--radius-full); font-size: 10px; font-weight: var(--font-weight-bold); margin-top: 6px; }
+        .lead-card-days.future { background: rgba(56,161,105,0.1); color: var(--color-success); }
+        .lead-card-days.today { background: rgba(214,158,46,0.1); color: #B7791F; border: 1px solid rgba(214,158,46,0.3); }
+        .lead-card-days.past { background: rgba(113,128,150,0.1); color: var(--color-dark-400); }
+        .empty-column { text-align: center; color: var(--color-dark-300); font-size: var(--font-size-xs); padding: var(--space-6) var(--space-2); }
+
+        /* ===== Lead Detail Panel ===== */
+        .detail-panel-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: var(--z-modal); backdrop-filter: blur(3px); }
+        .detail-panel-overlay.show { display: block; }
+        .detail-panel { position: fixed; top: 0; right: -480px; width: 470px; max-width: 90vw; height: 100vh; background: var(--color-white); box-shadow: -4px 0 24px rgba(0,0,0,0.15); z-index: calc(var(--z-modal) + 1); transition: right 0.35s cubic-bezier(0.4, 0, 0.2, 1); display: flex; flex-direction: column; }
+        .detail-panel.open { right: 0; }
+        .detail-header { padding: var(--space-5) var(--space-6); border-bottom: 1px solid var(--color-dark-100); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+        .detail-header h3 { font-size: var(--font-size-lg); font-weight: var(--font-weight-bold); }
+        .detail-close { background: none; border: none; font-size: var(--font-size-xl); cursor: pointer; color: var(--color-dark-400); padding: var(--space-2); border-radius: var(--radius-md); }
+        .detail-close:hover { background: var(--color-dark-100); }
+        .detail-body { flex: 1; overflow-y: auto; padding: var(--space-6); }
+        .detail-section { margin-bottom: var(--space-6); }
+        .detail-section h4 { font-size: var(--font-size-sm); font-weight: var(--font-weight-bold); color: var(--color-dark-500); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--space-3); display: flex; align-items: center; gap: var(--space-2); }
+        .detail-field { display: flex; justify-content: space-between; padding: var(--space-2) 0; border-bottom: 1px solid var(--color-dark-50); font-size: var(--font-size-sm); }
+        .detail-field-label { color: var(--color-dark-400); font-weight: var(--font-weight-medium); }
+        .detail-field-value { color: var(--color-dark); font-weight: var(--font-weight-semibold); text-align: right; max-width: 60%; }
+        .detail-tags { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+        .detail-tag { display: inline-flex; padding: 3px 10px; border-radius: var(--radius-full); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); color: #fff; }
+
+        /* History timeline */
+        .history-timeline { position: relative; padding-left: 20px; }
+        .history-timeline::before { content: ''; position: absolute; left: 6px; top: 4px; bottom: 4px; width: 2px; background: var(--color-dark-100); }
+        .history-item { position: relative; padding: var(--space-2) 0 var(--space-3) var(--space-3); }
+        .history-item::before { content: ''; position: absolute; left: -17px; top: 10px; width: 10px; height: 10px; border-radius: var(--radius-full); border: 2px solid var(--color-primary); background: var(--color-white); }
+        .history-item.entered_funnel::before { background: var(--color-success); border-color: var(--color-success); }
+        .history-item.stage_moved::before { background: var(--color-primary); border-color: var(--color-primary); }
+        .history-item.transferred::before { background: var(--color-secondary); border-color: var(--color-secondary); }
+        .history-item.left_funnel::before { background: var(--color-error); border-color: var(--color-error); }
+        .history-item.note::before { background: var(--color-dark-300); border-color: var(--color-dark-300); }
+        .history-desc { font-size: var(--font-size-sm); color: var(--color-dark); line-height: 1.4; }
+        .history-time { font-size: 11px; color: var(--color-dark-400); margin-top: 2px; }
+        .history-empty { text-align: center; color: var(--color-dark-300); font-size: var(--font-size-sm); padding: var(--space-6); }
+
+        .detail-actions { padding: var(--space-4) var(--space-6); border-top: 1px solid var(--color-dark-100); display: flex; gap: var(--space-2); flex-shrink: 0; }
+
+        /* ===== Modals ===== */
+        .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: var(--z-modal); align-items: center; justify-content: center; backdrop-filter: blur(4px); }
+        .modal-overlay.show { display: flex; }
+        .modal { background: var(--color-white); border-radius: var(--radius-2xl); width: 90%; max-width: 560px; max-height: 90vh; overflow-y: auto; box-shadow: var(--shadow-xl); animation: modalSlideIn 0.3s ease; }
+        @keyframes modalSlideIn { from { opacity: 0; transform: translateY(20px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        .modal-header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-6); border-bottom: 1px solid var(--color-dark-100); }
+        .modal-header h3 { font-size: var(--font-size-xl); font-weight: var(--font-weight-bold); }
+        .modal-close { background: none; border: none; font-size: var(--font-size-xl); cursor: pointer; color: var(--color-dark-400); padding: var(--space-2); border-radius: var(--radius-md); }
+        .modal-close:hover { background: var(--color-dark-100); }
+        .modal-body { padding: var(--space-6); }
+        .modal-footer { padding: var(--space-4) var(--space-6); border-top: 1px solid var(--color-dark-100); display: flex; justify-content: flex-end; gap: var(--space-3); }
+
+        /* Stage editor */
+        .stage-list { margin-top: var(--space-3); }
+        .stage-row { display: flex; gap: var(--space-2); margin-bottom: var(--space-2); align-items: center; }
+        .stage-row input { flex: 1; padding: var(--space-2) var(--space-3); font-family: var(--font-family); font-size: var(--font-size-sm); border: 1.5px solid var(--color-dark-200); border-radius: var(--radius-md); outline: none; }
+        .stage-row input:focus { border-color: var(--color-primary); }
+        .stage-row .drag-handle { cursor: grab; color: var(--color-dark-300); font-size: var(--font-size-lg); padding: 0 var(--space-1); }
+        .stage-row .remove-stage { background: none; border: none; cursor: pointer; color: var(--color-error); font-size: var(--font-size-lg); padding: var(--space-1); }
+        .add-stage-btn { font-size: var(--font-size-sm); color: var(--color-primary); background: none; border: 1.5px dashed var(--color-primary); border-radius: var(--radius-md); padding: var(--space-2) var(--space-4); cursor: pointer; width: 100%; margin-top: var(--space-2); }
+        .add-stage-btn:hover { background: rgba(43,108,176,0.05); }
+
+        /* Add lead dropdown */
+        .add-lead-dropdown { position: absolute; top: 100%; right: 0; width: 280px; background: var(--color-white); border-radius: var(--radius-lg); box-shadow: var(--shadow-xl); z-index: 200; padding: var(--space-3); display: none; }
+        .add-lead-dropdown.show { display: block; }
+        .add-lead-search { width: 100%; padding: var(--space-2) var(--space-3); border: 1.5px solid var(--color-dark-200); border-radius: var(--radius-md); font-size: var(--font-size-sm); outline: none; margin-bottom: var(--space-2); }
+        .add-lead-list { max-height: 200px; overflow-y: auto; }
+        .add-lead-item { padding: var(--space-2) var(--space-3); font-size: var(--font-size-sm); cursor: pointer; border-radius: var(--radius-md); }
+        .add-lead-item:hover { background: var(--color-dark-100); }
+
+        @media (max-width: 1024px) {
+            .sidebar { transform: translateX(-100%); transition: transform var(--transition-base); }
+            .sidebar.open { transform: translateX(0); }
+            .main-content { margin-left: 0; }
+            .menu-toggle { display: block; }
+            .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: calc(var(--z-sidebar) - 1); }
+            .sidebar-overlay.show { display: block; }
+        }
+        @media (max-width: 640px) { .content-area { padding: var(--space-4); } .detail-panel { width: 100vw; } }
+    </style>
+</head>
+<body>
+    <div class="dashboard-layout">
+        <div class="sidebar-overlay" id="sidebarOverlay"></div>
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo"><img src="/static/img/logo.png" alt="Logo"></div>
+                <div class="sidebar-brand">Brasileiros <span>no Atacama</span></div>
+            </div>
+            <nav class="sidebar-nav">
+                <div class="nav-section"><div class="nav-section-title">Principal</div></div>
+                <a href="/dashboard" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
+                <div class="nav-section"><div class="nav-section-title">CRM</div></div>
+                <a href="/leads" class="nav-item"><span class="nav-icon">👥</span><span>Leads</span></a>
+                <a href="/tags" class="nav-item"><span class="nav-icon">🏷️</span><span>Tags</span></a>
+                <a href="/pipeline" class="nav-item active"><span class="nav-icon">🎯</span><span>Pipeline</span></a>
+                <a href="#" class="nav-item" data-coming-soon><span class="nav-icon">📋</span><span>Atividades</span><span class="nav-badge">Em breve</span></a>
+                <div class="nav-section"><div class="nav-section-title">Sistema</div></div>
+                <a href="#" class="nav-item" data-coming-soon><span class="nav-icon">⚙️</span><span>Configurações</span></a>
+                <a href="/docs" class="nav-item" target="_blank"><span class="nav-icon">📖</span><span>API Docs</span></a>
+            </nav>
+            <div class="sidebar-footer">
+                <a href="#" class="nav-item" id="logoutBtn" style="border:none;padding-left:0;"><span class="nav-icon">🚪</span><span>Sair</span></a>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <header class="top-header">
+                <div class="header-left">
+                    <button class="menu-toggle" id="menuToggle">☰</button>
+                    <h2 class="page-title">Pipeline</h2>
+                </div>
+                <div class="header-right">
+                    <div class="user-info">
+                        <div class="user-avatar" id="userAvatar">A</div>
+                        <div><div class="user-name" id="userName">Carregando...</div><div class="user-role" id="userRole">—</div></div>
+                    </div>
+                </div>
+            </header>
+
+            <div class="content-area">
+                <div class="pipeline-header">
+                    <h1>🎯 Pipeline de Vendas</h1>
+                    <div class="pipeline-actions">
+                        <button class="btn btn-outline btn-sm" onclick="openFunnelModal()">⚙️ Gerenciar Funis</button>
+                        <button class="btn btn-primary btn-sm" onclick="openAddLeadDropdown()" style="position:relative" id="addLeadBtn">
+                            ➕ Adicionar Lead
+                            <div class="add-lead-dropdown" id="addLeadDropdown">
+                                <input type="text" class="add-lead-search" id="addLeadSearch" placeholder="Buscar lead..." oninput="searchLeadsForAdd()">
+                                <div class="add-lead-list" id="addLeadList"></div>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Funnel Tabs -->
+                <div class="funnel-tabs" id="funnelTabs">
+                    <button class="funnel-tab active" disabled>Carregando...</button>
+                </div>
+
+                <!-- Filter Bar -->
+                <div class="filter-bar" id="filterBar" style="display:none;">
+                    <div class="filter-group">
+                        <label>Buscar</label>
+                        <input type="text" class="filter-search" id="pipeFilterSearch" placeholder="Nome, email..." oninput="applyFilters()">
+                    </div>
+                    <div class="filter-group">
+                        <label>Destino</label>
+                        <select class="filter-destino" id="pipeFilterDestino" onchange="applyFilters()">
+                            <option value="">Todos</option>
+                            <option value="Atacama">🏜️ Atacama</option>
+                            <option value="Uyuni">🪞 Uyuni</option>
+                            <option value="Santiago">🏙️ Santiago</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Tags</label>
+                        <button type="button" class="filter-tags-btn" id="filterTagsBtn" onclick="toggleFilterTags(event)">
+                            Todas
+                            <div class="filter-tags-dropdown" id="filterTagsDropdown"></div>
+                        </button>
+                    </div>
+                    <div class="filter-group">
+                        <label>Chegada em</label>
+                        <input type="number" class="filter-days" id="pipeFilterDays" placeholder="dias" min="0" oninput="applyFilters()" title="Exibir leads que chegam nos próximos X dias">
+                    </div>
+                    <div class="filter-group">
+                        <label>Chegada de</label>
+                        <input type="date" id="pipeFilterDateFrom" style="width:130px" onchange="applyFilters()">
+                    </div>
+                    <div class="filter-group">
+                        <label>Chegada até</label>
+                        <input type="date" id="pipeFilterDateTo" style="width:130px" onchange="applyFilters()">
+                    </div>
+                    <button class="filter-clear" onclick="clearPipeFilters()">✕ Limpar</button>
+                    <span class="filter-count" id="filterCount"></span>
+                </div>
+
+                <!-- Kanban Board -->
+                <div class="kanban-board" id="kanbanBoard">
+                    <div style="text-align:center;padding:var(--space-16);width:100%;color:var(--color-dark-400);">
+                        <div style="font-size:3rem;margin-bottom:var(--space-4);">🎯</div>
+                        <p>Carregando pipeline...</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Lead Detail Side Panel -->
+    <div class="detail-panel-overlay" id="detailOverlay"></div>
+    <div class="detail-panel" id="detailPanel">
+        <div class="detail-header">
+            <h3 id="detailName">Lead</h3>
+            <button class="detail-close" onclick="closeDetailPanel()">✕</button>
+        </div>
+        <div class="detail-body">
+            <div class="detail-section">
+                <h4>👤 Informações</h4>
+                <div id="detailInfo"></div>
+            </div>
+            <div class="detail-section">
+                <h4>🏷️ Tags</h4>
+                <div class="detail-tags" id="detailTags"><span style="color:var(--color-dark-300);font-size:var(--font-size-sm)">Nenhuma tag</span></div>
+            </div>
+            <div class="detail-section">
+                <h4>📜 Histórico</h4>
+                <div id="detailHistory"><div class="history-empty">Carregando...</div></div>
+            </div>
+        </div>
+        <div class="detail-actions">
+            <button class="btn btn-outline btn-sm" onclick="removeFromFunnel()" id="detailRemoveBtn">🗑️ Remover do Funil</button>
+            <button class="btn btn-outline btn-sm" onclick="openTransferModal()" id="detailTransferBtn">↗️ Transferir</button>
+            <a class="btn btn-primary btn-sm" id="detailEditLink" href="/leads">✏️ Editar Lead</a>
+        </div>
+    </div>
+
+    <!-- Funnel Management Modal -->
+    <div class="modal-overlay" id="funnelModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="funnelModalTitle">Gerenciar Funis</h3>
+                <button class="modal-close" onclick="closeFunnelModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div id="funnelAlert" class="alert alert-error hidden" style="margin-bottom:var(--space-4);"><span>⚠️</span><span id="funnelAlertMsg"></span></div>
+
+                <!-- Mode: List existing funnels -->
+                <div id="funnelListView">
+                    <div id="funnelList" style="margin-bottom:var(--space-4);">Carregando...</div>
+                    <button class="btn btn-primary btn-sm" onclick="showFunnelForm()" style="width:100%">➕ Novo Funil</button>
+                </div>
+
+                <!-- Mode: Add/Edit funnel -->
+                <div id="funnelFormView" style="display:none;">
+                    <input type="hidden" id="funnelFormId">
+                    <div class="form-group" style="margin-bottom:var(--space-4)">
+                        <label class="form-label">Nome do Funil</label>
+                        <input type="text" id="funnelFormNome" class="form-input" placeholder="Ex: Vendas Atacama">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Etapas (arraste para reordenar)</label>
+                        <div class="stage-list" id="stageList"></div>
+                        <button type="button" class="add-stage-btn" onclick="addStageRow()">+ Adicionar Etapa</button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer" id="funnelFormFooter" style="display:none;">
+                <button class="btn btn-outline" onclick="showFunnelList()">← Voltar</button>
+                <button class="btn btn-primary" onclick="saveFunnel()">Salvar Funil</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Transfer Modal -->
+    <div class="modal-overlay" id="transferModal">
+        <div class="modal" style="max-width:400px;">
+            <div class="modal-header">
+                <h3>↗️ Transferir Lead</h3>
+                <button class="modal-close" onclick="closeTransferModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group" style="margin-bottom:var(--space-4)">
+                    <label class="form-label">Funil de Destino</label>
+                    <select id="transferFunnel" class="form-input" onchange="loadTransferStages()">
+                        <option value="">Selecione...</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Etapa</label>
+                    <select id="transferStage" class="form-input">
+                        <option value="">Selecione o funil primeiro...</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeTransferModal()">Cancelar</button>
+                <button class="btn btn-primary" onclick="executeTransfer()">Transferir</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/auth.js"></script>
+    <script>
+    // ─── State ──────────────────────────────────
+    let funnels = [];
+    let currentFunnelId = null;
+    let boardData = null;
+    let boardDataFull = null; // unfiltered copy
+    let draggedCard = null;
+    let currentDetailEntry = null;
+    let currentDetailLeadId = null;
+    let allFilterTags = [];
+    let selectedFilterTags = new Set();
+    let leadDetailsCache = {}; // cache lead details for date filtering
+
+    document.addEventListener('DOMContentLoaded', () => {
+        if (!Auth.requireAuth()) return;
+        const user = Auth.getUser();
+        if (user) {
+            document.getElementById('userName').textContent = user.nome;
+            document.getElementById('userRole').textContent = user.role === 'admin' ? 'Administrador' : 'Usuário';
+            document.getElementById('userAvatar').textContent = user.nome.charAt(0).toUpperCase();
+        }
+        document.getElementById('logoutBtn').addEventListener('click', e => { e.preventDefault(); Auth.logout(); });
+        const sidebar = document.getElementById('sidebar'), overlay = document.getElementById('sidebarOverlay');
+        document.getElementById('menuToggle').addEventListener('click', () => { sidebar.classList.toggle('open'); overlay.classList.toggle('show'); });
+        overlay.addEventListener('click', () => { sidebar.classList.remove('open'); overlay.classList.remove('show'); });
+        document.querySelectorAll('[data-coming-soon]').forEach(i => i.addEventListener('click', e => { e.preventDefault(); alert('🚧 Em desenvolvimento!'); }));
+
+        // Close dropdowns on outside click
+        document.addEventListener('click', e => {
+            const dd = document.getElementById('addLeadDropdown');
+            if (dd.classList.contains('show') && !e.target.closest('#addLeadBtn')) dd.classList.remove('show');
+        });
+
+        document.getElementById('detailOverlay').addEventListener('click', closeDetailPanel);
+
+        // Close tag dropdown on outside click
+        document.addEventListener('click', e => {
+            const td = document.getElementById('filterTagsDropdown');
+            if (td && td.classList.contains('show') && !e.target.closest('#filterTagsBtn')) td.classList.remove('show');
+        });
+
+        loadFilterTags();
+        loadFunnels();
+    });
+
+    // ─── Funnels ─────────────────────────────────
+
+    async function loadFunnels() {
+        const resp = await Auth.apiRequest('/api/pipeline/funnels');
+        if (!resp) return;
+        const data = await resp.json();
+        funnels = data.funnels || [];
+
+        if (funnels.length === 0) {
+            renderEmptyState();
+            return;
+        }
+
+        if (!currentFunnelId || !funnels.find(f => f.id === currentFunnelId)) {
+            currentFunnelId = funnels[0].id;
+        }
+
+        renderFunnelTabs();
+        loadBoard();
+    }
+
+    function renderFunnelTabs() {
+        const container = document.getElementById('funnelTabs');
+        container.innerHTML = funnels.map(f =>
+            `<button class="funnel-tab ${f.id === currentFunnelId ? 'active' : ''}" onclick="switchFunnel(${f.id})">${esc(f.nome)}<span class="tab-count" id="tabCount${f.id}">—</span></button>`
+        ).join('');
+    }
+
+    function switchFunnel(id) {
+        currentFunnelId = id;
+        renderFunnelTabs();
+        loadBoard();
+    }
+
+    function renderEmptyState() {
+        document.getElementById('funnelTabs').innerHTML = '';
+        document.getElementById('kanbanBoard').innerHTML = `
+            <div style="text-align:center;padding:var(--space-16);width:100%;color:var(--color-dark-400);">
+                <div style="font-size:3rem;margin-bottom:var(--space-4);">🎯</div>
+                <p style="font-size:var(--font-size-lg);margin-bottom:var(--space-4);">Nenhum funil criado</p>
+                <p style="margin-bottom:var(--space-6);">Crie seu primeiro funil de vendas para começar a gerenciar seus leads.</p>
+                <button class="btn btn-primary" onclick="openFunnelModal(); showFunnelForm();">➕ Criar Primeiro Funil</button>
+            </div>`;
+    }
+
+    // ─── Kanban Board ───────────────────────────
+
+    async function loadBoard() {
+        if (!currentFunnelId) return;
+        const resp = await Auth.apiRequest(`/api/pipeline/board/${currentFunnelId}`);
+        if (!resp) return;
+        boardDataFull = await resp.json();
+
+        // Update tab count
+        const countEl = document.getElementById(`tabCount${currentFunnelId}`);
+        if (countEl) countEl.textContent = boardDataFull.total_leads;
+
+        // Show filter bar
+        document.getElementById('filterBar').style.display = 'flex';
+
+        // Fetch lead details for date filtering (arrival/departure)
+        await cacheleadDates();
+
+        applyFilters();
+    }
+
+    async function cacheleadDates() {
+        // Get all lead IDs in the board that we haven't cached yet
+        const ids = [];
+        boardDataFull.stages.forEach(s => s.leads.forEach(l => {
+            if (!leadDetailsCache[l.lead_id]) ids.push(l.lead_id);
+        }));
+        // Batch fetch (only uncached)
+        for (const id of ids) {
+            const r = await Auth.apiRequest(`/api/leads/${id}`);
+            if (r) leadDetailsCache[id] = await r.json();
+        }
+    }
+
+    function renderBoard() {
+        if (!boardData) return;
+        const board = document.getElementById('kanbanBoard');
+        let totalFiltered = 0;
+        board.innerHTML = boardData.stages.map(stage => {
+            totalFiltered += stage.leads.length;
+            return `
+            <div class="kanban-column" data-stage="${stage.id}">
+                <div class="column-header">
+                    <span class="column-title">${esc(stage.nome)}</span>
+                    <span class="column-count">${stage.leads.length}</span>
+                </div>
+                <div class="column-body" data-stage="${stage.id}"
+                     ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event, '${stage.id}')">
+                    ${stage.leads.length === 0 ? '<div class="empty-column">Arraste leads aqui</div>' :
+                      stage.leads.map(l => renderLeadCard(l)).join('')}
+                </div>
+            </div>`;
+        }).join('');
+
+        // Update filter count
+        const countEl = document.getElementById('filterCount');
+        if (hasActiveFilters()) {
+            countEl.textContent = `${totalFiltered} de ${boardDataFull.total_leads} leads`;
+        } else {
+            countEl.textContent = '';
+        }
+    }
+
+    // ─── Filters ─────────────────────────────────
+
+    async function loadFilterTags() {
+        const resp = await Auth.apiRequest('/api/tags');
+        if (!resp) return;
+        const data = await resp.json();
+        allFilterTags = data.tags || [];
+        renderFilterTagsDropdown();
+    }
+
+    function renderFilterTagsDropdown() {
+        const dd = document.getElementById('filterTagsDropdown');
+        if (allFilterTags.length === 0) {
+            dd.innerHTML = '<div style="padding:var(--space-2);color:var(--color-dark-400);font-size:var(--font-size-sm)">Nenhuma tag criada</div>';
+            return;
+        }
+        dd.innerHTML = allFilterTags.map(t => `
+            <label class="filter-tag-option">
+                <input type="checkbox" value="${t.id}" ${selectedFilterTags.has(t.id) ? 'checked' : ''} onchange="onFilterTagChange(this)">
+                <span class="filter-tag-dot" style="background:${esc(t.cor)}"></span>
+                ${esc(t.nome)}
+            </label>
+        `).join('');
+    }
+
+    function toggleFilterTags(e) {
+        e.stopPropagation();
+        document.getElementById('filterTagsDropdown').classList.toggle('show');
+    }
+
+    function onFilterTagChange(cb) {
+        const id = parseInt(cb.value);
+        if (cb.checked) selectedFilterTags.add(id);
+        else selectedFilterTags.delete(id);
+        updateTagBtnLabel();
+        applyFilters();
+    }
+
+    function updateTagBtnLabel() {
+        const btn = document.getElementById('filterTagsBtn');
+        if (selectedFilterTags.size === 0) {
+            btn.childNodes[0].textContent = 'Todas ';
+            btn.classList.remove('has-selection');
+        } else {
+            const names = allFilterTags.filter(t => selectedFilterTags.has(t.id)).map(t => t.nome);
+            btn.childNodes[0].textContent = names.length <= 2 ? names.join(', ') + ' ' : `${names.length} tags `;
+            btn.classList.add('has-selection');
+        }
+    }
+
+    function hasActiveFilters() {
+        return document.getElementById('pipeFilterSearch').value.trim() ||
+               document.getElementById('pipeFilterDestino').value ||
+               selectedFilterTags.size > 0 ||
+               document.getElementById('pipeFilterDays').value ||
+               document.getElementById('pipeFilterDateFrom').value ||
+               document.getElementById('pipeFilterDateTo').value;
+    }
+
+    function applyFilters() {
+        if (!boardDataFull) return;
+
+        const search = document.getElementById('pipeFilterSearch').value.trim().toLowerCase();
+        const destino = document.getElementById('pipeFilterDestino').value;
+        const daysStr = document.getElementById('pipeFilterDays').value;
+        const dateFrom = document.getElementById('pipeFilterDateFrom').value;
+        const dateTo = document.getElementById('pipeFilterDateTo').value;
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        // Build filtered board
+        boardData = {
+            ...boardDataFull,
+            stages: boardDataFull.stages.map(stage => ({
+                ...stage,
+                leads: stage.leads.filter(lead => {
+                    // Search filter
+                    if (search) {
+                        const match = (lead.nome || '').toLowerCase().includes(search) ||
+                                      (lead.email || '').toLowerCase().includes(search) ||
+                                      (lead.whatsapp || '').toLowerCase().includes(search);
+                        if (!match) return false;
+                    }
+
+                    // Destino filter
+                    if (destino && lead.destino !== destino) return false;
+
+                    // Tags filter
+                    if (selectedFilterTags.size > 0) {
+                        const leadTagIds = new Set((lead.tags || []).map(t => t.id));
+                        let hasTag = false;
+                        for (const tid of selectedFilterTags) {
+                            if (leadTagIds.has(tid)) { hasTag = true; break; }
+                        }
+                        if (!hasTag) return false;
+                    }
+
+                    // Date filters (use cached lead details)
+                    const details = leadDetailsCache[lead.lead_id];
+                    if (details) {
+                        const chegada = details.data_chegada ? new Date(details.data_chegada + 'T00:00:00') : null;
+
+                        // Days window: chegada within next N days
+                        if (daysStr) {
+                            const days = parseInt(daysStr);
+                            if (!isNaN(days)) {
+                                if (!chegada) return false;
+                                const maxDate = new Date(today);
+                                maxDate.setDate(maxDate.getDate() + days);
+                                if (chegada < today || chegada > maxDate) return false;
+                            }
+                        }
+
+                        // Date range
+                        if (dateFrom) {
+                            const from = new Date(dateFrom + 'T00:00:00');
+                            if (!chegada || chegada < from) return false;
+                        }
+                        if (dateTo) {
+                            const to = new Date(dateTo + 'T00:00:00');
+                            if (!chegada || chegada > to) return false;
+                        }
+                    } else if (daysStr || dateFrom || dateTo) {
+                        // No cached details and date filter active — exclude
+                        return false;
+                    }
+
+                    return true;
+                })
+            }))
+        };
+
+        renderBoard();
+    }
+
+    function clearPipeFilters() {
+        document.getElementById('pipeFilterSearch').value = '';
+        document.getElementById('pipeFilterDestino').value = '';
+        document.getElementById('pipeFilterDays').value = '';
+        document.getElementById('pipeFilterDateFrom').value = '';
+        document.getElementById('pipeFilterDateTo').value = '';
+        selectedFilterTags.clear();
+        updateTagBtnLabel();
+        renderFilterTagsDropdown();
+        applyFilters();
+    }
+
+    function renderLeadCard(lead) {
+        const destino = lead.destino ? getDestinoClass(lead.destino) : '';
+        const tags = (lead.tags || []).map(t =>
+            `<span class="lead-card-tag" style="background:${esc(t.cor)}">${esc(t.nome)}</span>`
+        ).join('');
+
+        let daysBadge = '';
+        if (lead.data_chegada) {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const chegada = new Date(lead.data_chegada + 'T00:00:00');
+            const diffTime = chegada - today;
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+            if (diffDays > 0) {
+                daysBadge = `<div class="lead-card-days future">⏳ Chega em ${diffDays} dia${diffDays > 1 ? 's' : ''}</div>`;
+            } else if (diffDays === 0) {
+                daysBadge = `<div class="lead-card-days today">🚨 Chega hoje</div>`;
+            } else {
+                daysBadge = `<div class="lead-card-days past">✅ Chegou há ${Math.abs(diffDays)} dia${Math.abs(diffDays) > 1 ? 's' : ''}</div>`;
+            }
+        }
+
+        return `
+            <div class="lead-card" draggable="true" data-entry="${lead.entry_id}" data-lead="${lead.lead_id}"
+                 ondragstart="onDragStart(event)" ondragend="onDragEnd(event)"
+                 onclick="openDetailPanel(${lead.entry_id}, ${lead.lead_id})">
+                <div class="lead-card-name">${esc(lead.nome)}</div>
+                <div class="lead-card-info">${lead.email ? esc(lead.email) : lead.whatsapp ? esc(lead.whatsapp) : ''}</div>
+                ${lead.destino ? `<span class="lead-card-destino ${destino}">${getDestinoIcon(lead.destino)} ${esc(lead.destino)}</span>` : ''}
+                ${daysBadge}
+                ${tags ? `<div class="lead-card-tags">${tags}</div>` : ''}
+            </div>`;
+    }
+
+    function getDestinoClass(d) {
+        if (!d) return 'outro';
+        const l = d.toLowerCase();
+        return l === 'atacama' ? 'atacama' : l === 'uyuni' ? 'uyuni' : l === 'santiago' ? 'santiago' : 'outro';
+    }
+    function getDestinoIcon(d) {
+        if (!d) return '📍';
+        const l = d.toLowerCase();
+        return l === 'atacama' ? '🏜️' : l === 'uyuni' ? '🪞' : l === 'santiago' ? '🏙️' : '📍';
+    }
+
+    // ─── Drag & Drop ────────────────────────────
+
+    function onDragStart(e) {
+        draggedCard = e.target;
+        e.target.classList.add('dragging');
+        e.dataTransfer.setData('text/plain', e.target.dataset.entry);
+        e.dataTransfer.effectAllowed = 'move';
+    }
+
+    function onDragEnd(e) {
+        e.target.classList.remove('dragging');
+        document.querySelectorAll('.column-body').forEach(c => c.classList.remove('drag-over'));
+        draggedCard = null;
+    }
+
+    function onDragOver(e) {
+        e.preventDefault();
+        e.currentTarget.classList.add('drag-over');
+        e.dataTransfer.dropEffect = 'move';
+    }
+
+    function onDragLeave(e) {
+        e.currentTarget.classList.remove('drag-over');
+    }
+
+    async function onDrop(e, stageId) {
+        e.preventDefault();
+        e.currentTarget.classList.remove('drag-over');
+        const entryId = e.dataTransfer.getData('text/plain');
+        if (!entryId) return;
+
+        const resp = await Auth.apiRequest(`/api/pipeline/entries/${entryId}/move`, {
+            method: 'PUT',
+            body: JSON.stringify({ etapa_id: stageId }),
+        });
+
+        if (resp && resp.ok) loadBoard();
+    }
+
+    // ─── Detail Panel ───────────────────────────
+
+    async function openDetailPanel(entryId, leadId) {
+        currentDetailEntry = entryId;
+        currentDetailLeadId = leadId;
+
+        document.getElementById('detailOverlay').classList.add('show');
+        document.getElementById('detailPanel').classList.add('open');
+        document.getElementById('detailEditLink').href = '/leads';
+
+        // Load lead details
+        const leadResp = await Auth.apiRequest(`/api/leads/${leadId}`);
+        if (!leadResp) return;
+        const lead = await leadResp.json();
+
+        document.getElementById('detailName').textContent = lead.nome;
+
+        let info = '';
+        info += `<div class="detail-field"><span class="detail-field-label">Email</span><span class="detail-field-value">${lead.email ? esc(lead.email) : '—'}</span></div>`;
+        info += `<div class="detail-field"><span class="detail-field-label">WhatsApp</span><span class="detail-field-value">${lead.whatsapp ? esc(lead.whatsapp) : '—'}</span></div>`;
+        info += `<div class="detail-field"><span class="detail-field-label">Destino</span><span class="detail-field-value">${lead.destino || '—'}</span></div>`;
+        info += `<div class="detail-field"><span class="detail-field-label">Chegada</span><span class="detail-field-value">${lead.data_chegada ? fmtDate(lead.data_chegada) : '—'}</span></div>`;
+        info += `<div class="detail-field"><span class="detail-field-label">Partida</span><span class="detail-field-value">${lead.data_partida ? fmtDate(lead.data_partida) : '—'}</span></div>`;
+
+        if (lead.campos_personalizados && Object.keys(lead.campos_personalizados).length) {
+            Object.entries(lead.campos_personalizados).forEach(([k, v]) => {
+                info += `<div class="detail-field"><span class="detail-field-label">${esc(k)}</span><span class="detail-field-value">${esc(String(v))}</span></div>`;
+            });
+        }
+        document.getElementById('detailInfo').innerHTML = info;
+
+        // Tags
+        const tagsHtml = (lead.tags || []).length > 0
+            ? lead.tags.map(t => `<span class="detail-tag" style="background:${esc(t.cor)}">${esc(t.nome)}</span>`).join('')
+            : '<span style="color:var(--color-dark-300);font-size:var(--font-size-sm)">Nenhuma tag</span>';
+        document.getElementById('detailTags').innerHTML = tagsHtml;
+
+        // Load history
+        const histResp = await Auth.apiRequest(`/api/pipeline/history/${leadId}`);
+        if (histResp) {
+            const histData = await histResp.json();
+            renderHistory(histData.historico);
+        }
+    }
+
+    function renderHistory(items) {
+        const container = document.getElementById('detailHistory');
+        if (!items || items.length === 0) {
+            container.innerHTML = '<div class="history-empty">Nenhum evento registrado</div>';
+            return;
+        }
+        container.innerHTML = `<div class="history-timeline">${items.map(h => `
+            <div class="history-item ${h.evento}">
+                <div class="history-desc">${esc(h.descricao || h.evento)}</div>
+                <div class="history-time">${fmtDateTime(h.created_at)}</div>
+            </div>
+        `).join('')}</div>`;
+    }
+
+    function closeDetailPanel() {
+        document.getElementById('detailOverlay').classList.remove('show');
+        document.getElementById('detailPanel').classList.remove('open');
+        currentDetailEntry = null;
+        currentDetailLeadId = null;
+    }
+
+    async function removeFromFunnel() {
+        if (!currentDetailEntry) return;
+        if (!confirm('Remover este lead do funil?')) return;
+        const resp = await Auth.apiRequest(`/api/pipeline/entries/${currentDetailEntry}`, { method: 'DELETE' });
+        if (resp && resp.ok) { closeDetailPanel(); loadBoard(); }
+    }
+
+    // ─── Transfer ───────────────────────────────
+
+    function openTransferModal() {
+        document.getElementById('transferModal').classList.add('show');
+        const select = document.getElementById('transferFunnel');
+        select.innerHTML = '<option value="">Selecione...</option>' +
+            funnels.filter(f => f.id !== currentFunnelId).map(f =>
+                `<option value="${f.id}">${esc(f.nome)}</option>`
+            ).join('');
+        document.getElementById('transferStage').innerHTML = '<option value="">Selecione o funil primeiro...</option>';
+    }
+
+    function closeTransferModal() { document.getElementById('transferModal').classList.remove('show'); }
+
+    function loadTransferStages() {
+        const funnelId = parseInt(document.getElementById('transferFunnel').value);
+        const funnel = funnels.find(f => f.id === funnelId);
+        const select = document.getElementById('transferStage');
+        if (!funnel) { select.innerHTML = '<option value="">Selecione o funil primeiro...</option>'; return; }
+        select.innerHTML = funnel.etapas.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('');
+    }
+
+    async function executeTransfer() {
+        const funnelId = document.getElementById('transferFunnel').value;
+        const stageId = document.getElementById('transferStage').value;
+        if (!funnelId || !stageId) { alert('Selecione funil e etapa de destino'); return; }
+
+        const resp = await Auth.apiRequest(`/api/pipeline/entries/${currentDetailEntry}/transfer`, {
+            method: 'POST',
+            body: JSON.stringify({ destino_funnel_id: parseInt(funnelId), destino_etapa_id: stageId }),
+        });
+
+        if (resp && resp.ok) {
+            closeTransferModal();
+            closeDetailPanel();
+            loadBoard();
+        } else if (resp) {
+            const err = await resp.json();
+            alert(err.detail || 'Erro ao transferir');
+        }
+    }
+
+    // ─── Add Lead to Funnel ─────────────────────
+
+    function openAddLeadDropdown() {
+        if (!currentFunnelId) { alert('Crie um funil primeiro'); return; }
+        const dd = document.getElementById('addLeadDropdown');
+        dd.classList.toggle('show');
+        if (dd.classList.contains('show')) {
+            document.getElementById('addLeadSearch').value = '';
+            searchLeadsForAdd();
+            setTimeout(() => document.getElementById('addLeadSearch').focus(), 100);
+        }
+    }
+
+    async function searchLeadsForAdd() {
+        const search = document.getElementById('addLeadSearch').value.trim();
+        const params = new URLSearchParams({ limit: 20 });
+        if (search) params.set('search', search);
+
+        const resp = await Auth.apiRequest(`/api/leads?${params}`);
+        if (!resp) return;
+        const data = await resp.json();
+
+        const list = document.getElementById('addLeadList');
+        if (data.leads.length === 0) {
+            list.innerHTML = '<div class="add-lead-item" style="color:var(--color-dark-400)">Nenhum lead encontrado</div>';
+            return;
+        }
+
+        // Get current leads in funnel to filter them out
+        const currentLeadIds = new Set();
+        if (boardData) boardData.stages.forEach(s => s.leads.forEach(l => currentLeadIds.add(l.lead_id)));
+
+        const available = data.leads.filter(l => !currentLeadIds.has(l.id));
+        if (available.length === 0) {
+            list.innerHTML = '<div class="add-lead-item" style="color:var(--color-dark-400)">Todos os leads já estão no funil</div>';
+            return;
+        }
+
+        list.innerHTML = available.map(l =>
+            `<div class="add-lead-item" onclick="addLeadToFunnel(${l.id})">${esc(l.nome)} ${l.email ? '· ' + esc(l.email) : ''}</div>`
+        ).join('');
+    }
+
+    async function addLeadToFunnel(leadId) {
+        if (!currentFunnelId || !boardData) return;
+        const firstStage = boardData.funnel.etapas[0];
+        if (!firstStage) return;
+
+        const resp = await Auth.apiRequest(`/api/pipeline/funnels/${currentFunnelId}/leads`, {
+            method: 'POST',
+            body: JSON.stringify({ lead_id: leadId, etapa_id: firstStage.id }),
+        });
+
+        if (resp && resp.ok) {
+            document.getElementById('addLeadDropdown').classList.remove('show');
+            loadBoard();
+        } else if (resp) {
+            const err = await resp.json();
+            alert(err.detail || 'Erro');
+        }
+    }
+
+    // ─── Funnel Management Modal ────────────────
+
+    function openFunnelModal() {
+        document.getElementById('funnelModal').classList.add('show');
+        showFunnelList();
+    }
+    function closeFunnelModal() { document.getElementById('funnelModal').classList.remove('show'); }
+
+    async function showFunnelList() {
+        document.getElementById('funnelListView').style.display = 'block';
+        document.getElementById('funnelFormView').style.display = 'none';
+        document.getElementById('funnelFormFooter').style.display = 'none';
+        document.getElementById('funnelModalTitle').textContent = 'Gerenciar Funis';
+        document.getElementById('funnelAlert').classList.add('hidden');
+
+        const resp = await Auth.apiRequest('/api/pipeline/funnels');
+        if (!resp) return;
+        const data = await resp.json();
+
+        const list = document.getElementById('funnelList');
+        if (data.funnels.length === 0) {
+            list.innerHTML = '<p style="text-align:center;color:var(--color-dark-400);padding:var(--space-4);">Nenhum funil criado</p>';
+            return;
+        }
+
+        list.innerHTML = data.funnels.map(f => `
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:var(--space-3);border:1.5px solid var(--color-dark-100);border-radius:var(--radius-lg);margin-bottom:var(--space-2);">
+                <div>
+                    <div style="font-weight:var(--font-weight-semibold);font-size:var(--font-size-sm);">${esc(f.nome)}</div>
+                    <div style="font-size:11px;color:var(--color-dark-400);">${f.etapas.length} etapas</div>
+                </div>
+                <div style="display:flex;gap:var(--space-1);">
+                    <button onclick="editFunnel(${f.id})" style="background:none;border:none;cursor:pointer;font-size:var(--font-size-base);padding:var(--space-1);">✏️</button>
+                    <button onclick="deleteFunnel(${f.id}, '${esc(f.nome)}')" style="background:none;border:none;cursor:pointer;font-size:var(--font-size-base);padding:var(--space-1);">🗑️</button>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    function showFunnelForm(funnel = null) {
+        document.getElementById('funnelListView').style.display = 'none';
+        document.getElementById('funnelFormView').style.display = 'block';
+        document.getElementById('funnelFormFooter').style.display = 'flex';
+        document.getElementById('funnelModalTitle').textContent = funnel ? 'Editar Funil' : 'Novo Funil';
+        document.getElementById('funnelAlert').classList.add('hidden');
+
+        document.getElementById('funnelFormId').value = funnel ? funnel.id : '';
+        document.getElementById('funnelFormNome').value = funnel ? funnel.nome : '';
+
+        const stageList = document.getElementById('stageList');
+        stageList.innerHTML = '';
+
+        if (funnel && funnel.etapas.length) {
+            funnel.etapas.forEach(s => addStageRow(s.id, s.nome));
+        } else {
+            // Default stages for new funnel
+            addStageRow('novo', 'Novo Lead');
+            addStageRow('contato', 'Em Contato');
+            addStageRow('negociacao', 'Negociação');
+            addStageRow('fechado', 'Fechado');
+        }
+    }
+
+    function addStageRow(id = '', nome = '') {
+        const list = document.getElementById('stageList');
+        const row = document.createElement('div');
+        row.className = 'stage-row';
+        row.innerHTML = `
+            <span class="drag-handle">⠿</span>
+            <input type="text" class="stage-id" placeholder="ID (ex: novo)" value="${esc(id)}">
+            <input type="text" class="stage-nome" placeholder="Nome (ex: Novo Lead)" value="${esc(nome)}">
+            <button type="button" class="remove-stage" onclick="this.parentElement.remove()">✕</button>
+        `;
+        list.appendChild(row);
+    }
+
+    async function editFunnel(id) {
+        const resp = await Auth.apiRequest(`/api/pipeline/funnels/${id}`);
+        if (!resp) return;
+        const funnel = await resp.json();
+        showFunnelForm(funnel);
+    }
+
+    async function saveFunnel() {
+        const id = document.getElementById('funnelFormId').value;
+        const nome = document.getElementById('funnelFormNome').value.trim();
+        if (!nome) { showFunnelAlert('Nome é obrigatório'); return; }
+
+        const stages = [];
+        document.querySelectorAll('.stage-row').forEach(row => {
+            const sid = row.querySelector('.stage-id').value.trim();
+            const sname = row.querySelector('.stage-nome').value.trim();
+            if (sid && sname) stages.push({ id: sid, nome: sname });
+        });
+
+        if (stages.length === 0) { showFunnelAlert('Adicione pelo menos uma etapa'); return; }
+
+        const body = { nome, etapas: stages };
+        const url = id ? `/api/pipeline/funnels/${id}` : '/api/pipeline/funnels';
+        const method = id ? 'PUT' : 'POST';
+
+        const resp = await Auth.apiRequest(url, { method, body: JSON.stringify(body) });
+        if (!resp) return;
+        if (!resp.ok) {
+            const err = await resp.json();
+            showFunnelAlert(err.detail || 'Erro ao salvar');
+            return;
+        }
+
+        closeFunnelModal();
+        loadFunnels();
+    }
+
+    async function deleteFunnel(id, nome) {
+        if (!confirm(`Excluir o funil "${nome}"? Todos os leads serão removidos dele.`)) return;
+        const resp = await Auth.apiRequest(`/api/pipeline/funnels/${id}`, { method: 'DELETE' });
+        if (resp && resp.ok) {
+            if (currentFunnelId === id) currentFunnelId = null;
+            loadFunnels();
+            showFunnelList();
+        }
+    }
+
+    function showFunnelAlert(msg) {
+        document.getElementById('funnelAlertMsg').textContent = msg;
+        document.getElementById('funnelAlert').classList.remove('hidden');
+    }
+
+    // ─── Utils ──────────────────────────────────
+
+    function esc(str) { if (!str) return ''; const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
+    function fmtDate(s) { if (!s) return '—'; return new Date(s + 'T00:00:00').toLocaleDateString('pt-BR'); }
+    function fmtDateTime(s) {
+        if (!s) return '';
+        const d = new Date(s);
+        return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    }
+    </script>
+</body>
+</html>
