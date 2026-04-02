@@ -79,7 +79,7 @@ class LeadCardResponse(BaseModel):
     nome: str
     email: Optional[str] = None
     whatsapp: Optional[str] = None
-    destino: Optional[str] = None
+    destinos: Optional[list[str]] = None
     data_chegada: Optional[date] = None
     data_partida: Optional[date] = None
     etapa_id: str

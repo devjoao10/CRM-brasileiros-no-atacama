@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tarefas — CRM Brasileiros no Atacama</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/variables.css">
+    <link rel="stylesheet" href="/static/css/base.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="icon" href="/static/img/logo.png" type="image/png">
+    <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
+    <style>
+        .dashboard-layout { display: flex; min-height: 100vh; }
+        .sidebar { width: 260px; background: linear-gradient(180deg, var(--color-dark) 0%, var(--color-dark-700) 100%); color: var(--color-white); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: var(--z-sidebar); }
+        .sidebar-header { padding: var(--space-6); display: flex; align-items: center; gap: var(--space-4); border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .sidebar-logo { width: 44px; height: 44px; border-radius: var(--radius-full); overflow: hidden; flex-shrink: 0; }
+        .sidebar-logo img { width: 100%; height: 100%; object-fit: cover; }
+        .sidebar-brand { font-size: var(--font-size-sm); font-weight: var(--font-weight-bold); line-height: 1.3; }
+        .sidebar-brand span { color: var(--color-accent-light); }
+        .sidebar-nav { flex: 1; padding: var(--space-4) 0; overflow-y: auto; }
+        .nav-section { padding: var(--space-2) var(--space-6); margin-top: var(--space-4); }
+        .nav-section-title { font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255,255,255,0.4); margin-bottom: var(--space-2); }
+        .nav-item { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-6); color: rgba(255,255,255,0.7); font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); transition: all var(--transition-fast); cursor: pointer; text-decoration: none; border-left: 3px solid transparent; }
+        .nav-item:hover { background: rgba(255,255,255,0.05); color: var(--color-white); }
+        .nav-item.active { background: rgba(43,108,176,0.15); color: var(--color-white); border-left-color: var(--color-primary-light); }
+        .nav-item .nav-icon { font-size: var(--font-size-lg); width: 24px; text-align: center; }
+        .nav-item .nav-badge { margin-left: auto; background: var(--color-secondary); color: var(--color-white); font-size: var(--font-size-xs); padding: 2px 8px; border-radius: var(--radius-full); font-weight: var(--font-weight-semibold); }
+        .sidebar-footer { padding: var(--space-4) var(--space-6); border-top: 1px solid rgba(255,255,255,0.1); }
+        .main-content { flex: 1; margin-left: 260px; display: flex; flex-direction: column; }
+        .top-header { height: 64px; background: var(--color-white); border-bottom: 1px solid var(--color-dark-200); display: flex; align-items: center; justify-content: space-between; padding: 0 var(--space-8); position: sticky; top: 0; z-index: 100; }
+        .header-left { display: flex; align-items: center; gap: var(--space-4); }
+        .menu-toggle { display: none; background: none; border: none; font-size: var(--font-size-xl); cursor: pointer; padding: var(--space-2); color: var(--color-dark-600); }
+        .page-title { font-size: var(--font-size-lg); font-weight: var(--font-weight-semibold); }
+        .header-right { display: flex; align-items: center; gap: var(--space-4); }
+        .user-info { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-4); border-radius: var(--radius-lg); cursor: pointer; }
+        .user-avatar { width: 36px; height: 36px; border-radius: var(--radius-full); background: linear-gradient(135deg, var(--color-primary), var(--color-secondary)); color: var(--color-white); display: flex; align-items: center; justify-content: center; font-weight: var(--font-weight-bold); font-size: var(--font-size-sm); }
+        .user-name { font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); }
+        .user-role { font-size: var(--font-size-xs); color: var(--color-dark-500); }
+        .content-area { flex: 1; padding: var(--space-8); background: var(--color-light); }
+
+        /* Tabs and Filters */
+        .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-6); flex-wrap: wrap; gap: var(--space-4); }
+        .page-header h1 { font-size: var(--font-size-2xl); font-weight: var(--font-weight-bold); }
+        
+        .tabs-container {
+            display: flex; gap: var(--space-2); margin-bottom: var(--space-6);
+            border-bottom: 2px solid var(--color-dark-200); overflow-x: auto;
+        }
+        .tab-button {
+            background: none; border: none; padding: var(--space-3) var(--space-4);
+            font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold);
+            color: var(--color-dark-400); cursor: pointer; white-space: nowrap;
+            border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.2s;
+        }
+        .tab-button:hover { color: var(--color-primary); }
+        .tab-button.active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
+
+        /* Task Filters */
+        .filters-bar {
+            display: flex; gap: var(--space-2); margin-bottom: var(--space-6); flex-wrap: wrap;
+        }
+        .filter-btn {
+            background: var(--color-white); border: 1px solid var(--color-dark-200);
+            padding: var(--space-2) var(--space-4); border-radius: var(--radius-full);
+            font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold);
+            color: var(--color-dark-500); cursor: pointer; transition: all 0.2s;
+        }
+        .filter-btn:hover { background: var(--color-dark-100); }
+        .filter-btn.active { background: var(--color-primary); color: var(--color-white); border-color: var(--color-primary); }
+
+        /* Tasks List */
+        .tasks-container { display: flex; flex-direction: column; gap: var(--space-3); }
+        .task-card {
+            background: var(--color-white); border-radius: var(--radius-lg); padding: var(--space-4) var(--space-5);
+            box-shadow: var(--shadow-sm); display: flex; align-items: center; justify-content: space-between;
+            border-left: 4px solid var(--color-dark-300); transition: all 0.2s;
+        }
+        .task-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
+        
+        /* Status Colors */
+        .task-card[data-status="pendente"] { border-left-color: var(--color-warning); }
+        .task-card[data-status="em_andamento"] { border-left-color: var(--color-info); }
+        .task-card[data-status="concluido"] { border-left-color: var(--color-success); opacity: 0.7; }
+        .task-card[data-status="cancelado"] { border-left-color: var(--color-danger); opacity: 0.5; }
+        
+        .task-card.is-overdue { border-left-color: var(--color-danger); background: #fff5f5; }
+
+        .task-content { flex: 1; margin-right: var(--space-4); }
+        .task-title { font-size: var(--font-size-base); font-weight: var(--font-weight-semibold); margin-bottom: 4px; display: flex; align-items: center; gap: var(--space-2); }
+        .task-date { font-size: var(--font-size-xs); color: var(--color-dark-400); display: flex; align-items: center; gap: 4px; }
+        .task-badge-auto { font-size: 10px; background: var(--color-dark-800); color: white; padding: 2px 6px; border-radius: 4px; }
+        
+        .task-actions { display: flex; align-items: center; gap: var(--space-2); }
+        .task-actions button {
+            background: none; border: none; font-size: var(--font-size-lg);
+            cursor: pointer; padding: var(--space-2); border-radius: var(--radius-md);
+            color: var(--color-dark-400); transition: all 0.2s;
+        }
+        .task-actions button:hover { background: var(--color-dark-100); color: var(--color-primary); }
+        .task-actions button.check-btn:hover { color: var(--color-success); }
+
+        .empty-state { text-align: center; padding: var(--space-12); color: var(--color-dark-400); }
+        .empty-state .empty-icon { font-size: 3rem; margin-bottom: var(--space-4); }
+
+        /* Modal */
+        .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: var(--z-modal); align-items: center; justify-content: center; backdrop-filter: blur(4px); }
+        .modal-overlay.show { display: flex; }
+        .modal { background: var(--color-white); border-radius: var(--radius-2xl); width: 90%; max-width: 500px; box-shadow: var(--shadow-xl); animation: modalSlideIn 0.3s ease; }
+        @keyframes modalSlideIn { from { opacity: 0; transform: translateY(20px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        .modal-header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-6); border-bottom: 1px solid var(--color-dark-100); }
+        .modal-header h3 { font-size: var(--font-size-xl); font-weight: var(--font-weight-bold); }
+        .modal-close { background: none; border: none; font-size: var(--font-size-xl); cursor: pointer; color: var(--color-dark-400); padding: var(--space-2); border-radius: var(--radius-md); }
+        .modal-close:hover { background: var(--color-dark-100); }
+        .modal-body { padding: var(--space-6); }
+        .modal-footer { padding: var(--space-4) var(--space-6); border-top: 1px solid var(--color-dark-100); display: flex; justify-content: flex-end; gap: var(--space-3); }
+
+        /* View Toggle */
+        .view-toggle {
+            display: inline-flex; background: var(--color-dark-100); border-radius: var(--radius-lg); padding: 4px;
+        }
+        .view-toggle button {
+            background: none; border: none; padding: var(--space-2) var(--space-4); font-size: var(--font-size-sm);
+            font-weight: var(--font-weight-semibold); color: var(--color-dark-500); cursor: pointer; border-radius: var(--radius-md);
+            transition: all 0.2s;
+        }
+        .view-toggle button.active { background: var(--color-white); color: var(--color-primary); box-shadow: var(--shadow-sm); }
+        
+        /* Calendar Theme Adjustments */
+        .fc { font-family: var(--font-family); background: white; border-radius: var(--radius-xl); overflow: hidden; }
+        .fc-theme-standard td, .fc-theme-standard th { border-color: var(--color-dark-100); }
+        .fc-col-header-cell { background: var(--color-dark-50); padding: 8px 0 !important; color: var(--color-dark-500); font-weight: 600; text-transform: uppercase; font-size: 11px; }
+        .fc-event { border: none !important; border-radius: 4px; padding: 2px 4px; font-size: 11px; font-weight: 500; cursor: pointer; transition: transform 0.1s; }
+        .fc-event:hover { transform: scale(1.02); filter: brightness(0.95); }
+        .fc .fc-toolbar-title { font-size: 1.25rem !important; font-weight: 700; color: var(--color-dark); text-transform: capitalize; }
+        .fc .fc-button-primary { background-color: var(--color-primary) !important; border-color: var(--color-primary) !important; text-transform: capitalize; }
+        .fc .fc-button-primary:hover { filter: brightness(0.9); }
+        .fc .fc-button-primary:not(:disabled).fc-button-active { background-color: var(--color-primary-dark) !important; }
+        .fc-daygrid-day-number { color: var(--color-dark); font-weight: 500; font-size: 14px; padding: 8px !important; }
+        .fc-day-today { background-color: rgba(43, 108, 176, 0.05) !important; }
+
+        @media (max-width: 1024px) {
+            .sidebar { transform: translateX(-100%); transition: transform var(--transition-base); }
+            .sidebar.open { transform: translateX(0); }
+            .main-content { margin-left: 0; }
+            .menu-toggle { display: block; }
+            .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: calc(var(--z-sidebar) - 1); }
+            .sidebar-overlay.show { display: block; }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard-layout">
+        <div class="sidebar-overlay" id="sidebarOverlay"></div>
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo"><img src="/static/img/logo.png" alt="Logo"></div>
+                <div class="sidebar-brand">Brasileiros <span>no Atacama</span></div>
+            </div>
+            <nav class="sidebar-nav">
+                <div class="nav-section"><div class="nav-section-title">Principal</div></div>
+                <a href="/dashboard" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
+                <div class="nav-section"><div class="nav-section-title">CRM</div></div>
+                <a href="/leads" class="nav-item"><span class="nav-icon">👥</span><span>Leads</span></a>
+                <a href="/tags" class="nav-item"><span class="nav-icon">🏷️</span><span>Tags</span></a>
+                <a href="/pipeline" class="nav-item"><span class="nav-icon">🎯</span><span>Pipeline</span></a>
+                <a href="/segmentacao" class="nav-item"><span class="nav-icon">🔍</span><span>Segmentação</span></a>
+                <a href="/tarefas" class="nav-item active"><span class="nav-icon">📋</span><span>Tarefas</span></a>
+                <div class="nav-section"><div class="nav-section-title">Conf. Admin</div></div>
+                <a href="/relatorios" class="nav-item"><span class="nav-icon">📈</span><span>Relatórios</span></a>
+                <a href="/equipe" class="nav-item"><span class="nav-icon">👥</span><span>Equipe e Usuários</span></a>
+                <div class="nav-section"><div class="nav-section-title">Sistema</div></div>
+                <a href="#" class="nav-item" data-coming-soon><span class="nav-icon">⚙️</span><span>Configurações</span></a>
+                <a href="/docs" class="nav-item" target="_blank"><span class="nav-icon">📖</span><span>API Docs</span></a>
+            </nav>
+            <div class="sidebar-footer">
+                <a href="#" class="nav-item" id="logoutBtn" style="border:none;padding-left:0;">
+                    <span class="nav-icon">🚪</span><span>Sair</span>
+                </a>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <header class="top-header">
+                <div class="header-left">
+                    <button class="menu-toggle" id="menuToggle">☰</button>
+                    <h2 class="page-title">Tarefas</h2>
+                </div>
+                <div class="header-right">
+                    <div class="user-info">
+                        <div class="user-avatar" id="userAvatar">A</div>
+                        <div>
+                            <div class="user-name" id="userName">Carregando...</div>
+                            <div class="user-role" id="userRole">—</div>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <div class="content-area">
+                <div class="page-header">
+                    <h1>📋 Gerenciar Tarefas</h1>
+                    <div style="display:flex;gap:var(--space-4);align-items:center;flex-wrap:wrap;">
+                        <div class="view-toggle">
+                            <button id="btnListView" class="active" onclick="switchView('list')">📋 Lista</button>
+                            <button id="btnCalView" onclick="switchView('calendar')">📅 Calendário</button>
+                        </div>
+                        <button class="btn btn-primary btn-sm" onclick="openTaskModal()">➕ Nova Tarefa</button>
+                    </div>
+                </div>
+                
+                <div class="tabs-container" id="mainTabs">
+                    <button class="tab-button active" data-tab="minhas">Minhas Tarefas</button>
+                    <button class="tab-button" data-tab="equipe" id="equipeTab" style="display:none;">Todas (Equipe)</button>
+                    <button class="tab-button" data-tab="automaticas">🤖 Tarefas Automáticas (N8N/IA)</button>
+                </div>
+
+                <div id="listView">
+                    <div class="filters-bar" id="dateFilters">
+                        <button class="filter-btn active" data-filter="all">Todas</button>
+                        <button class="filter-btn" data-filter="overdue">⚠️ Atrasadas</button>
+                        <button class="filter-btn" data-filter="today">Hoje</button>
+                        <button class="filter-btn" data-filter="tomorrow">Amanhã</button>
+                    </div>
+
+                    <div class="tasks-container" id="tasksList">
+                        <div class="empty-state">
+                            <div class="empty-icon">⏳</div>
+                            <p>Carregando tarefas...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="calendarView" style="display:none; padding-bottom:20px;">
+                    <div id="calendar"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Task Modal -->
+    <div class="modal-overlay" id="taskModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="taskModalTitle">Nova Tarefa</h3>
+                <button class="modal-close" onclick="closeTaskModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div id="taskAlert" class="alert alert-error hidden" style="margin-bottom:var(--space-4);">
+                    <span>⚠️</span><span id="taskAlertMsg"></span>
+                </div>
+                <input type="hidden" id="taskId">
+                <div class="form-group">
+                    <label class="form-label" for="taskTitulo">Título da Tarefa</label>
+                    <input type="text" id="taskTitulo" class="form-input" placeholder="Ligar para fulano, Enviar proposta...">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="taskDescricao">Descrição</label>
+                    <textarea id="taskDescricao" class="form-input" rows="3" placeholder="Detalhes opcionais..."></textarea>
+                </div>
+                <div class="form-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4);">
+                    <div class="form-group">
+                        <label class="form-label" for="taskData">Data de Vencimento</label>
+                        <input type="datetime-local" id="taskData" class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="taskStatus">Status</label>
+                        <select id="taskStatus" class="form-input">
+                            <option value="pendente">Pendente</option>
+                            <option value="em_andamento">Em Andamento</option>
+                            <option value="concluido">Concluída</option>
+                            <option value="cancelado">Cancelada</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--color-dark-500);margin-top:10px;">
+                        <input type="checkbox" id="syncCalendar" checked>
+                        <span>Sincronizar com Google Calendar (N8N)</span>
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeTaskModal()">Cancelar</button>
+                <button class="btn btn-primary" onclick="saveTask()">Salvar</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/auth.js"></script>
+    <script>
+    let currentTab = 'minhas'; // minhas, equipe, automaticas
+    let dateFilter = 'all'; // all, overdue, today, tomorrow
+    let allTasks = [];
+    let calendar = null;
+    let viewMode = 'list';
+
+    document.addEventListener('DOMContentLoaded', () => {
+        if (!Auth.requireAuth()) return;
+        const user = Auth.getUser();
+        if (user) {
+            document.getElementById('userName').textContent = user.nome;
+            document.getElementById('userRole').textContent = user.role === 'admin' ? 'Administrador' : 'Usuário';
+            document.getElementById('userAvatar').textContent = user.nome.charAt(0).toUpperCase();
+            if (user.role === 'admin') {
+                document.getElementById('equipeTab').style.display = 'block';
+            }
+        }
+
+        // Sidebar interactions
+        document.getElementById('logoutBtn').addEventListener('click', e => { e.preventDefault(); Auth.logout(); });
+        const sidebar = document.getElementById('sidebar'), overlay = document.getElementById('sidebarOverlay');
+        document.getElementById('menuToggle').addEventListener('click', () => { sidebar.classList.toggle('open'); overlay.classList.toggle('show'); });
+        overlay.addEventListener('click', () => { sidebar.classList.remove('open'); overlay.classList.remove('show'); });
+        document.querySelectorAll('[data-coming-soon]').forEach(i => i.addEventListener('click', e => { e.preventDefault(); alert('🚧 Em desenvolvimento!'); }));
+
+        // Tabs interactions
+        document.querySelectorAll('.tab-button').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentTab = btn.dataset.tab;
+                fetchTasks();
+            });
+        });
+
+        // Date Filters
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                dateFilter = btn.dataset.filter;
+                renderTasks(); // just client-side filter
+            });
+        });
+
+        initCalendar();
+        fetchTasks();
+    });
+
+    function switchView(mode) {
+        viewMode = mode;
+        if (mode === 'list') {
+            document.getElementById('btnListView').classList.add('active');
+            document.getElementById('btnCalView').classList.remove('active');
+            document.getElementById('listView').style.display = 'block';
+            document.getElementById('calendarView').style.display = 'none';
+        } else {
+            document.getElementById('btnCalView').classList.add('active');
+            document.getElementById('btnListView').classList.remove('active');
+            document.getElementById('listView').style.display = 'none';
+            document.getElementById('calendarView').style.display = 'block';
+            if (calendar) {
+                calendar.render();
+            }
+        }
+    }
+
+    function initCalendar() {
+        const calendarEl = document.getElementById('calendar');
+        calendar = new FullCalendar.Calendar(calendarEl, {
+            initialView: 'dayGridMonth',
+            locale: 'pt-br',
+            headerToolbar: {
+                left: 'prev,next today',
+                center: 'title',
+                right: 'dayGridMonth,timeGridWeek,timeGridDay'
+            },
+            buttonText: {
+                today: 'Hoje',
+                month: 'Mês',
+                week: 'Semana',
+                day: 'Dia',
+                list: 'Lista'
+            },
+            height: 'auto',
+            events: [],
+            eventClick: function(info) {
+                const task = allTasks.find(t => t.id == info.event.id);
+                if (task) editTask(task);
+            }
+        });
+        calendar.render();
+    }
+
+    async function fetchTasks() {
+        const list = document.getElementById('tasksList');
+        list.innerHTML = '<div class="empty-state"><div class="empty-icon">⏳</div><p>Carregando tarefas...</p></div>';
+        
+        let url = '/api/tasks?';
+        if (currentTab === 'automaticas') {
+            url += 'tipo=automatica';
+        } else {
+            url += 'tipo=manual';
+        }
+
+        // Se for "minhas", o backend já filtra pelo current_user.
+        // Se for "equipe", removemos o user_filter para vir tudo (admin).
+
+        const resp = await Auth.apiRequest(url);
+        if (!resp) return;
+        allTasks = await resp.json();
+        renderTasks();
+        updateCalendarEvents();
+    }
+
+    function updateCalendarEvents() {
+        if (!calendar) return;
+        
+        const colors = {
+            'pendente': '#DD6B20',       // Warning/Orange
+            'em_andamento': '#3182CE',   // Info/Blue
+            'concluido': '#38A169',      // Success/Green
+            'cancelado': '#E53E3E'       // Danger/Red
+        };
+        
+        const events = allTasks.map(t => ({
+            id: t.id,
+            title: (t.tipo === 'automatica' ? '🤖 ' : '') + t.titulo,
+            start: t.data_vencimento ? t.data_vencimento : new Date().toISOString().split('T')[0], // Fallback para data de hoje se não tiver data, só pro calendário
+            allDay: t.data_vencimento ? t.data_vencimento.includes('T00:00:00') : true,
+            backgroundColor: colors[t.status] || '#2B6CB0',
+            borderColor: colors[t.status] || '#2B6CB0',
+            extendedProps: {
+                status: t.status,
+                tipo: t.tipo
+            }
+        }));
+        
+        calendar.removeAllEvents();
+        calendar.addEventSource(events);
+    }
+
+    function renderTasks() {
+        const list = document.getElementById('tasksList');
+        
+        let filtered = allTasks;
+        
+        const now = new Date();
+        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const startOfTomorrow = new Date(startOfToday.getTime() + 86400000);
+        const startOfDayAfterTomorrow = new Date(startOfTomorrow.getTime() + 86400000);
+
+        if (dateFilter === 'overdue') {
+            filtered = filtered.filter(t => t.data_vencimento && new Date(t.data_vencimento) < now && t.status !== 'concluido' && t.status !== 'cancelado');
+        } else if (dateFilter === 'today') {
+            filtered = filtered.filter(t => t.data_vencimento && new Date(t.data_vencimento) >= startOfToday && new Date(t.data_vencimento) < startOfTomorrow);
+        } else if (dateFilter === 'tomorrow') {
+            filtered = filtered.filter(t => t.data_vencimento && new Date(t.data_vencimento) >= startOfTomorrow && new Date(t.data_vencimento) < startOfDayAfterTomorrow);
+        }
+
+        if (filtered.length === 0) {
+            list.innerHTML = '<div class="empty-state"><div class="empty-icon">📋</div><p>Nenhuma tarefa encontrada.</p></div>';
+            return;
+        }
+
+        list.innerHTML = filtered.map(t => {
+            const isOverdue = t.data_vencimento && new Date(t.data_vencimento) < now && t.status !== 'concluido' && t.status !== 'cancelado';
+            const dateStr = t.data_vencimento ? new Date(t.data_vencimento).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : 'Sem prazo';
+            
+            return `
+            <div class="task-card ${isOverdue ? 'is-overdue' : ''}" data-status="${t.status}">
+                <div class="task-content">
+                    <div class="task-title">
+                        ${t.tipo === 'automatica' ? '<span class="task-badge-auto">🤖 IA/N8N</span>' : ''}
+                        ${esc(t.titulo)}
+                    </div>
+                    <div class="task-date">
+                        <span>🗓️ ${dateStr}</span>
+                        ${t.google_calendar_event_id ? '<span style="color:#2B6CB0; margin-left:8px;" title="Sincronizado no Google Calendar">📅</span>' : ''}
+                    </div>
+                </div>
+                <div class="task-actions">
+                    ${t.status !== 'concluido' ? `<button class="check-btn" title="Marcar como Concluída" onclick="updateTaskStatus(${t.id}, 'concluido')">✓</button>` : ''}
+                    <button title="Editar" onclick='editTask(${JSON.stringify(t).replace(/'/g, "&#39;")})'>✏️</button>
+                    <button title="Excluir" onclick="deleteTask(${t.id})">🗑️</button>
+                </div>
+            </div>
+            `;
+        }).join('');
+    }
+
+    function openTaskModal(task = null) {
+        document.getElementById('taskModal').classList.add('show');
+        document.getElementById('taskAlert').classList.add('hidden');
+        
+        if (task) {
+            document.getElementById('taskModalTitle').textContent = 'Editar Tarefa';
+            document.getElementById('taskId').value = task.id;
+            document.getElementById('taskTitulo').value = task.titulo;
+            document.getElementById('taskDescricao').value = task.descricao || '';
+            document.getElementById('taskStatus').value = task.status;
+            if (task.data_vencimento) {
+                // Formatar para yyyy-MM-ddThh:mm
+                const d = new Date(task.data_vencimento);
+                const l = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+                document.getElementById('taskData').value = l;
+            } else {
+                document.getElementById('taskData').value = '';
+            }
+        } else {
+            document.getElementById('taskModalTitle').textContent = 'Nova Tarefa';
+            document.getElementById('taskId').value = '';
+            document.getElementById('taskTitulo').value = '';
+            document.getElementById('taskDescricao').value = '';
+            document.getElementById('taskStatus').value = 'pendente';
+            document.getElementById('taskData').value = '';
+        }
+    }
+
+    function closeTaskModal() {
+        document.getElementById('taskModal').classList.remove('show');
+    }
+
+    function editTask(taskJSON) {
+        openTaskModal(taskJSON);
+    }
+
+    async function updateTaskStatus(id, newStatus) {
+        const resp = await Auth.apiRequest(`/api/tasks/${id}`, {
+            method: 'PUT',
+            body: JSON.stringify({ status: newStatus })
+        });
+        if (resp && resp.ok) fetchTasks();
+    }
+
+    async function deleteTask(id) {
+        if (!confirm('Deseja realmente apagar esta tarefa?')) return;
+        const resp = await Auth.apiRequest(`/api/tasks/${id}`, { method: 'DELETE' });
+        if (resp && resp.ok) fetchTasks();
+    }
+
+    async function saveTask() {
+        const id = document.getElementById('taskId').value;
+        const titulo = document.getElementById('taskTitulo').value.trim();
+        const descricao = document.getElementById('taskDescricao').value.trim();
+        const status = document.getElementById('taskStatus').value;
+        const datestr = document.getElementById('taskData').value;
+        
+        if (!titulo) {
+            document.getElementById('taskAlertMsg').textContent = 'Título é obrigatório';
+            document.getElementById('taskAlert').classList.remove('hidden');
+            return;
+        }
+
+        const body = {
+            titulo,
+            descricao: descricao || null,
+            status,
+            tipo: 'manual' // Default para criações manuais (A IA via API passa automatica)
+        };
+        
+        if (datestr) {
+            body.data_vencimento = new Date(datestr).toISOString();
+        }
+
+        const syncCalendar = document.getElementById('syncCalendar').checked;
+        if (syncCalendar && !id) {
+            // Se tiver o checkbox selecionado (normalmente enviaria um webhook aqui, mas podemos sinalizar salvando uma tag ou esperando que a engine backend/n8n processe isso)
+            // Em tese, aqui preparamos os dados para informar isso. Para fim demonstrativo e mock:
+            body.google_calendar_event_id = "pending_sync"; 
+        }
+
+        const url = id ? `/api/tasks/${id}` : '/api/tasks';
+        const method = id ? 'PUT' : 'POST';
+
+        const reqBtn = document.querySelector('#taskModal .btn-primary');
+        reqBtn.disabled = true;
+        reqBtn.textContent = 'Salvando...';
+
+        const resp = await Auth.apiRequest(url, { method, body: JSON.stringify(body) });
+        reqBtn.disabled = false;
+        reqBtn.textContent = 'Salvar';
+
+        if (!resp) return;
+        if (!resp.ok) {
+            const err = await resp.json();
+            document.getElementById('taskAlertMsg').textContent = err.detail || 'Erro ao salvar';
+            document.getElementById('taskAlert').classList.remove('hidden');
+            return;
+        }
+
+        closeTaskModal();
+        fetchTasks();
+    }
+
+    function esc(str) { if (!str) return ''; const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
+    </script>
+</body>
+</html>

@@ -15,8 +15,8 @@ class Lead(Base):
     email = Column(String(255), nullable=True, index=True)
     whatsapp = Column(String(30), nullable=True, index=True)
 
-    # Travel details
-    destino = Column(String(100), nullable=True, index=True)  # Atacama, Uyuni, Santiago, or custom
+    # Travel details — destinos is a JSON list like ["Atacama", "Uyuni"]
+    destinos = Column(JSON, default=list, nullable=True)
     data_chegada = Column(Date, nullable=True)
     data_partida = Column(Date, nullable=True)
 
@@ -25,6 +25,7 @@ class Lead(Base):
     campos_personalizados = Column(JSON, default=dict, nullable=False)
 
     # Status
+    status_venda = Column(String(30), default="em_negociacao", nullable=False, index=True) # em_negociacao, venda, perda
     is_active = Column(Boolean, default=True, nullable=False)
 
     # Metadata
@@ -35,5 +36,4 @@ class Lead(Base):
     tags = relationship("Tag", secondary="lead_tags", back_populates="leads")
 
     def __repr__(self):
-        return f"<Lead(id={self.id}, nome='{self.nome}', destino='{self.destino}')>"
-
+        return f"<Lead(id={self.id}, nome='{self.nome}', destinos={self.destinos})>"

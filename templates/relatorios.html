@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Relatórios — CRM Brasileiros no Atacama</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/variables.css">
+    <link rel="stylesheet" href="/static/css/base.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="icon" href="/static/img/logo.png" type="image/png">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        .dashboard-layout { display: flex; min-height: 100vh; }
+        .sidebar { width: 260px; background: linear-gradient(180deg, var(--color-dark) 0%, var(--color-dark-700) 100%); color: var(--color-white); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: var(--z-sidebar); }
+        .sidebar-header { padding: var(--space-6); display: flex; align-items: center; gap: var(--space-4); border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .sidebar-logo { width: 44px; height: 44px; border-radius: var(--radius-full); overflow: hidden; flex-shrink: 0; }
+        .sidebar-logo img { width: 100%; height: 100%; object-fit: cover; }
+        .sidebar-brand { font-size: var(--font-size-sm); font-weight: var(--font-weight-bold); line-height: 1.3; }
+        .sidebar-brand span { color: var(--color-accent-light); }
+        .sidebar-nav { flex: 1; padding: var(--space-4) 0; overflow-y: auto; }
+        .nav-section { padding: var(--space-2) var(--space-6); margin-top: var(--space-4); }
+        .nav-section-title { font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255,255,255,0.4); margin-bottom: var(--space-2); }
+        .nav-item { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-6); color: rgba(255,255,255,0.7); font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); transition: all var(--transition-fast); cursor: pointer; text-decoration: none; border-left: 3px solid transparent; }
+        .nav-item:hover { background: rgba(255,255,255,0.05); color: var(--color-white); }
+        .nav-item.active { background: rgba(43,108,176,0.15); color: var(--color-white); border-left-color: var(--color-primary-light); }
+        .nav-item .nav-icon { font-size: var(--font-size-lg); width: 24px; text-align: center; }
+        .sidebar-footer { padding: var(--space-4) var(--space-6); border-top: 1px solid rgba(255,255,255,0.1); }
+        
+        .main-content { flex: 1; margin-left: 260px; display: flex; flex-direction: column; }
+        .top-header { height: 64px; background: var(--color-white); border-bottom: 1px solid var(--color-dark-200); display: flex; align-items: center; justify-content: space-between; padding: 0 var(--space-8); position: sticky; top: 0; z-index: 100; }
+        .header-left { display: flex; align-items: center; gap: var(--space-4); }
+        .menu-toggle { display: none; background: none; border: none; font-size: var(--font-size-xl); cursor: pointer; padding: var(--space-2); color: var(--color-dark-600); }
+        .page-title { font-size: var(--font-size-lg); font-weight: var(--font-weight-semibold); color: var(--color-dark); }
+        .header-right { display: flex; align-items: center; gap: var(--space-4); }
+        .user-info { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-4); border-radius: var(--radius-lg); cursor: pointer; transition: background var(--transition-fast); }
+        .user-info:hover { background: var(--color-dark-100); }
+        .user-avatar { width: 36px; height: 36px; border-radius: var(--radius-full); background: linear-gradient(135deg, var(--color-primary), var(--color-secondary)); color: var(--color-white); display: flex; align-items: center; justify-content: center; font-weight: var(--font-weight-bold); font-size: var(--font-size-sm); }
+        .user-name { font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); color: var(--color-dark); }
+        .user-role { font-size: var(--font-size-xs); color: var(--color-dark-500); }
+        
+        .content-area { flex: 1; padding: var(--space-8); background: var(--color-light); }
+        
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-6); margin-bottom: var(--space-8); }
+        .stat-card { background: var(--color-white); border-radius: var(--radius-xl); padding: var(--space-6); box-shadow: var(--shadow-sm); display: flex; align-items: center; gap: var(--space-4); transition: all var(--transition-base); }
+        .stat-card:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
+        .stat-icon { width: 52px; height: 52px; border-radius: var(--radius-lg); display: flex; align-items: center; justify-content: center; font-size: var(--font-size-xl); flex-shrink: 0; }
+        .stat-icon.blue { background: rgba(43, 108, 176, 0.1); }
+        .stat-icon.orange { background: rgba(221, 107, 32, 0.1); }
+        .stat-icon.green { background: rgba(56, 161, 105, 0.1); }
+        .stat-icon.red { background: rgba(229, 62, 62, 0.1); }
+        .stat-value { font-size: var(--font-size-2xl); font-weight: var(--font-weight-bold); color: var(--color-dark); line-height: 1; }
+        .stat-label { font-size: var(--font-size-sm); color: var(--color-dark-500); margin-top: var(--space-1); }
+
+        .charts-row { display: grid; grid-template-columns: 2fr 1fr; gap: var(--space-6); margin-bottom: var(--space-8); }
+        .chart-card { background: var(--color-white); border-radius: var(--radius-xl); padding: var(--space-6); box-shadow: var(--shadow-sm); }
+        .chart-title { font-size: var(--font-size-lg); font-weight: var(--font-weight-semibold); margin-bottom: var(--space-6); color: var(--color-dark); }
+
+        .dataTable { width: 100%; border-collapse: collapse; }
+        .dataTable th { text-align: left; padding: var(--space-3) 0; border-bottom: 2px solid var(--color-dark-100); color: var(--color-dark-500); font-weight: 500; font-size: 13px; }
+        .dataTable td { padding: var(--space-3) 0; border-bottom: 1px solid var(--color-dark-100); font-size: 14px; }
+
+        @media (max-width: 1024px) {
+            .sidebar { transform: translateX(-100%); transition: transform var(--transition-base); }
+            .sidebar.open { transform: translateX(0); }
+            .main-content { margin-left: 0; }
+            .menu-toggle { display: block; }
+            .charts-row { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard-layout">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo"><img src="/static/img/logo.png" alt="Logo"></div>
+                <div class="sidebar-brand">Brasileiros <span>no Atacama</span></div>
+            </div>
+            <nav class="sidebar-nav">
+                <div class="nav-section"><div class="nav-section-title">Principal</div></div>
+                <a href="/dashboard" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
+                <div class="nav-section"><div class="nav-section-title">CRM</div></div>
+                <a href="/leads" class="nav-item"><span class="nav-icon">👥</span><span>Leads</span></a>
+                <a href="/tags" class="nav-item"><span class="nav-icon">🏷️</span><span>Tags</span></a>
+                <a href="/pipeline" class="nav-item"><span class="nav-icon">🎯</span><span>Pipeline</span></a>
+                <a href="/segmentacao" class="nav-item"><span class="nav-icon">🔍</span><span>Segmentação</span></a>
+                <a href="/tarefas" class="nav-item"><span class="nav-icon">📋</span><span>Tarefas</span></a>
+                <div class="nav-section"><div class="nav-section-title">Conf. Admin</div></div>
+                <a href="/relatorios" class="nav-item active"><span class="nav-icon">📈</span><span>Relatórios</span></a>
+                <a href="/equipe" class="nav-item"><span class="nav-icon">👥</span><span>Equipe e Usuários</span></a>
+            </nav>
+            <div class="sidebar-footer">
+                <a href="#" class="nav-item" id="logoutBtn" style="border:none;padding-left:0;">
+                    <span class="nav-icon">🚪</span><span>Sair</span>
+                </a>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <header class="top-header">
+                <div class="header-left">
+                    <button class="menu-toggle" id="menuToggle">☰</button>
+                    <h2 class="page-title">Relatórios & BI</h2>
+                </div>
+                <div class="header-right">
+                    <div class="user-info">
+                        <div class="user-avatar" id="userAvatar">A</div>
+                        <div>
+                            <div class="user-name" id="userName">Carregando...</div>
+                            <div class="user-role" id="userRole">—</div>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <div class="content-area">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:var(--space-4); margin-bottom:var(--space-6); background:white; padding:var(--space-4); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm);">
+                    <div style="display:flex; gap:var(--space-2); align-items:center;">
+                        <span style="font-weight:600;">Filtrar Data de Criação:</span>
+                        <input type="date" id="repStart" class="form-input" style="width:140px; padding:6px;">
+                        <span>até</span>
+                        <input type="date" id="repEnd" class="form-input" style="width:140px; padding:6px;">
+                        <button class="btn btn-primary" onclick="loadReports()" style="padding:6px 12px; margin-left:var(--space-2);">Gerar Relatório</button>
+                    </div>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon blue">👥</div>
+                        <div>
+                            <div class="stat-value" id="kpi-total">—</div>
+                            <div class="stat-label">Total Absorvidos</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon orange">🎯</div>
+                        <div>
+                            <div class="stat-value" id="kpi-negociacao">—</div>
+                            <div class="stat-label">Em Negociação</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon green">✅</div>
+                        <div>
+                            <div class="stat-value" id="kpi-vendas">—</div>
+                            <div class="stat-label">Vendas Ganhas</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon red">❌</div>
+                        <div>
+                            <div class="stat-value" id="kpi-perdas">—</div>
+                            <div class="stat-label">Perdas (Insucesso)</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="charts-row">
+                    <div class="chart-card">
+                        <h3 class="chart-title">Acompanhamento do Processo</h3>
+                        <div style="position:relative; height:300px; width:100%;">
+                            <canvas id="statusChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="chart-card">
+                        <h3 class="chart-title">Destinos Solicitados</h3>
+                        <div style="position:relative; height:300px; width:100%; display:flex; justify-content:center;">
+                            <canvas id="dest_chart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="charts-row" style="grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));">
+                    <div class="chart-card">
+                        <h3 class="chart-title">Origens (Variáveis Custom)</h3>
+                        <table class="dataTable" id="origensTable">
+                            <thead>
+                                <tr><th>Origem Identificada</th><th>Leads</th><th>%</th></tr>
+                            </thead>
+                            <tbody><tr><td colspan="3">Carregando dados...</td></tr></tbody>
+                        </table>
+                    </div>
+                    
+                    <div class="chart-card">
+                        <h3 class="chart-title">Tags Atribuídas</h3>
+                        <table class="dataTable" id="tagsTable">
+                            <thead>
+                                <tr><th>Nome da Tag</th><th>Leads</th><th>%</th></tr>
+                            </thead>
+                            <tbody><tr><td colspan="3">Carregando dados...</td></tr></tbody>
+                        </table>
+                    </div>
+
+                    <div class="chart-card">
+                        <h3 class="chart-title">Etapas Atuais (Funil)</h3>
+                        <table class="dataTable" id="etapasTable">
+                            <thead>
+                                <tr><th>Funil - Etapa</th><th>Leads</th><th>%</th></tr>
+                            </thead>
+                            <tbody><tr><td colspan="3">Carregando dados...</td></tr></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/js/auth.js"></script>
+    <script>
+        let lineChart = null;
+        let pieChart = null;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            if (!Auth.requireAuth()) return;
+            const user = Auth.getUser();
+            if (user && user.role !== 'admin') {
+                alert("Acesso restrito para administradores.");
+                window.location.href = "/dashboard";
+                return;
+            }
+
+            if (user) {
+                document.getElementById('userName').textContent = user.nome;
+                document.getElementById('userRole').textContent = 'Administrador';
+                document.getElementById('userAvatar').textContent = user.nome.charAt(0).toUpperCase();
+            }
+
+            const end = new Date();
+            const start = new Date();
+            start.setDate(end.getDate() - 30);
+            
+            document.getElementById('repStart').value = start.toISOString().split('T')[0];
+            document.getElementById('repEnd').value = end.toISOString().split('T')[0];
+
+            loadReports();
+            document.getElementById('logoutBtn').addEventListener('click', (e) => { e.preventDefault(); Auth.logout(); });
+            document.getElementById('menuToggle').addEventListener('click', () => document.getElementById('sidebar').classList.toggle('open'));
+        });
+
+        async function loadReports() {
+            const start = document.getElementById('repStart').value;
+            const end = document.getElementById('repEnd').value;
+            let url = `/api/analytics/reports?start_date=${start}&end_date=${end}`;
+            
+            const reqBtn = document.querySelector('.btn-primary');
+            reqBtn.textContent = 'Gerando...';
+
+            const resp = await Auth.apiRequest(url);
+            reqBtn.textContent = 'Gerar Relatório';
+
+            if (!resp || !resp.ok) return;
+            const data = await resp.json();
+
+            document.getElementById('kpi-total').textContent = data.kpis.total;
+            document.getElementById('kpi-negociacao').textContent = data.kpis.em_negociacao;
+            document.getElementById('kpi-vendas').textContent = data.kpis.vendas;
+            document.getElementById('kpi-perdas').textContent = data.kpis.perdas;
+
+            renderCharts(data.chart, data.breakdown.destinos);
+            renderTableGeneric(data.breakdown.origems, data.kpis.total, 'origensTable', 'Sem origens cadastradas');
+            renderTableGeneric(data.breakdown.tags, data.kpis.total, 'tagsTable', 'Sem tags vinculadas');
+            renderTableGeneric(data.breakdown.etapas, data.kpis.total, 'etapasTable', 'Nenhum lead em funis');
+        }
+
+        function renderCharts(chartData, destinosData) {
+            const ctx1 = document.getElementById('statusChart').getContext('2d');
+            if (lineChart) lineChart.destroy();
+            lineChart = new Chart(ctx1, {
+                type: 'line',
+                data: {
+                    labels: chartData.labels,
+                    datasets: [
+                        { label: 'Em Negociação (Novo)', data: chartData.em_negociacao, borderColor: '#DD6B20', backgroundColor: 'transparent', fill: false, tension: 0.3 },
+                        { label: 'Vendas Fechadas', data: chartData.vendas, borderColor: '#38A169', backgroundColor: 'transparent', fill: false, tension: 0.3 },
+                        { label: 'Perdas (Arquivo)', data: chartData.perdas, borderColor: '#E53E3E', backgroundColor: 'transparent', fill: false, tension: 0.3 }
+                    ]
+                },
+                options: { responsive: true, maintainAspectRatio: false }
+            });
+
+            const ctx2 = document.getElementById('dest_chart').getContext('2d');
+            if (pieChart) pieChart.destroy();
+            const keys = Object.keys(destinosData);
+            const vals = Object.values(destinosData);
+            
+            pieChart = new Chart(ctx2, {
+                type: 'doughnut',
+                data: {
+                    labels: keys.length > 0 ? keys : ['Sem Destino'],
+                    datasets: [{
+                        data: vals.length > 0 ? vals : [1],
+                        backgroundColor: ['#2B6CB0', '#4299E1', '#E2E8F0', '#319795', '#D69E2E']
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, cutout: '60%' }
+            });
+        }
+
+        function renderTableGeneric(dataObj, total, tableId, emptyMsg) {
+            const tbody = document.querySelector(`#${tableId} tbody`);
+            tbody.innerHTML = '';
+            
+            const keys = Object.keys(dataObj);
+            if (keys.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="3" style="text-align:center;">${emptyMsg}</td></tr>`;
+                return;
+            }
+
+            for (let k of keys.slice(0, 10)) {
+                const vol = dataObj[k];
+                const perc = total > 0 ? ((vol / total) * 100).toFixed(1) : 0;
+                tbody.innerHTML += `<tr>
+                    <td><span style="background:var(--color-dark-100); padding:2px 8px; border-radius:12px; font-weight:500;">${k}</span></td>
+                    <td><b>${vol}</b></td>
+                    <td>${perc}%</td>
+                </tr>`;
+            }
+        }
+    </script>
+</body>
+</html>

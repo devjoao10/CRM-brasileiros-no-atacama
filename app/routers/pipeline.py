@@ -203,7 +203,7 @@ async def get_kanban_board(
                     nome=lead.nome,
                     email=lead.email,
                     whatsapp=lead.whatsapp,
-                    destino=lead.destino,
+                    destinos=lead.destinos,
                     data_chegada=lead.data_chegada,
                     data_partida=lead.data_partida,
                     etapa_id=entry.etapa_id,

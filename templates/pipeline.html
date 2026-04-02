@@ -194,7 +194,11 @@
                 <a href="/leads" class="nav-item"><span class="nav-icon">👥</span><span>Leads</span></a>
                 <a href="/tags" class="nav-item"><span class="nav-icon">🏷️</span><span>Tags</span></a>
                 <a href="/pipeline" class="nav-item active"><span class="nav-icon">🎯</span><span>Pipeline</span></a>
-                <a href="#" class="nav-item" data-coming-soon><span class="nav-icon">📋</span><span>Atividades</span><span class="nav-badge">Em breve</span></a>
+                <a href="/segmentacao" class="nav-item"><span class="nav-icon">🔍</span><span>Segmentação</span></a>
+                <a href="/tarefas" class="nav-item"><span class="nav-icon">📋</span><span>Tarefas</span></a>
+                <div class="nav-section"><div class="nav-section-title">Conf. Admin</div></div>
+                <a href="/relatorios" class="nav-item"><span class="nav-icon">📈</span><span>Relatórios</span></a>
+                <a href="/equipe" class="nav-item"><span class="nav-icon">👥</span><span>Equipe e Usuários</span></a>
                 <div class="nav-section"><div class="nav-section-title">Sistema</div></div>
                 <a href="#" class="nav-item" data-coming-soon><span class="nav-icon">⚙️</span><span>Configurações</span></a>
                 <a href="/docs" class="nav-item" target="_blank"><span class="nav-icon">📖</span><span>API Docs</span></a>
@@ -308,10 +312,17 @@
                 <div id="detailHistory"><div class="history-empty">Carregando...</div></div>
             </div>
         </div>
-        <div class="detail-actions">
-            <button class="btn btn-outline btn-sm" onclick="removeFromFunnel()" id="detailRemoveBtn">🗑️ Remover do Funil</button>
-            <button class="btn btn-outline btn-sm" onclick="openTransferModal()" id="detailTransferBtn">↗️ Transferir</button>
-            <a class="btn btn-primary btn-sm" id="detailEditLink" href="/leads">✏️ Editar Lead</a>
+        <div class="detail-actions" style="flex-wrap: wrap; justify-content: space-between;">
+            <select id="quickStatusSelect" class="btn btn-outline btn-sm" style="margin-right: auto; padding-right: var(--space-6); cursor: pointer;" onchange="updateLeadStatus(this.value)">
+                <option value="em_negociacao">⏳ Em Negociação</option>
+                <option value="venda">✅ Ganho (Venda) </option>
+                <option value="perda">❌ Perdido</option>
+            </select>
+            <div style="display: flex; gap: var(--space-2);">
+                <button class="btn btn-outline btn-sm" onclick="removeFromFunnel()" id="detailRemoveBtn" title="Remover deste funil">🗑️</button>
+                <button class="btn btn-outline btn-sm" onclick="openTransferModal()" id="detailTransferBtn">↗️ Transferir</button>
+                <a class="btn btn-primary btn-sm" id="detailEditLink" href="/leads">✏️ Editar Lead</a>
+            </div>
         </div>
     </div>
 
@@ -620,7 +631,7 @@
                     }
 
                     // Destino filter
-                    if (destino && lead.destino !== destino) return false;
+                    if (destino && !(lead.destinos || []).includes(destino)) return false;
 
                     // Tags filter
                     if (selectedFilterTags.size > 0) {
@@ -683,7 +694,10 @@
     }
 
     function renderLeadCard(lead) {
-        const destino = lead.destino ? getDestinoClass(lead.destino) : '';
+        const destinos = lead.destinos || [];
+        const destinoBadges = destinos.map(d =>
+            `<span class="lead-card-destino ${getDestinoClass(d)}">${getDestinoIcon(d)} ${esc(d)}</span>`
+        ).join(' ');
         const tags = (lead.tags || []).map(t =>
             `<span class="lead-card-tag" style="background:${esc(t.cor)}">${esc(t.nome)}</span>`
         ).join('');
@@ -711,7 +725,7 @@
                  onclick="openDetailPanel(${lead.entry_id}, ${lead.lead_id})">
                 <div class="lead-card-name">${esc(lead.nome)}</div>
                 <div class="lead-card-info">${lead.email ? esc(lead.email) : lead.whatsapp ? esc(lead.whatsapp) : ''}</div>
-                ${lead.destino ? `<span class="lead-card-destino ${destino}">${getDestinoIcon(lead.destino)} ${esc(lead.destino)}</span>` : ''}
+                ${destinoBadges}
                 ${daysBadge}
                 ${tags ? `<div class="lead-card-tags">${tags}</div>` : ''}
             </div>`;
@@ -783,11 +797,12 @@
         const lead = await leadResp.json();
 
         document.getElementById('detailName').textContent = lead.nome;
+        document.getElementById('quickStatusSelect').value = lead.status_venda || 'em_negociacao';
 
         let info = '';
         info += `<div class="detail-field"><span class="detail-field-label">Email</span><span class="detail-field-value">${lead.email ? esc(lead.email) : '—'}</span></div>`;
         info += `<div class="detail-field"><span class="detail-field-label">WhatsApp</span><span class="detail-field-value">${lead.whatsapp ? esc(lead.whatsapp) : '—'}</span></div>`;
-        info += `<div class="detail-field"><span class="detail-field-label">Destino</span><span class="detail-field-value">${lead.destino || '—'}</span></div>`;
+        info += `<div class="detail-field"><span class="detail-field-label">Destinos</span><span class="detail-field-value">${(lead.destinos || []).join(', ') || '—'}</span></div>`;
         info += `<div class="detail-field"><span class="detail-field-label">Chegada</span><span class="detail-field-value">${lead.data_chegada ? fmtDate(lead.data_chegada) : '—'}</span></div>`;
         info += `<div class="detail-field"><span class="detail-field-label">Partida</span><span class="detail-field-value">${lead.data_partida ? fmtDate(lead.data_partida) : '—'}</span></div>`;
 
@@ -824,6 +839,20 @@
                 <div class="history-time">${fmtDateTime(h.created_at)}</div>
             </div>
         `).join('')}</div>`;
+    }
+
+    async function updateLeadStatus(newStatus) {
+        if (!currentDetailLeadId) return;
+        const resp = await Auth.apiRequest(`/api/leads/${currentDetailLeadId}`, {
+            method: 'PUT',
+            body: JSON.stringify({ status_venda: newStatus })
+        });
+        if (resp && resp.ok) {
+            alert("✅ Status do Lead atualizado para " + newStatus);
+            loadBoard();
+        } else {
+            alert("❌ ERRO ao atualizar Status do Lead! Erro interno de conexão.");
+        }
     }
 
     function closeDetailPanel() {

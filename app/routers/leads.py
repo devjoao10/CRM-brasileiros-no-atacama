@@ -1,14 +1,15 @@
 import io
 import csv
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime, date
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import or_
+from sqlalchemy import or_, extract, and_, String
 
 from app.database import get_db
 from app.models.lead import Lead
+from app.models.tag import Tag, lead_tags
 from app.models.pipeline import Funnel, FunnelEntry
 from app.models.user import User
 from app.schemas.lead import (
@@ -63,7 +64,8 @@ async def list_leads(
     skip: int = Query(0, ge=0, description="Registros para pular"),
     limit: int = Query(100, ge=1, le=500, description="Máximo de registros"),
     search: Optional[str] = Query(None, description="Busca por nome, email ou whatsapp"),
-    destino: Optional[str] = Query(None, description="Filtrar por destino"),
+    destino: Optional[str] = Query(None, description="Filtrar por destino (leads que incluem este destino)"),
+    status_venda: Optional[str] = Query(None, description="Filtrar por status da venda (em_negociacao, venda, perda)"),
     is_active: Optional[bool] = Query(None, description="Filtrar por status ativo"),
     data_chegada_de: Optional[date] = Query(None, description="Data de chegada a partir de (YYYY-MM-DD)"),
     data_chegada_ate: Optional[date] = Query(None, description="Data de chegada até (YYYY-MM-DD)"),
@@ -75,8 +77,8 @@ async def list_leads(
     """
     Lista todos os leads com paginação e filtros avançados.
     
-    **N8N**: Use query params para filtrar. Exemplo:
-    `GET /api/leads?destino=Atacama&data_chegada_de=2026-04-01`
+    O campo destinos é uma lista. O filtro `destino=Atacama` retorna leads que
+    possuem "Atacama" em sua lista de destinos.
     """
     query = db.query(Lead)
 
@@ -90,7 +92,10 @@ async def list_leads(
             )
         )
     if destino:
-        query = query.filter(Lead.destino == destino)
+        # JSON list contains — SQLite stores JSON as text, so LIKE works
+        query = query.filter(Lead.destinos.cast(String).ilike(f'%"{destino}"%'))
+    if status_venda:
+        query = query.filter(Lead.status_venda == status_venda)
     if is_active is not None:
         query = query.filter(Lead.is_active == is_active)
     if data_chegada_de:
@@ -119,13 +124,172 @@ async def list_destinos(
     db: Session = Depends(get_db),
 ):
     """Retorna os destinos principais + todos os destinos já cadastrados."""
-    # Get distinct destinos from DB
-    custom = db.query(Lead.destino).filter(Lead.destino.isnot(None)).distinct().all()
     all_destinos = set(DESTINOS_PRINCIPAIS)
-    for (d,) in custom:
-        if d:
-            all_destinos.add(d)
+    leads = db.query(Lead.destinos).filter(Lead.destinos.isnot(None)).all()
+    for (dest_list,) in leads:
+        if isinstance(dest_list, list):
+            for d in dest_list:
+                if d:
+                    all_destinos.add(d)
+        elif isinstance(dest_list, str) and dest_list:
+            all_destinos.add(dest_list)
     return {"destinos": sorted(all_destinos)}
+
+
+@router.get("/segment", response_model=LeadListResponse, summary="Segmentação avançada de leads")
+async def segment_leads(
+    # Paginação
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    # Busca textual
+    search: Optional[str] = Query(None, description="Busca por nome, email ou whatsapp"),
+    # Destino & Status
+    destino: Optional[str] = Query(None, description="Filtrar leads que incluem este destino"),
+    status_venda: Optional[str] = Query(None),
+    is_active: Optional[bool] = Query(None),
+    # Viagem — datas exatas
+    data_chegada_de: Optional[date] = Query(None),
+    data_chegada_ate: Optional[date] = Query(None),
+    data_partida_de: Optional[date] = Query(None),
+    data_partida_ate: Optional[date] = Query(None),
+    # Viagem — ano/mês de chegada
+    ano_chegada: Optional[int] = Query(None, description="Ano de chegada (ex: 2026)"),
+    mes_chegada: Optional[int] = Query(None, ge=1, le=12, description="Mês de chegada (1-12)"),
+    ano_partida: Optional[int] = Query(None, description="Ano de partida (ex: 2026)"),
+    mes_partida: Optional[int] = Query(None, ge=1, le=12, description="Mês de partida (1-12)"),
+    # Tags
+    tag_ids: Optional[List[int]] = Query(None, description="IDs das tags para filtrar"),
+    tag_mode: str = Query("any", description="'any' = OR; 'all' = AND"),
+    # Funil & Etapa
+    funnel_id: Optional[int] = Query(None),
+    etapa_id: Optional[str] = Query(None),
+    # Campo personalizado
+    campo_chave: Optional[str] = Query(None, description="Chave do campo personalizado"),
+    campo_valor: Optional[str] = Query(None, description="Valor do campo personalizado (contém, case-insensitive)"),
+    # Data de cadastro
+    criado_de: Optional[date] = Query(None, description="Cadastrado a partir de"),
+    criado_ate: Optional[date] = Query(None, description="Cadastrado até"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Segmentação avançada de leads com filtros combinados.
+
+    - **tag_mode=any**: retorna leads com pelo menos uma das tags selecionadas
+    - **tag_mode=all**: retorna leads que possuem TODAS as tags selecionadas
+    - **campo_chave + campo_valor**: filtra por campos personalizados (Ex: chave=origem, valor=Instagram)
+    """
+    query = db.query(Lead).options(joinedload(Lead.tags))
+
+    # Busca textual
+    if search:
+        f = f"%{search}%"
+        query = query.filter(or_(
+            Lead.nome.ilike(f),
+            Lead.email.ilike(f),
+            Lead.whatsapp.ilike(f),
+        ))
+
+    # Destino (JSON list contains)
+    if destino:
+        query = query.filter(Lead.destinos.cast(String).ilike(f'%"{destino}"%'))
+
+    # Status
+    if status_venda:
+        query = query.filter(Lead.status_venda == status_venda)
+    if is_active is not None:
+        query = query.filter(Lead.is_active == is_active)
+
+    # Datas exatas de chegada
+    if data_chegada_de:
+        query = query.filter(Lead.data_chegada >= data_chegada_de)
+    if data_chegada_ate:
+        query = query.filter(Lead.data_chegada <= data_chegada_ate)
+
+    # Datas exatas de partida
+    if data_partida_de:
+        query = query.filter(Lead.data_partida >= data_partida_de)
+    if data_partida_ate:
+        query = query.filter(Lead.data_partida <= data_partida_ate)
+
+    # Ano/mês de chegada
+    if ano_chegada:
+        query = query.filter(extract("year", Lead.data_chegada) == ano_chegada)
+    if mes_chegada:
+        query = query.filter(extract("month", Lead.data_chegada) == mes_chegada)
+
+    # Ano/mês de partida
+    if ano_partida:
+        query = query.filter(extract("year", Lead.data_partida) == ano_partida)
+    if mes_partida:
+        query = query.filter(extract("month", Lead.data_partida) == mes_partida)
+
+    # Tags — OR (any) ou AND (all)
+    if tag_ids:
+        if tag_mode == "all":
+            # Lead deve ter TODAS as tags — uma subquery por tag
+            for tid in tag_ids:
+                sub = db.query(lead_tags.c.lead_id).filter(lead_tags.c.tag_id == tid).subquery()
+                query = query.filter(Lead.id.in_(sub))
+        else:
+            # Lead deve ter PELO MENOS UMA tag
+            sub = db.query(lead_tags.c.lead_id).filter(lead_tags.c.tag_id.in_(tag_ids)).subquery()
+            query = query.filter(Lead.id.in_(sub))
+
+    # Funil & Etapa
+    if funnel_id:
+        entry_sub = db.query(FunnelEntry.lead_id).filter(FunnelEntry.funnel_id == funnel_id)
+        if etapa_id:
+            entry_sub = entry_sub.filter(FunnelEntry.etapa_id == etapa_id)
+        query = query.filter(Lead.id.in_(entry_sub.subquery()))
+
+    # Data de cadastro
+    if criado_de:
+        query = query.filter(Lead.created_at >= datetime.combine(criado_de, datetime.min.time()))
+    if criado_ate:
+        query = query.filter(Lead.created_at <= datetime.combine(criado_ate, datetime.max.time()))
+
+    # Buscar todos para filtro de campo personalizado (SQLite não suporta JSON path queries avançadas)
+    if campo_chave:
+        all_leads = query.order_by(Lead.created_at.desc()).all()
+        chave = campo_chave.strip().lower()
+        valor = (campo_valor or "").strip().lower()
+        filtered = []
+        for lead in all_leads:
+            cp = lead.campos_personalizados or {}
+            # Busca case-insensitive na chave
+            match_key = next((k for k in cp if k.strip().lower() == chave), None)
+            if match_key is not None:
+                if not valor or valor in str(cp[match_key]).lower():
+                    filtered.append(lead)
+        total = len(filtered)
+        leads = filtered[skip: skip + limit]
+    else:
+        total = query.count()
+        leads = query.order_by(Lead.created_at.desc()).offset(skip).limit(limit).all()
+
+    return LeadListResponse(
+        total=total,
+        skip=skip,
+        limit=limit,
+        leads=[_build_lead_response(l, db) for l in leads],
+    )
+
+
+@router.get("/segment/campos-personalizados-chaves", summary="Listar chaves de campos personalizados")
+async def list_custom_field_keys(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Retorna todas as chaves de campos personalizados existentes nos leads."""
+    leads = db.query(Lead.campos_personalizados).filter(
+        Lead.campos_personalizados.isnot(None)
+    ).all()
+    keys = set()
+    for (cp,) in leads:
+        if isinstance(cp, dict):
+            keys.update(cp.keys())
+    return {"chaves": sorted(keys)}
 
 
 @router.get("/{lead_id}", response_model=LeadResponse, summary="Detalhes de um lead")
@@ -161,10 +325,11 @@ async def create_lead(
         nome=data.nome,
         email=data.email,
         whatsapp=data.whatsapp,
-        destino=data.destino,
+        destinos=data.destinos or [],
         data_chegada=data.data_chegada,
         data_partida=data.data_partida,
         campos_personalizados=data.campos_personalizados or {},
+        status_venda=data.status_venda,
     )
     db.add(lead)
     db.commit()
@@ -245,7 +410,7 @@ COLUMN_MAPPING = {
     "whatsapp": "whatsapp", "telefone": "whatsapp", "phone": "whatsapp",
     "celular": "whatsapp", "tel": "whatsapp", "número": "whatsapp",
     "numero": "whatsapp", "fone": "whatsapp",
-    "destino": "destino", "destination": "destino", "dest": "destino",
+    "destino": "destinos", "destinos": "destinos", "destination": "destinos", "dest": "destinos",
     "data_chegada": "data_chegada", "data chegada": "data_chegada",
     "chegada": "data_chegada", "check-in": "data_chegada",
     "checkin": "data_chegada", "arrival": "data_chegada", "check in": "data_chegada",
@@ -256,7 +421,7 @@ COLUMN_MAPPING = {
     "data de partida": "data_partida", "saida": "data_partida", "saída": "data_partida",
 }
 
-KNOWN_FIELDS = {"nome", "email", "whatsapp", "destino", "data_chegada", "data_partida"}
+KNOWN_FIELDS = {"nome", "email", "whatsapp", "destinos", "data_chegada", "data_partida"}
 
 
 def _normalize_header(header: str) -> str:
@@ -278,6 +443,9 @@ def _process_row(row: dict, header_map: dict) -> dict:
         if mapped_field in KNOWN_FIELDS:
             if mapped_field in ("data_chegada", "data_partida"):
                 lead_data[mapped_field] = _parse_date(value)
+            elif mapped_field == "destinos":
+                # Support comma-separated destinos in import
+                lead_data[mapped_field] = [d.strip() for d in value.split(",") if d.strip()]
             else:
                 lead_data[mapped_field] = value
         else:
@@ -391,7 +559,7 @@ async def import_leads(
                 nome=lead_data.get("nome", ""),
                 email=lead_data.get("email"),
                 whatsapp=lead_data.get("whatsapp"),
-                destino=lead_data.get("destino"),
+                destinos=lead_data.get("destinos", []),
                 data_chegada=lead_data.get("data_chegada"),
                 data_partida=lead_data.get("data_partida"),
                 campos_personalizados=lead_data.get("campos_personalizados", {}),

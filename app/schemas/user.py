@@ -1,6 +1,7 @@
 from pydantic import BaseModel, EmailStr, Field
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
+from app.schemas.team import TeamResponse
 
 
 # --- Auth Schemas ---
@@ -47,6 +48,8 @@ class UserResponse(BaseModel):
     email: str
     role: str
     is_active: bool
+    email_verified: bool = False
+    teams: List[TeamResponse] = []
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

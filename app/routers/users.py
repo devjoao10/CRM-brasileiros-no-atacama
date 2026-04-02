@@ -162,3 +162,25 @@ async def delete_user(
     db.commit()
 
     return {"message": f"Usuário {user.email} desativado"}
+
+
+@router.post("/{user_id}/verify-email", summary="Confirmar email do usuário")
+async def verify_user_email(
+    user_id: int,
+    db: Session = Depends(get_db),
+    # Optional: could be protected by API Key / Admin
+    # current_user: User = Depends(require_admin)
+):
+    """
+    Marca o email do usuário como verificado.
+    Aberto para webhook via requisição externa (n8n).
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+    
+    user.email_verified = True
+    db.commit()
+    db.refresh(user)
+    
+    return {"message": "Email verificado com sucesso", "email": user.email, "email_verified": True}

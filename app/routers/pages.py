@@ -42,4 +42,22 @@ async def pipeline_page(request: Request):
     return templates.TemplateResponse("pipeline.html", {"request": request})
 
 
+@router.get("/segmentacao", response_class=HTMLResponse, include_in_schema=False)
+async def segmentacao_page(request: Request):
+    """Serve the lead segmentation page."""
+    return templates.TemplateResponse("segmentacao.html", {"request": request})
 
+
+@router.get("/equipe", response_class=HTMLResponse, include_in_schema=False)
+async def equipe_page(request: Request):
+    """Serve the users and teams management page."""
+    return templates.TemplateResponse("equipes.html", {"request": request})
+
+@router.get("/tarefas", response_class=HTMLResponse, include_in_schema=False)
+async def tarefas_page(request: Request):
+    """Serve the tasks management page."""
+    return templates.TemplateResponse("tarefas.html", {"request": request})
+@router.get("/relatorios", response_class=HTMLResponse, include_in_schema=False)
+async def relatorios_page(request: Request):
+    """Serve the advanced reports page."""
+    return templates.TemplateResponse("relatorios.html", {"request": request})

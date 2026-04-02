@@ -300,7 +300,11 @@
                 <a href="/leads" class="nav-item active"><span class="nav-icon">👥</span><span>Leads</span></a>
                 <a href="/tags" class="nav-item"><span class="nav-icon">🏷️</span><span>Tags</span></a>
                 <a href="/pipeline" class="nav-item"><span class="nav-icon">🎯</span><span>Pipeline</span></a>
-                <a href="#" class="nav-item" data-coming-soon><span class="nav-icon">📋</span><span>Atividades</span><span class="nav-badge">Em breve</span></a>
+                <a href="/segmentacao" class="nav-item"><span class="nav-icon">🔍</span><span>Segmentação</span></a>
+                <a href="/tarefas" class="nav-item"><span class="nav-icon">📋</span><span>Tarefas</span></a>
+                <div class="nav-section"><div class="nav-section-title">Conf. Admin</div></div>
+                <a href="/relatorios" class="nav-item"><span class="nav-icon">📈</span><span>Relatórios</span></a>
+                <a href="/equipe" class="nav-item"><span class="nav-icon">👥</span><span>Equipe e Usuários</span></a>
                 <div class="nav-section"><div class="nav-section-title">Sistema</div></div>
                 <a href="#" class="nav-item" data-coming-soon><span class="nav-icon">⚙️</span><span>Configurações</span></a>
                 <a href="/docs" class="nav-item" target="_blank"><span class="nav-icon">📖</span><span>API Docs</span></a>
@@ -433,13 +437,18 @@
                             <input type="text" id="leadWhatsapp" class="form-input" placeholder="+55 11 99999-9999">
                         </div>
                         <div class="form-group">
-                            <label class="form-label" for="leadDestino">Destino</label>
-                            <select id="leadDestino" class="form-input">
-                                <option value="">Selecione...</option>
-                                <option value="Atacama">🏜️ Atacama</option>
-                                <option value="Uyuni">🪞 Uyuni</option>
-                                <option value="Santiago">🏙️ Santiago</option>
-                            </select>
+                            <label class="form-label">Destinos</label>
+                            <div class="destinos-checkboxes" id="leadDestinosContainer">
+                                <label class="tag-checkbox-item" style="cursor:pointer" onclick="toggleDestinoCheck(this)">
+                                    <input type="checkbox" value="Atacama" class="destino-cb"> 🏜️ Atacama
+                                </label>
+                                <label class="tag-checkbox-item" style="cursor:pointer" onclick="toggleDestinoCheck(this)">
+                                    <input type="checkbox" value="Uyuni" class="destino-cb"> 🪞 Uyuni
+                                </label>
+                                <label class="tag-checkbox-item" style="cursor:pointer" onclick="toggleDestinoCheck(this)">
+                                    <input type="checkbox" value="Santiago" class="destino-cb"> 🏙️ Santiago
+                                </label>
+                            </div>
                         </div>
                     </div>
                     <div class="form-row">
@@ -450,6 +459,16 @@
                         <div class="form-group">
                             <label class="form-label" for="leadPartida">Data de Partida</label>
                             <input type="date" id="leadPartida" class="form-input">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" for="leadStatusVenda">Status (Oportunidade)</label>
+                            <select id="leadStatusVenda" class="form-input" required>
+                                <option value="em_negociacao">⏳ Em Negociação</option>
+                                <option value="venda">✅ Venda Fechada (Ganhou)</option>
+                                <option value="perda">❌ Perdido (Arquivo)</option>
+                            </select>
                         </div>
                     </div>
 
@@ -609,13 +628,15 @@
         return d.toLocaleDateString('pt-BR');
     }
 
-    function getDestinoTag(destino) {
-        if (!destino) return '<span class="text-muted">—</span>';
-        const cls = destino.toLowerCase() === 'atacama' ? 'atacama'
-            : destino.toLowerCase() === 'uyuni' ? 'uyuni'
-            : destino.toLowerCase() === 'santiago' ? 'santiago' : 'outro';
-        const icon = cls === 'atacama' ? '🏜️' : cls === 'uyuni' ? '🪞' : cls === 'santiago' ? '🏙️' : '📍';
-        return `<span class="destino-tag ${cls}">${icon} ${destino}</span>`;
+    function getDestinoTags(destinos) {
+        if (!destinos || destinos.length === 0) return '<span class="text-muted">—</span>';
+        return destinos.map(d => {
+            const cls = d.toLowerCase() === 'atacama' ? 'atacama'
+                : d.toLowerCase() === 'uyuni' ? 'uyuni'
+                : d.toLowerCase() === 'santiago' ? 'santiago' : 'outro';
+            const icon = cls === 'atacama' ? '🏜️' : cls === 'uyuni' ? '🪞' : cls === 'santiago' ? '🏙️' : '📍';
+            return `<span class="destino-tag ${cls}">${icon} ${d}</span>`;
+        }).join(' ');
     }
 
     function renderLeadTags(tags) {
@@ -645,7 +666,7 @@
                 <td><strong>${esc(l.nome)}</strong></td>
                 <td>${l.email ? esc(l.email) : '<span class="text-muted">—</span>'}</td>
                 <td>${l.whatsapp ? esc(l.whatsapp) : '<span class="text-muted">—</span>'}</td>
-                <td>${getDestinoTag(l.destino)}</td>
+                <td>${getDestinoTags(l.destinos)}</td>
                 <td class="tags-cell">${renderLeadTags(l.tags)}</td>
                 <td class="tags-cell">${renderFunis(l.funis)}</td>
                 <td>${formatDate(l.data_chegada)}</td>
@@ -717,6 +738,19 @@
         }, 0);
     }
 
+    function toggleDestinoCheck(label) {
+        const cb = label.querySelector('input');
+        setTimeout(() => {
+            if (cb.checked) {
+                label.classList.add('checked');
+                label.style.background = 'var(--color-primary)';
+            } else {
+                label.classList.remove('checked');
+                label.style.background = '';
+            }
+        }, 0);
+    }
+
     function openLeadModal(lead = null) {
         document.getElementById('leadModal').classList.add('show');
         document.getElementById('leadModalTitle').textContent = lead ? 'Editar Lead' : 'Novo Lead';
@@ -726,9 +760,22 @@
         document.getElementById('leadNome').value = lead ? lead.nome : '';
         document.getElementById('leadEmail').value = lead ? lead.email || '' : '';
         document.getElementById('leadWhatsapp').value = lead ? lead.whatsapp || '' : '';
-        document.getElementById('leadDestino').value = lead ? lead.destino || '' : '';
+        // Destinos checkboxes
+        const selDests = lead ? (lead.destinos || []) : [];
+        document.querySelectorAll('.destino-cb').forEach(cb => {
+            cb.checked = selDests.includes(cb.value);
+            const lbl = cb.closest('label');
+            if (cb.checked) {
+                lbl.classList.add('checked');
+                lbl.style.background = 'var(--color-primary)';
+            } else {
+                lbl.classList.remove('checked');
+                lbl.style.background = '';
+            }
+        });
         document.getElementById('leadChegada').value = lead ? lead.data_chegada || '' : '';
         document.getElementById('leadPartida').value = lead ? lead.data_partida || '' : '';
+        document.getElementById('leadStatusVenda').value = lead ? (lead.status_venda || 'em_negociacao') : 'em_negociacao';
 
         // Tags
         currentLeadTags = lead && lead.tags ? lead.tags.map(t => t.id) : [];
@@ -776,9 +823,10 @@
             nome,
             email: document.getElementById('leadEmail').value.trim() || null,
             whatsapp: document.getElementById('leadWhatsapp').value.trim() || null,
-            destino: document.getElementById('leadDestino').value || null,
+            destinos: Array.from(document.querySelectorAll('.destino-cb:checked')).map(cb => cb.value),
             data_chegada: document.getElementById('leadChegada').value || null,
             data_partida: document.getElementById('leadPartida').value || null,
+            status_venda: document.getElementById('leadStatusVenda').value,
             campos_personalizados: campos,
         };
 

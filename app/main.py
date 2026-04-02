@@ -4,14 +4,30 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import PROJECT_NAME, VERSION, DESCRIPTION, API_PREFIX
 from app.database import engine, Base
-from app.routers import auth, users, leads, tags, pipeline, pages
+from app.routers import auth, users, leads, tags, pipeline, segments, teams, pages, tasks, analytics
 from app.models.lead import Lead  # noqa: F401
 from app.models.tag import Tag, lead_tags  # noqa: F401
 from app.models.pipeline import Funnel, FunnelEntry, LeadHistory  # noqa: F401
+from app.models.segment import Segment  # noqa: F401
+from app.models.team import Team, user_teams  # noqa: F401
+from app.models.task import Task  # noqa: F401
 from app.seed import seed_database
 
 # Create tables & seed on startup
 Base.metadata.create_all(bind=engine)
+
+from sqlalchemy import text, inspect
+import logging
+
+try:
+    with engine.begin() as conn:
+        inspector = inspect(engine)
+        columns = [c['name'] for c in inspector.get_columns('leads')]
+        if 'status_venda' not in columns:
+            logging.warning("=== MIGRANDO BD: ADICIONANDO status_venda ===")
+            conn.execute(text("ALTER TABLE leads ADD COLUMN status_venda VARCHAR(30) DEFAULT 'em_negociacao'"))
+except Exception as e:
+    logging.error(f"FATAL DB MIGRATION ERROR: {e}")
 
 app = FastAPI(
     title=PROJECT_NAME,
@@ -39,6 +55,10 @@ app.include_router(users.router)
 app.include_router(leads.router)
 app.include_router(tags.router)
 app.include_router(pipeline.router)
+app.include_router(segments.router)
+app.include_router(teams.router)
+app.include_router(tasks.router)
+app.include_router(analytics.router)
 
 # Include page routes (must be last to not conflict with API routes)
 app.include_router(pages.router)

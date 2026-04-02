@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Segmentação — CRM Brasileiros no Atacama</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/variables.css">
+    <link rel="stylesheet" href="/static/css/base.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="icon" href="/static/img/logo.png" type="image/png">
+    <style>
+        .dashboard-layout{display:flex;min-height:100vh}
+        .sidebar{width:260px;background:linear-gradient(180deg,var(--color-dark) 0%,var(--color-dark-700) 100%);color:var(--color-white);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:var(--z-sidebar)}
+        .sidebar-header{padding:var(--space-6);display:flex;align-items:center;gap:var(--space-4);border-bottom:1px solid rgba(255,255,255,0.1)}
+        .sidebar-logo{width:44px;height:44px;border-radius:var(--radius-full);overflow:hidden;flex-shrink:0}
+        .sidebar-logo img{width:100%;height:100%;object-fit:cover}
+        .sidebar-brand{font-size:var(--font-size-sm);font-weight:var(--font-weight-bold);line-height:1.3}
+        .sidebar-brand span{color:var(--color-accent-light)}
+        .sidebar-nav{flex:1;padding:var(--space-4) 0;overflow-y:auto}
+        .nav-section{padding:var(--space-2) var(--space-6);margin-top:var(--space-4)}
+        .nav-section-title{font-size:var(--font-size-xs);font-weight:var(--font-weight-semibold);text-transform:uppercase;letter-spacing:0.08em;color:rgba(255,255,255,0.4);margin-bottom:var(--space-2)}
+        .nav-item{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3) var(--space-6);color:rgba(255,255,255,0.7);font-size:var(--font-size-sm);font-weight:var(--font-weight-medium);transition:all var(--transition-fast);cursor:pointer;text-decoration:none;border-left:3px solid transparent}
+        .nav-item:hover{background:rgba(255,255,255,0.05);color:var(--color-white)}
+        .nav-item.active{background:rgba(43,108,176,0.15);color:var(--color-white);border-left-color:var(--color-primary-light)}
+        .nav-item .nav-icon{font-size:var(--font-size-lg);width:24px;text-align:center}
+        .nav-item .nav-badge{margin-left:auto;background:var(--color-secondary);color:var(--color-white);font-size:var(--font-size-xs);padding:2px 8px;border-radius:var(--radius-full);font-weight:var(--font-weight-semibold)}
+        .sidebar-footer{padding:var(--space-4) var(--space-6);border-top:1px solid rgba(255,255,255,0.1)}
+        .main-content{flex:1;margin-left:260px;display:flex;flex-direction:column}
+        .top-header{height:64px;background:var(--color-white);border-bottom:1px solid var(--color-dark-200);display:flex;align-items:center;justify-content:space-between;padding:0 var(--space-8);position:sticky;top:0;z-index:100}
+        .header-left{display:flex;align-items:center;gap:var(--space-4)}
+        .menu-toggle{display:none;background:none;border:none;font-size:var(--font-size-xl);cursor:pointer;padding:var(--space-2);color:var(--color-dark-600)}
+        .page-title{font-size:var(--font-size-lg);font-weight:var(--font-weight-semibold);color:var(--color-dark)}
+        .header-right{display:flex;align-items:center;gap:var(--space-4)}
+        .user-info{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-4);border-radius:var(--radius-lg);cursor:pointer;transition:background var(--transition-fast)}
+        .user-info:hover{background:var(--color-dark-100)}
+        .user-avatar{width:36px;height:36px;border-radius:var(--radius-full);background:linear-gradient(135deg,var(--color-primary),var(--color-secondary));color:var(--color-white);display:flex;align-items:center;justify-content:center;font-weight:var(--font-weight-bold);font-size:var(--font-size-sm)}
+        .user-name{font-size:var(--font-size-sm);font-weight:var(--font-weight-medium);color:var(--color-dark)}
+        .user-role{font-size:var(--font-size-xs);color:var(--color-dark-500)}
+        .content-area{flex:1;padding:var(--space-8);background:var(--color-light)}
+
+        /* ===== Segmentação ===== */
+        .seg-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-6);flex-wrap:wrap;gap:var(--space-4)}
+        .seg-header h1{font-size:var(--font-size-2xl);font-weight:var(--font-weight-bold)}
+
+        /* Segment Cards Grid */
+        .segments-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:var(--space-5)}
+        .segment-card{background:var(--color-white);border-radius:var(--radius-xl);box-shadow:var(--shadow-sm);overflow:hidden;transition:all var(--transition-base);border-left:5px solid transparent;cursor:pointer}
+        .segment-card:hover{box-shadow:var(--shadow-lg);transform:translateY(-2px)}
+        .segment-card-body{padding:var(--space-5) var(--space-6)}
+        .segment-card-top{display:flex;align-items:start;justify-content:space-between;margin-bottom:var(--space-3)}
+        .segment-card-name{font-size:var(--font-size-lg);font-weight:var(--font-weight-bold);color:var(--color-dark)}
+        .segment-card-desc{font-size:var(--font-size-sm);color:var(--color-dark-500);margin-bottom:var(--space-4);min-height:20px}
+        .segment-card-meta{display:flex;gap:var(--space-4);flex-wrap:wrap}
+        .segment-meta-item{display:flex;align-items:center;gap:var(--space-1);font-size:var(--font-size-xs);color:var(--color-dark-400)}
+        .segment-meta-item strong{color:var(--color-dark);font-weight:var(--font-weight-semibold)}
+        .segment-lead-count{display:inline-flex;align-items:center;gap:var(--space-2);padding:var(--space-1) var(--space-3);background:rgba(43,108,176,0.08);color:var(--color-primary);border-radius:var(--radius-full);font-size:var(--font-size-sm);font-weight:var(--font-weight-bold)}
+        .segment-card-footer{padding:var(--space-3) var(--space-6);background:var(--color-dark-50,#f8f9fa);border-top:1px solid var(--color-dark-100);display:flex;justify-content:space-between;align-items:center}
+        .segment-card-actions button{background:none;border:none;cursor:pointer;padding:var(--space-1) var(--space-2);font-size:var(--font-size-base);border-radius:var(--radius-sm);transition:background var(--transition-fast)}
+        .segment-card-actions button:hover{background:var(--color-dark-100)}
+        .segment-filters-pills{display:flex;flex-wrap:wrap;gap:4px;margin-top:var(--space-3)}
+        .filter-pill{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;background:var(--color-dark-100);border-radius:var(--radius-full);font-size:10px;font-weight:var(--font-weight-semibold);color:var(--color-dark-500)}
+
+        .empty-state{text-align:center;padding:var(--space-16);color:var(--color-dark-400)}
+        .empty-state .empty-icon{font-size:4rem;margin-bottom:var(--space-4)}
+        .empty-state p{font-size:var(--font-size-base);margin-bottom:var(--space-6)}
+
+        /* ===== Modal ===== */
+        .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:var(--z-modal);align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+        .modal-overlay.show{display:flex}
+        .modal{background:var(--color-white);border-radius:var(--radius-2xl);width:92%;max-width:720px;max-height:92vh;overflow-y:auto;box-shadow:var(--shadow-xl);animation:modalSlideIn .3s ease}
+        @keyframes modalSlideIn{from{opacity:0;transform:translateY(20px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
+        .modal-header{display:flex;align-items:center;justify-content:space-between;padding:var(--space-6);border-bottom:1px solid var(--color-dark-100)}
+        .modal-header h3{font-size:var(--font-size-xl);font-weight:var(--font-weight-bold)}
+        .modal-close{background:none;border:none;font-size:var(--font-size-xl);cursor:pointer;color:var(--color-dark-400);padding:var(--space-2);border-radius:var(--radius-md);transition:all var(--transition-fast)}
+        .modal-close:hover{background:var(--color-dark-100);color:var(--color-dark)}
+        .modal-body{padding:var(--space-6)}
+        .modal-footer{padding:var(--space-4) var(--space-6);border-top:1px solid var(--color-dark-100);display:flex;justify-content:flex-end;gap:var(--space-3)}
+
+        .form-row{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4)}
+        .form-group{margin-bottom:var(--space-4)}
+        .form-group.full-width{grid-column:1/-1}
+
+        /* Filter builder inside modal */
+        .filter-builder{margin-top:var(--space-4);padding:var(--space-5);background:var(--color-light);border-radius:var(--radius-xl);border:1.5px solid var(--color-dark-200)}
+        .filter-builder h4{font-size:var(--font-size-sm);font-weight:var(--font-weight-bold);color:var(--color-dark-500);margin-bottom:var(--space-4);display:flex;align-items:center;gap:var(--space-2)}
+        .fb-section{margin-bottom:var(--space-4);padding-bottom:var(--space-4);border-bottom:1px solid var(--color-dark-100)}
+        .fb-section:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0}
+        .fb-section-title{font-size:var(--font-size-xs);font-weight:var(--font-weight-bold);text-transform:uppercase;letter-spacing:.05em;color:var(--color-dark-400);margin-bottom:var(--space-2);display:flex;align-items:center;gap:var(--space-2)}
+        .fb-row{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3);margin-top:var(--space-2)}
+        .fb-input{width:100%;padding:var(--space-2) var(--space-3);font-family:var(--font-family);font-size:var(--font-size-sm);border:1.5px solid var(--color-dark-200);border-radius:var(--radius-md);background:#fff;color:var(--color-dark);outline:none;transition:border-color var(--transition-fast);box-sizing:border-box}
+        .fb-input:focus{border-color:var(--color-primary)}
+        .fb-label{display:block;font-size:11px;font-weight:var(--font-weight-semibold);color:var(--color-dark-400);margin-bottom:2px;margin-top:var(--space-2)}
+        .fb-label:first-child{margin-top:0}
+
+        /* Tag chips in filter builder */
+        .fb-tag-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:var(--space-2)}
+        .fb-tag-chip{display:inline-flex;align-items:center;gap:3px;padding:3px 10px;border-radius:var(--radius-full);font-size:11px;font-weight:600;cursor:pointer;border:2px solid transparent;transition:all .15s;user-select:none}
+        .fb-tag-chip.sel{border-color:rgba(0,0,0,.25);box-shadow:0 0 0 3px rgba(43,108,176,.2)}
+        .fb-mode-row{display:flex;gap:var(--space-2);margin-top:var(--space-2)}
+        .fb-mode-btn{flex:1;padding:4px 8px;font-size:var(--font-size-xs);font-weight:var(--font-weight-semibold);border:1.5px solid var(--color-dark-200);border-radius:var(--radius-md);background:#fff;cursor:pointer;transition:all var(--transition-fast);color:var(--color-dark-500)}
+        .fb-mode-btn.active{background:var(--color-primary);color:#fff;border-color:var(--color-primary)}
+
+        /* Color picker */
+        .color-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:var(--space-2)}
+        .color-dot{width:28px;height:28px;border-radius:var(--radius-full);cursor:pointer;border:3px solid transparent;transition:all var(--transition-fast);display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff}
+        .color-dot:hover{transform:scale(1.15)}
+        .color-dot.sel{border-color:var(--color-dark);box-shadow:var(--shadow-md)}
+
+        /* Preview count */
+        .preview-bar{margin-top:var(--space-4);padding:var(--space-3) var(--space-4);background:rgba(43,108,176,.06);border-radius:var(--radius-lg);display:flex;align-items:center;justify-content:space-between;border:1px solid rgba(43,108,176,.15)}
+        .preview-count{font-size:var(--font-size-sm);font-weight:var(--font-weight-semibold);color:var(--color-primary);display:flex;align-items:center;gap:var(--space-2)}
+        .preview-count .spinner-sm{width:14px;height:14px;border:2px solid var(--color-dark-200);border-top-color:var(--color-primary);border-radius:50%;animation:spin .6s linear infinite;display:none}
+        @keyframes spin{to{transform:rotate(360deg)}}
+
+        /* Detail / View Leads panel */
+        .detail-panel-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:var(--z-modal);backdrop-filter:blur(3px)}
+        .detail-panel-overlay.show{display:block}
+        .detail-panel{position:fixed;top:0;right:-680px;width:660px;max-width:95vw;height:100vh;background:var(--color-white);box-shadow:-4px 0 24px rgba(0,0,0,.15);z-index:calc(var(--z-modal)+1);transition:right .35s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column}
+        .detail-panel.open{right:0}
+        .detail-header{padding:var(--space-5) var(--space-6);border-bottom:1px solid var(--color-dark-100);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+        .detail-header h3{font-size:var(--font-size-lg);font-weight:var(--font-weight-bold)}
+        .detail-close{background:none;border:none;font-size:var(--font-size-xl);cursor:pointer;color:var(--color-dark-400);padding:var(--space-2);border-radius:var(--radius-md)}
+        .detail-close:hover{background:var(--color-dark-100)}
+        .detail-body{flex:1;overflow-y:auto;padding:0}
+        .leads-table{width:100%;border-collapse:collapse}
+        .leads-table th{padding:var(--space-3) var(--space-4);text-align:left;font-size:var(--font-size-xs);font-weight:var(--font-weight-semibold);text-transform:uppercase;letter-spacing:.05em;color:var(--color-dark-500);background:var(--color-dark-100);border-bottom:1px solid var(--color-dark-200);white-space:nowrap;position:sticky;top:0;z-index:2}
+        .leads-table td{padding:var(--space-3) var(--space-4);font-size:var(--font-size-sm);color:var(--color-dark-700);border-bottom:1px solid var(--color-dark-100);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .leads-table tr:hover td{background:rgba(43,108,176,.03)}
+        .lead-tag{display:inline-flex;padding:2px 7px;border-radius:var(--radius-full);font-size:10px;font-weight:600;color:#fff;margin:1px 2px}
+        .tags-cell{max-width:160px;overflow:hidden;white-space:normal!important;line-height:1.8}
+        .destino-badge{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:var(--radius-full);font-size:var(--font-size-xs);font-weight:600}
+        .destino-badge.atacama{background:rgba(192,86,33,.1);color:var(--color-secondary)}
+        .destino-badge.uyuni{background:rgba(43,108,176,.1);color:var(--color-primary)}
+        .destino-badge.santiago{background:rgba(56,161,105,.1);color:var(--color-success)}
+        .destino-badge.outro{background:rgba(113,128,150,.1);color:var(--color-dark-500)}
+        .detail-footer{padding:var(--space-3) var(--space-6);border-top:1px solid var(--color-dark-100);font-size:var(--font-size-sm);color:var(--color-dark-500);display:flex;justify-content:space-between;align-items:center;flex-shrink:0}
+
+        .sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:calc(var(--z-sidebar)-1)} .sidebar-overlay.show{display:block}
+        @media(max-width:1024px){.sidebar{transform:translateX(-100%);transition:transform var(--transition-base)}.sidebar.open{transform:translateX(0)}.main-content{margin-left:0}.menu-toggle{display:block}}
+        @media(max-width:768px){.content-area{padding:var(--space-4)}.segments-grid{grid-template-columns:1fr}.form-row{grid-template-columns:1fr}.fb-row{grid-template-columns:1fr}}
+    </style>
+</head>
+<body>
+<div class="dashboard-layout">
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <div class="sidebar-logo"><img src="/static/img/logo.png" alt="Logo"></div>
+            <div class="sidebar-brand">Brasileiros <span>no Atacama</span></div>
+        </div>
+        <nav class="sidebar-nav">
+            <div class="nav-section"><div class="nav-section-title">Principal</div></div>
+            <a href="/dashboard" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
+            <div class="nav-section"><div class="nav-section-title">CRM</div></div>
+            <a href="/leads" class="nav-item"><span class="nav-icon">👥</span><span>Leads</span></a>
+            <a href="/tags" class="nav-item"><span class="nav-icon">🏷️</span><span>Tags</span></a>
+            <a href="/pipeline" class="nav-item"><span class="nav-icon">🎯</span><span>Pipeline</span></a>
+            <a href="/segmentacao" class="nav-item active"><span class="nav-icon">🔍</span><span>Segmentação</span></a>
+            <a href="/tarefas" class="nav-item"><span class="nav-icon">📋</span><span>Tarefas</span></a>
+            <div class="nav-section"><div class="nav-section-title">Conf. Admin</div></div>
+            <a href="/relatorios" class="nav-item"><span class="nav-icon">📈</span><span>Relatórios</span></a>
+            <a href="/equipe" class="nav-item"><span class="nav-icon">👥</span><span>Equipe e Usuários</span></a>
+            <div class="nav-section"><div class="nav-section-title">Sistema</div></div>
+            <a href="#" class="nav-item" data-coming-soon><span class="nav-icon">⚙️</span><span>Configurações</span></a>
+            <a href="/docs" class="nav-item" target="_blank"><span class="nav-icon">📖</span><span>API Docs</span></a>
+        </nav>
+        <div class="sidebar-footer">
+            <a href="#" class="nav-item" id="logoutBtn" style="border:none;padding-left:0"><span class="nav-icon">🚪</span><span>Sair</span></a>
+        </div>
+    </aside>
+
+    <main class="main-content">
+        <header class="top-header">
+            <div class="header-left">
+                <button class="menu-toggle" id="menuToggle">☰</button>
+                <h2 class="page-title">Segmentação</h2>
+            </div>
+            <div class="header-right">
+                <div class="user-info">
+                    <div class="user-avatar" id="userAvatar">A</div>
+                    <div><div class="user-name" id="userName">Carregando...</div><div class="user-role" id="userRole">—</div></div>
+                </div>
+            </div>
+        </header>
+
+        <div class="content-area">
+            <div class="seg-header">
+                <h1>🔍 Listas de Segmentação</h1>
+                <button class="btn btn-primary btn-sm" onclick="openModal()">➕ Nova Lista</button>
+            </div>
+            <div class="segments-grid" id="segmentsGrid">
+                <div class="empty-state"><div class="empty-icon">⏳</div><p>Carregando...</p></div>
+            </div>
+        </div>
+    </main>
+</div>
+
+<!-- Create/Edit Modal -->
+<div class="modal-overlay" id="segModal">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 id="modalTitle">Nova Lista de Segmentação</h3>
+            <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <div id="modalAlert" class="alert alert-error hidden" style="margin-bottom:var(--space-4)"><span>⚠️</span><span id="modalAlertMsg"></span></div>
+            <input type="hidden" id="segId">
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label" for="segNome">Nome da Lista *</label>
+                    <input type="text" id="segNome" class="form-input" placeholder="Ex: Leads Atacama 2026">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Cor</label>
+                    <div class="color-row" id="colorPicker"></div>
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="segDesc">Descrição</label>
+                <input type="text" id="segDesc" class="form-input" placeholder="Descrição opcional da lista...">
+            </div>
+
+            <!-- Filter Builder -->
+            <div class="filter-builder">
+                <h4>🎛️ Critérios de Segmentação</h4>
+
+                <div class="fb-section">
+                    <div class="fb-section-title">📍 Destino & Status</div>
+                    <div class="fb-row">
+                        <div><label class="fb-label">Destino</label><select id="fbDestino" class="fb-input" onchange="previewCount()"><option value="">Todos</option></select></div>
+                        <div><label class="fb-label">Status</label><select id="fbStatus" class="fb-input" onchange="previewCount()"><option value="">Todos</option><option value="true">✅ Ativos</option><option value="false">❌ Inativos</option></select></div>
+                    </div>
+                </div>
+
+                <div class="fb-section">
+                    <div class="fb-section-title">✈️ Período de Viagem</div>
+                    <div class="fb-row">
+                        <div><label class="fb-label">Ano chegada</label><select id="fbAnoCheg" class="fb-input" onchange="previewCount()"><option value="">Qualquer</option></select></div>
+                        <div><label class="fb-label">Mês chegada</label><select id="fbMesCheg" class="fb-input" onchange="previewCount()"><option value="">Qualquer</option><option value="1">Jan</option><option value="2">Fev</option><option value="3">Mar</option><option value="4">Abr</option><option value="5">Mai</option><option value="6">Jun</option><option value="7">Jul</option><option value="8">Ago</option><option value="9">Set</option><option value="10">Out</option><option value="11">Nov</option><option value="12">Dez</option></select></div>
+                    </div>
+                    <div class="fb-row">
+                        <div><label class="fb-label">Chegada de</label><input type="date" id="fbChegDe" class="fb-input" onchange="previewCount()"></div>
+                        <div><label class="fb-label">Chegada até</label><input type="date" id="fbChegAte" class="fb-input" onchange="previewCount()"></div>
+                    </div>
+                    <div class="fb-row">
+                        <div><label class="fb-label">Ano partida</label><select id="fbAnoPartida" class="fb-input" onchange="previewCount()"><option value="">Qualquer</option></select></div>
+                        <div><label class="fb-label">Mês partida</label><select id="fbMesPartida" class="fb-input" onchange="previewCount()"><option value="">Qualquer</option><option value="1">Jan</option><option value="2">Fev</option><option value="3">Mar</option><option value="4">Abr</option><option value="5">Mai</option><option value="6">Jun</option><option value="7">Jul</option><option value="8">Ago</option><option value="9">Set</option><option value="10">Out</option><option value="11">Nov</option><option value="12">Dez</option></select></div>
+                    </div>
+                </div>
+
+                <div class="fb-section">
+                    <div class="fb-section-title">🏷️ Tags</div>
+                    <div class="fb-tag-chips" id="fbTags">Carregando...</div>
+                    <div class="fb-mode-row">
+                        <button class="fb-mode-btn active" id="modeAny" onclick="setMode('any')">Qualquer (OR)</button>
+                        <button class="fb-mode-btn" id="modeAll" onclick="setMode('all')">Todas (AND)</button>
+                    </div>
+                </div>
+
+                <div class="fb-section">
+                    <div class="fb-section-title">🎯 Funil & Etapa</div>
+                    <div class="fb-row">
+                        <div><label class="fb-label">Funil</label><select id="fbFunnel" class="fb-input" onchange="onFunnelChange()"><option value="">Todos</option></select></div>
+                        <div id="fbEtapaWrap" style="display:none"><label class="fb-label">Etapa</label><select id="fbEtapa" class="fb-input" onchange="previewCount()"><option value="">Todas</option></select></div>
+                    </div>
+                </div>
+
+                <div class="fb-section">
+                    <div class="fb-section-title">🔧 Campo Personalizado</div>
+                    <div class="fb-row">
+                        <div><label class="fb-label">Chave</label><select id="fbCampoChave" class="fb-input" onchange="onCampoChaveChange()"><option value="">Nenhum...</option></select></div>
+                        <div><label class="fb-label">Valor contém</label><input type="text" id="fbCampoValor" class="fb-input" placeholder="Qualquer valor" oninput="debouncePreview()" disabled></div>
+                    </div>
+                </div>
+
+                <div class="fb-section" style="border-bottom:none;padding-bottom:0;margin-bottom:0">
+                    <div class="fb-section-title">📅 Data de Cadastro</div>
+                    <div class="fb-row">
+                        <div><label class="fb-label">De</label><input type="date" id="fbCriadoDe" class="fb-input" onchange="previewCount()"></div>
+                        <div><label class="fb-label">Até</label><input type="date" id="fbCriadoAte" class="fb-input" onchange="previewCount()"></div>
+                    </div>
+                </div>
+
+                <!-- Preview -->
+                <div class="preview-bar">
+                    <span class="preview-count"><span class="spinner-sm" id="previewSpinner"></span> <span id="previewText">—</span></span>
+                    <button class="btn btn-ghost btn-sm" onclick="previewCount()" style="padding:2px 10px;font-size:12px">🔄 Atualizar</button>
+                </div>
+            </div><!-- /filter-builder -->
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="saveSegment()">💾 Salvar Lista</button>
+        </div>
+    </div>
+</div>
+
+<!-- View Leads Side Panel -->
+<div class="detail-panel-overlay" id="detailOverlay"></div>
+<div class="detail-panel" id="detailPanel">
+    <div class="detail-header">
+        <h3 id="detailTitle">Leads</h3>
+        <button class="detail-close" onclick="closeDetail()">✕</button>
+    </div>
+    <div class="detail-body">
+        <table class="leads-table">
+            <thead><tr><th>Nome</th><th>Email</th><th>WhatsApp</th><th>Destinos</th><th>Tags</th><th>Chegada</th></tr></thead>
+            <tbody id="detailBody"><tr><td colspan="6"><div class="empty-state"><div class="empty-icon">⏳</div><p>Carregando...</p></div></td></tr></tbody>
+        </table>
+    </div>
+    <div class="detail-footer">
+        <span id="detailCount">—</span>
+        <button class="btn btn-outline btn-sm" onclick="exportLeads()">⬇️ Exportar CSV</button>
+    </div>
+</div>
+
+<script src="/static/js/auth.js"></script>
+<script>
+// ─── State ────────────────────────────────────
+let allTags=[], allFunnels=[], customKeys=[];
+let selTagIds=[], tagMode='any', selColor='#2B6CB0';
+let previewTimer=null, currentDetailSegId=null;
+const COLORS=['#2B6CB0','#3182CE','#C05621','#DD6B20','#38A169','#48BB78','#D69E2E','#E53E3E','#805AD5','#D53F8C','#4A5568','#718096'];
+
+// ─── Init ─────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+    if (!Auth.requireAuth()) return;
+    const u = Auth.getUser();
+    if (u) { document.getElementById('userName').textContent=u.nome; document.getElementById('userRole').textContent=u.role==='admin'?'Administrador':'Usuário'; document.getElementById('userAvatar').textContent=u.nome.charAt(0).toUpperCase(); }
+    document.getElementById('logoutBtn').addEventListener('click', e => { e.preventDefault(); Auth.logout(); });
+    const sb=document.getElementById('sidebar'), ov=document.getElementById('sidebarOverlay');
+    document.getElementById('menuToggle').addEventListener('click', () => { sb.classList.toggle('open'); ov.classList.toggle('show'); });
+    ov.addEventListener('click', () => { sb.classList.remove('open'); ov.classList.remove('show'); });
+    document.querySelectorAll('[data-coming-soon]').forEach(el => el.addEventListener('click', e => { e.preventDefault(); alert('🚧 Em desenvolvimento!'); }));
+    document.getElementById('detailOverlay').addEventListener('click', closeDetail);
+
+    buildColorPicker();
+    populateYears();
+    Promise.all([loadTags(), loadFunnels(), loadCustomKeys()]).then(loadSegments);
+});
+
+function populateYears() {
+    const c=new Date().getFullYear();
+    ['fbAnoCheg','fbAnoPartida'].forEach(id => {
+        const s=document.getElementById(id);
+        for(let y=c-1;y<=c+5;y++){const o=document.createElement('option');o.value=y;o.textContent=y;s.appendChild(o);}
+    });
+}
+
+function buildColorPicker() {
+    document.getElementById('colorPicker').innerHTML = COLORS.map(c =>
+        `<div class="color-dot${c===selColor?' sel':''}" style="background:${c}" onclick="pickColor('${c}')">${c===selColor?'✓':''}</div>`
+    ).join('');
+}
+
+function pickColor(c) { selColor=c; buildColorPicker(); }
+
+// ─── Metadata ─────────────────────────────────
+async function loadTags() {
+    const r = await Auth.apiRequest('/api/tags'); if (!r) return;
+    const d = await r.json(); allTags = d.tags || [];
+}
+async function loadFunnels() {
+    const r = await Auth.apiRequest('/api/pipeline/funnels'); if (!r) return;
+    const d = await r.json(); allFunnels = d.funnels || [];
+    const sel=document.getElementById('fbFunnel');
+    allFunnels.forEach(f => { const o=document.createElement('option'); o.value=f.id; o.textContent=f.nome; sel.appendChild(o); });
+    const dr = await Auth.apiRequest('/api/leads/destinos'); if (!dr) return;
+    const dd = await dr.json();
+    const ds=document.getElementById('fbDestino');
+    (dd.destinos||[]).forEach(d => { const o=document.createElement('option'); o.value=d; o.textContent=d; ds.appendChild(o); });
+}
+async function loadCustomKeys() {
+    const r = await Auth.apiRequest('/api/leads/segment/campos-personalizados-chaves'); if (!r) return;
+    const d = await r.json(); customKeys = d.chaves || [];
+    const sel=document.getElementById('fbCampoChave');
+    customKeys.forEach(k => { const o=document.createElement('option'); o.value=k; o.textContent=k; sel.appendChild(o); });
+}
+
+// ─── Segments CRUD ────────────────────────────
+async function loadSegments() {
+    const r = await Auth.apiRequest('/api/segments'); if (!r) return;
+    const d = await r.json();
+    const grid = document.getElementById('segmentsGrid');
+    if (!d.segments || d.segments.length === 0) {
+        grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon">📋</div><p>Nenhuma lista de segmentação criada ainda.<br>Crie sua primeira lista para organizar seus leads!</p><button class="btn btn-primary" onclick="openModal()">➕ Criar Primeira Lista</button></div>`;
+        return;
+    }
+    grid.innerHTML = d.segments.map(s => {
+        const pills = renderFilterPills(s.filtros);
+        return `
+        <div class="segment-card" style="border-left-color:${esc(s.cor)}" onclick="viewSegment(${s.id})">
+            <div class="segment-card-body">
+                <div class="segment-card-top">
+                    <div class="segment-card-name">${esc(s.nome)}</div>
+                    <span class="segment-lead-count">👥 ${s.lead_count}</span>
+                </div>
+                <div class="segment-card-desc">${s.descricao ? esc(s.descricao) : '<span style="color:var(--color-dark-300)">Sem descrição</span>'}</div>
+                ${pills ? `<div class="segment-filters-pills">${pills}</div>` : ''}
+                <div class="segment-card-meta" style="margin-top:var(--space-3)">
+                    <span class="segment-meta-item">📅 Criado em <strong>${s.created_at ? new Date(s.created_at).toLocaleDateString('pt-BR') : '—'}</strong></span>
+                </div>
+            </div>
+            <div class="segment-card-footer">
+                <span style="font-size:var(--font-size-xs);color:var(--color-dark-400)">Clique para ver leads</span>
+                <div class="segment-card-actions" onclick="event.stopPropagation()">
+                    <button title="Editar" onclick="editSegment(${s.id})">✏️</button>
+                    <button title="Excluir" onclick="deleteSegment(${s.id},'${esc(s.nome)}')">🗑️</button>
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function renderFilterPills(f) {
+    if (!f || Object.keys(f).length === 0) return '';
+    const pills = [];
+    if (f.destino) pills.push(`📍 ${f.destino}`);
+    if (f.is_active === true) pills.push('✅ Ativos');
+    if (f.is_active === false) pills.push('❌ Inativos');
+    if (f.ano_chegada) pills.push(`📅 ${f.ano_chegada}`);
+    if (f.mes_chegada) pills.push(`🗓️ Mês ${f.mes_chegada}`);
+    if (f.tag_ids && f.tag_ids.length) { const names=f.tag_ids.map(id=>{const t=allTags.find(x=>x.id===id);return t?t.nome:id;}).join(', '); pills.push(`🏷️ ${names} (${f.tag_mode==='all'?'AND':'OR'})`); }
+    if (f.funnel_id) { const fn=allFunnels.find(x=>x.id===f.funnel_id); pills.push(`🎯 ${fn?fn.nome:f.funnel_id}`); }
+    if (f.campo_chave) pills.push(`🔧 ${f.campo_chave}${f.campo_valor?' = '+f.campo_valor:''}`);
+    if (f.search) pills.push(`🔎 "${f.search}"`);
+    return pills.map(p => `<span class="filter-pill">${esc(p)}</span>`).join('');
+}
+
+// ─── Modal ────────────────────────────────────
+function openModal(seg = null) {
+    document.getElementById('segModal').classList.add('show');
+    document.getElementById('modalTitle').textContent = seg ? 'Editar Lista' : 'Nova Lista de Segmentação';
+    document.getElementById('modalAlert').classList.add('hidden');
+    document.getElementById('segId').value = seg ? seg.id : '';
+    document.getElementById('segNome').value = seg ? seg.nome : '';
+    document.getElementById('segDesc').value = seg ? seg.descricao || '' : '';
+    selColor = seg ? seg.cor : '#2B6CB0';
+    buildColorPicker();
+
+    // Reset filters
+    const f = seg ? (seg.filtros || {}) : {};
+    document.getElementById('fbDestino').value = f.destino || '';
+    document.getElementById('fbStatus').value = f.is_active !== undefined && f.is_active !== null ? String(f.is_active) : '';
+    document.getElementById('fbAnoCheg').value = f.ano_chegada || '';
+    document.getElementById('fbMesCheg').value = f.mes_chegada || '';
+    document.getElementById('fbChegDe').value = f.data_chegada_de || '';
+    document.getElementById('fbChegAte').value = f.data_chegada_ate || '';
+    document.getElementById('fbAnoPartida').value = f.ano_partida || '';
+    document.getElementById('fbMesPartida').value = f.mes_partida || '';
+    document.getElementById('fbFunnel').value = f.funnel_id || '';
+    onFunnelChange(f.etapa_id || '');
+    document.getElementById('fbCampoChave').value = f.campo_chave || '';
+    document.getElementById('fbCampoValor').value = f.campo_valor || '';
+    document.getElementById('fbCampoValor').disabled = !f.campo_chave;
+    document.getElementById('fbCriadoDe').value = f.criado_de || '';
+    document.getElementById('fbCriadoAte').value = f.criado_ate || '';
+    selTagIds = f.tag_ids ? [...f.tag_ids] : [];
+    tagMode = f.tag_mode || 'any';
+    document.getElementById('modeAny').classList.toggle('active', tagMode==='any');
+    document.getElementById('modeAll').classList.toggle('active', tagMode==='all');
+    renderTagChips();
+    previewCount();
+}
+
+function closeModal() { document.getElementById('segModal').classList.remove('show'); }
+
+async function editSegment(id) {
+    const r = await Auth.apiRequest(`/api/segments/${id}`); if (!r) return;
+    const seg = await r.json();
+    openModal(seg);
+}
+
+function collectFilters() {
+    const f = {};
+    const v = id => document.getElementById(id).value;
+    if (v('fbDestino')) f.destino = v('fbDestino');
+    if (v('fbStatus')) f.is_active = v('fbStatus') === 'true';
+    if (v('fbAnoCheg')) f.ano_chegada = parseInt(v('fbAnoCheg'));
+    if (v('fbMesCheg')) f.mes_chegada = parseInt(v('fbMesCheg'));
+    if (v('fbChegDe')) f.data_chegada_de = v('fbChegDe');
+    if (v('fbChegAte')) f.data_chegada_ate = v('fbChegAte');
+    if (v('fbAnoPartida')) f.ano_partida = parseInt(v('fbAnoPartida'));
+    if (v('fbMesPartida')) f.mes_partida = parseInt(v('fbMesPartida'));
+    if (selTagIds.length>0) { f.tag_ids=selTagIds; f.tag_mode=tagMode; }
+    if (v('fbFunnel')) { f.funnel_id=parseInt(v('fbFunnel')); if(v('fbEtapa')) f.etapa_id=v('fbEtapa'); }
+    if (v('fbCampoChave')) { f.campo_chave=v('fbCampoChave'); if(v('fbCampoValor')) f.campo_valor=v('fbCampoValor'); }
+    if (v('fbCriadoDe')) f.criado_de = v('fbCriadoDe');
+    if (v('fbCriadoAte')) f.criado_ate = v('fbCriadoAte');
+    return f;
+}
+
+async function saveSegment() {
+    const nome = document.getElementById('segNome').value.trim();
+    if (!nome) { showAlert('Nome é obrigatório'); return; }
+    const id = document.getElementById('segId').value;
+    const body = {
+        nome,
+        descricao: document.getElementById('segDesc').value.trim() || null,
+        cor: selColor,
+        filtros: collectFilters(),
+    };
+    const url = id ? `/api/segments/${id}` : '/api/segments';
+    const method = id ? 'PUT' : 'POST';
+    const r = await Auth.apiRequest(url, { method, body: JSON.stringify(body) });
+    if (!r) return;
+    if (!r.ok) { const e = await r.json(); showAlert(e.detail||'Erro'); return; }
+    closeModal();
+    loadSegments();
+}
+
+async function deleteSegment(id, nome) {
+    if (!confirm(`Excluir a lista "${nome}"?`)) return;
+    const r = await Auth.apiRequest(`/api/segments/${id}`, { method: 'DELETE' });
+    if (r && r.ok) loadSegments();
+}
+
+function showAlert(msg) {
+    document.getElementById('modalAlertMsg').textContent = msg;
+    document.getElementById('modalAlert').classList.remove('hidden');
+}
+
+// ─── Tag Chips ────────────────────────────────
+function renderTagChips() {
+    const c = document.getElementById('fbTags');
+    if (!allTags.length) { c.innerHTML='<span style="font-size:12px;color:var(--color-dark-400)">Nenhuma tag</span>'; return; }
+    c.innerHTML = allTags.map(t => {
+        const s = selTagIds.includes(t.id);
+        return `<span class="fb-tag-chip${s?' sel':''}" style="background:${s?t.cor:'#eee'};color:${s?'#fff':'#555'}" onclick="toggleTag(${t.id})">${esc(t.nome)}</span>`;
+    }).join('');
+}
+function toggleTag(id) {
+    if (selTagIds.includes(id)) selTagIds=selTagIds.filter(x=>x!==id);
+    else selTagIds.push(id);
+    renderTagChips(); previewCount();
+}
+function setMode(m) { tagMode=m; document.getElementById('modeAny').classList.toggle('active',m==='any'); document.getElementById('modeAll').classList.toggle('active',m==='all'); if(selTagIds.length)previewCount(); }
+
+// ─── Funnel / Campo ───────────────────────────
+function onFunnelChange(presetEtapa) {
+    const fid = document.getElementById('fbFunnel').value;
+    const wrap = document.getElementById('fbEtapaWrap');
+    const sel = document.getElementById('fbEtapa');
+    sel.innerHTML = '<option value="">Todas</option>';
+    if (fid) {
+        const fn = allFunnels.find(f=>f.id==fid);
+        if (fn && fn.etapas) fn.etapas.forEach(e => { const o=document.createElement('option'); o.value=e.id; o.textContent=e.nome; sel.appendChild(o); });
+        wrap.style.display='block';
+        if (presetEtapa) sel.value = presetEtapa;
+    } else { wrap.style.display='none'; }
+    previewCount();
+}
+function onCampoChaveChange() { document.getElementById('fbCampoValor').disabled=!document.getElementById('fbCampoChave').value; if(!document.getElementById('fbCampoChave').value) document.getElementById('fbCampoValor').value=''; previewCount(); }
+
+// ─── Preview ──────────────────────────────────
+function debouncePreview() { clearTimeout(previewTimer); previewTimer=setTimeout(previewCount, 300); }
+async function previewCount() {
+    const spinner = document.getElementById('previewSpinner');
+    const text = document.getElementById('previewText');
+    spinner.style.display='inline-block'; text.textContent='Contando...';
+    const filtros = collectFilters();
+    const r = await Auth.apiRequest('/api/segments/preview', { method: 'POST', body: JSON.stringify(filtros) });
+    spinner.style.display='none';
+    if (!r) { text.textContent='Erro'; return; }
+    const d = await r.json();
+    text.textContent = `${d.total} lead${d.total!==1?'s':''} ${d.total !== 1 ? 'correspondem' : 'corresponde'} a estes filtros`;
+}
+
+// ─── View Segment Leads ───────────────────────
+async function viewSegment(id) {
+    currentDetailSegId = id;
+    document.getElementById('detailOverlay').classList.add('show');
+    document.getElementById('detailPanel').classList.add('open');
+    document.getElementById('detailBody').innerHTML = '<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">⏳</div><p>Carregando...</p></div></td></tr>';
+
+    const sr = await Auth.apiRequest(`/api/segments/${id}`); if (!sr) return;
+    const seg = await sr.json();
+    document.getElementById('detailTitle').textContent = `📋 ${seg.nome}`;
+
+    const r = await Auth.apiRequest(`/api/segments/${id}/leads?limit=500`); if (!r) return;
+    const d = await r.json();
+    document.getElementById('detailCount').textContent = `${d.total} leads nesta lista`;
+    renderDetailTable(d.leads || []);
+}
+
+function renderDetailTable(leads) {
+    const tbody = document.getElementById('detailBody');
+    if (!leads.length) { tbody.innerHTML='<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">🔍</div><p>Nenhum lead nesta lista</p></div></td></tr>'; return; }
+    tbody.innerHTML = leads.map(l => {
+        const tags = (l.tags||[]).map(t=>`<span class="lead-tag" style="background:${esc(t.cor)}">${esc(t.nome)}</span>`).join('');
+        return `<tr>
+            <td><strong>${esc(l.nome)}</strong></td>
+            <td>${l.email||'<span style="color:#aaa">—</span>'}</td>
+            <td>${l.whatsapp||'<span style="color:#aaa">—</span>'}</td>
+            <td>${getDestinosHtml(l.destinos)}</td>
+            <td class="tags-cell">${tags||'<span style="color:#aaa">—</span>'}</td>
+            <td>${l.data_chegada?new Date(l.data_chegada+'T00:00:00').toLocaleDateString('pt-BR'):'—'}</td>
+        </tr>`;
+    }).join('');
+}
+
+function closeDetail() {
+    document.getElementById('detailOverlay').classList.remove('show');
+    document.getElementById('detailPanel').classList.remove('open');
+}
+
+async function exportLeads() {
+    if (!currentDetailSegId) return;
+    const r = await Auth.apiRequest(`/api/segments/${currentDetailSegId}/leads?limit=500`); if(!r) return;
+    const d = await r.json();
+    const leads = d.leads || [];
+    if (!leads.length) { alert('Nenhum lead para exportar.'); return; }
+    const h = ['ID','Nome','Email','WhatsApp','Destinos','Tags','Chegada','Partida'];
+    const rows = leads.map(l => [l.id,l.nome,l.email||'',l.whatsapp||'',(l.destinos||[]).join('; '),(l.tags||[]).map(t=>t.nome).join('; '),l.data_chegada||'',l.data_partida||'']);
+    const csv = [h,...rows].map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const blob = new Blob(['\ufeff'+csv], {type:'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download=`segmento_${currentDetailSegId}_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click(); URL.revokeObjectURL(url);
+}
+
+function getDestinosHtml(destinos) {
+    if (!destinos || destinos.length === 0) return '<span style="color:#aaa">—</span>';
+    return destinos.map(d => {
+        const cl = d.toLowerCase()==='atacama'?'atacama':d.toLowerCase()==='uyuni'?'uyuni':d.toLowerCase()==='santiago'?'santiago':'outro';
+        const ic = cl==='atacama'?'🏜️':cl==='uyuni'?'🪞':cl==='santiago'?'🏙️':'📍';
+        return `<span class="destino-badge ${cl}">${ic} ${esc(d)}</span>`;
+    }).join(' ');
+}
+function esc(s) { if(!s) return ''; const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+</script>
+</body>
+</html>

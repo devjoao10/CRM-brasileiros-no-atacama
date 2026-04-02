@@ -13,6 +13,7 @@
     <link rel="stylesheet" href="/static/css/base.css">
     <link rel="stylesheet" href="/static/css/components.css">
     <link rel="icon" href="/static/img/logo.png" type="image/png">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
     <style>
         /* ===== Dashboard Layout ===== */
@@ -464,10 +465,25 @@
                     <span class="nav-icon">🎯</span>
                     <span>Pipeline</span>
                 </a>
-                <a href="#" class="nav-item" data-coming-soon>
+                <a href="/segmentacao" class="nav-item">
+                    <span class="nav-icon">🔍</span>
+                    <span>Segmentação</span>
+                </a>
+                <a href="/tarefas" class="nav-item">
                     <span class="nav-icon">📋</span>
-                    <span>Atividades</span>
-                    <span class="nav-badge">Em breve</span>
+                    <span>Tarefas</span>
+                </a>
+
+                <div class="nav-section">
+                    <div class="nav-section-title">Conf. Admin</div>
+                </div>
+                <a href="/relatorios" class="nav-item">
+                    <span class="nav-icon">📈</span>
+                    <span>Relatórios</span>
+                </a>
+                <a href="/equipe" class="nav-item">
+                    <span class="nav-icon">👥</span>
+                    <span>Equipe e Usuários</span>
                 </a>
 
                 <div class="nav-section">
@@ -517,36 +533,56 @@
                     <h1 id="welcomeMessage">Olá! 👋</h1>
                     <p>Bem-vindo ao CRM da Brasileiros no Atacama. Este é o seu painel de controle.</p>
                 </div>
+                
+                <!-- Analytics Toolbar -->
+                <div style="display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: center; justify-content: space-between; margin-bottom: var(--space-6);">
+                    <h2 style="font-size: var(--font-size-xl); font-weight: var(--font-weight-bold); color: var(--color-dark);">Visão Geral</h2>
+                    <div style="display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap;">
+                        <span style="font-size: var(--font-size-sm); color: var(--color-dark-500); font-weight: 500;">Período:</span>
+                        <input type="date" id="dashStart" class="form-input" style="padding: 4px 8px; width: 140px;">
+                        <span style="color: var(--color-dark-400);">até</span>
+                        <input type="date" id="dashEnd" class="form-input" style="padding: 4px 8px; width: 140px;">
+                        <button class="btn btn-primary" onclick="loadAnalytics()" style="padding: 6px 12px; font-size: 14px;">Filtrar</button>
+                    </div>
+                </div>
 
                 <!-- Stats -->
                 <div class="stats-grid">
                     <div class="stat-card">
                         <div class="stat-icon blue">👥</div>
                         <div>
-                            <div class="stat-value">—</div>
+                            <div class="stat-value" id="stat-leads">⏳</div>
                             <div class="stat-label">Leads</div>
                         </div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-icon orange">🎯</div>
+                        <div class="stat-icon orange">📋</div>
                         <div>
-                            <div class="stat-value">—</div>
-                            <div class="stat-label">Em negociação</div>
+                            <div class="stat-value" id="stat-tarefas">⏳</div>
+                            <div class="stat-label">Tarefas p/ Hoje</div>
                         </div>
                     </div>
                     <div class="stat-card">
                         <div class="stat-icon green">✅</div>
                         <div>
-                            <div class="stat-value">—</div>
+                            <div class="stat-value" id="stat-vendas">⏳</div>
                             <div class="stat-label">Vendas fechadas</div>
                         </div>
                     </div>
                     <div class="stat-card">
                         <div class="stat-icon gold">⭐</div>
                         <div>
-                            <div class="stat-value">—</div>
+                            <div class="stat-value" id="stat-conversao">⏳</div>
                             <div class="stat-label">Taxa de conversão</div>
                         </div>
+                    </div>
+                </div>
+
+                <!-- Graphs Section -->
+                <div style="background: var(--color-white); border-radius: var(--radius-xl); padding: var(--space-6); margin-bottom: var(--space-8); box-shadow: var(--shadow-sm);">
+                    <h3 style="font-size: var(--font-size-lg); font-weight: var(--font-weight-semibold); margin-bottom: var(--space-4);">Evolução no Período</h3>
+                    <div style="position: relative; height: 300px; width: 100%;">
+                        <canvas id="leadsChart"></canvas>
                     </div>
                 </div>
 
@@ -582,6 +618,8 @@
 
     <script src="/static/js/auth.js"></script>
     <script>
+        let analyticsChart = null;
+
         document.addEventListener('DOMContentLoaded', () => {
             // Check auth
             if (!Auth.requireAuth()) return;
@@ -597,6 +635,16 @@
                 document.getElementById('welcomeMessage').textContent = 
                     `Olá, ${user.nome.split(' ')[0]}! 👋`;
             }
+
+            // Define initial date scope (last 30 days)
+            const end = new Date();
+            const start = new Date();
+            start.setDate(end.getDate() - 30);
+            
+            document.getElementById('dashStart').value = start.toISOString().split('T')[0];
+            document.getElementById('dashEnd').value = end.toISOString().split('T')[0];
+
+            loadAnalytics();
 
             // Logout
             document.getElementById('logoutBtn').addEventListener('click', (e) => {
@@ -627,6 +675,94 @@
                 });
             });
         });
+
+        async function loadAnalytics() {
+            const start = document.getElementById('dashStart').value;
+            const end = document.getElementById('dashEnd').value;
+            
+            let url = '/api/analytics/dashboard';
+            if (start && end) {
+                url += `?start_date=${start}&end_date=${end}`;
+            }
+
+            const response = await Auth.apiRequest(url);
+            if (!response || !response.ok) {
+                console.error("Erro ao carregar dados do dashboard.");
+                return;
+            }
+
+            const data = await response.json();
+            
+            // Populating KPIs
+            document.getElementById('stat-leads').textContent = data.kpis.total_leads;
+            document.getElementById('stat-vendas').textContent = data.kpis.vendas_fechadas;
+            document.getElementById('stat-conversao').textContent = data.kpis.taxa_conversao;
+            document.getElementById('stat-tarefas').textContent = data.kpis.tarefas_pendentes;
+
+            // Render Chart
+            renderChart(data.chart);
+        }
+
+        function renderChart(chartData) {
+            const ctx = document.getElementById('leadsChart').getContext('2d');
+            
+            if (analyticsChart) {
+                analyticsChart.destroy();
+            }
+
+            analyticsChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: chartData.labels, // Data (YYYY-MM-DD)
+                    datasets: [
+                        {
+                            label: 'Leads Captados',
+                            data: chartData.leads,
+                            borderColor: '#2B6CB0',     // var(--color-primary)
+                            backgroundColor: 'rgba(43, 108, 176, 0.1)',
+                            borderWidth: 2,
+                            tension: 0.3,
+                            fill: true,
+                            pointRadius: 3,
+                            pointBackgroundColor: '#2B6CB0'
+                        },
+                        {
+                            label: 'Vendas Fechadas',
+                            data: chartData.vendas,
+                            borderColor: '#38A169',     // var(--color-success)
+                            backgroundColor: 'rgba(56, 161, 105, 0.1)',
+                            borderWidth: 2,
+                            tension: 0.3,
+                            fill: true,
+                            pointRadius: 3,
+                            pointBackgroundColor: '#38A169'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'top' },
+                        tooltip: { mode: 'index', intersect: false }
+                    },
+                    scales: {
+                        x: {
+                            grid: { display: false }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            ticks: { precision: 0 }
+                        }
+                    },
+                    interaction: {
+                        mode: 'nearest',
+                        axis: 'x',
+                        intersect: false
+                    }
+                }
+            });
+        }
     </script>
 </body>
 </html>
