@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Assistente IA — CRM Brasileiros no Atacama</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="/static/css/variables.css">
+    <link rel="stylesheet" href="/static/css/base.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="icon" href="/static/img/logo.png" type="image/png">
+    
+    <!-- Marked.js for markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+    <style>
+        /* Replicating Base Sidebar layout for consistency */
+        .dashboard-layout { display: flex; min-height: 100vh; }
+        .sidebar {
+            width: 260px; background: linear-gradient(180deg, var(--color-dark) 0%, var(--color-dark-700) 100%);
+            color: var(--color-white); display: flex; flex-direction: column; position: fixed;
+            top: 0; left: 0; bottom: 0; z-index: var(--z-sidebar); transition: transform var(--transition-base);
+        }
+        .sidebar-header { padding: var(--space-6); display: flex; align-items: center; gap: var(--space-4); border-bottom: 1px solid rgba(255, 255, 255, 0.1); }
+        .sidebar-logo { width: 44px; height: 44px; border-radius: var(--radius-full); overflow: hidden; flex-shrink: 0; }
+        .sidebar-logo img { width: 100%; height: 100%; object-fit: cover; }
+        .sidebar-brand { font-size: var(--font-size-sm); font-weight: var(--font-weight-bold); line-height: 1.3; }
+        .sidebar-brand span { color: var(--color-accent-light); }
+        .sidebar-nav { flex: 1; padding: var(--space-4) 0; overflow-y: auto; }
+        .nav-section { padding: var(--space-2) var(--space-6); margin-top: var(--space-4); }
+        .nav-section-title { font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255, 255, 255, 0.4); margin-bottom: var(--space-2); }
+        .nav-item { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-6); color: rgba(255, 255, 255, 0.7); font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); transition: all var(--transition-fast); cursor: pointer; text-decoration: none; border-left: 3px solid transparent; }
+        .nav-item:hover { background: rgba(255, 255, 255, 0.05); color: var(--color-white); }
+        .nav-item.active { background: rgba(43, 108, 176, 0.15); color: var(--color-white); border-left-color: var(--color-primary-light); }
+        .nav-item .nav-icon { font-size: var(--font-size-lg); width: 24px; text-align: center; }
+        .sidebar-footer { padding: var(--space-4) var(--space-6); border-top: 1px solid rgba(255, 255, 255, 0.1); }
+        .main-content { flex: 1; margin-left: 260px; display: flex; flex-direction: column; height: 100vh; }
+        .top-header { height: 64px; background: var(--color-white); border-bottom: 1px solid var(--color-dark-200); display: flex; align-items: center; justify-content: space-between; padding: 0 var(--space-8); flex-shrink: 0;}
+        .header-left { display: flex; align-items: center; gap: var(--space-4); }
+        .page-title { font-size: var(--font-size-lg); font-weight: var(--font-weight-semibold); color: var(--color-dark); }
+        .header-right { display: flex; align-items: center; gap: var(--space-4); }
+        .user-info { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-4); border-radius: var(--radius-lg); cursor: pointer; }
+        .user-avatar { width: 36px; height: 36px; border-radius: var(--radius-full); background: linear-gradient(135deg, var(--color-primary), var(--color-secondary)); color: var(--color-white); display: flex; align-items: center; justify-content: center; font-weight: var(--font-weight-bold); font-size: var(--font-size-sm); }
+        .user-name { font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); color: var(--color-dark); }
+        .user-role { font-size: var(--font-size-xs); color: var(--color-dark-500); }
+        .menu-toggle { display: none; background: none; border: none; font-size: var(--font-size-xl); cursor: pointer; padding: var(--space-2); color: var(--color-dark-600); }
+        
+        @media (max-width: 1024px) {
+            .sidebar { transform: translateX(-100%); }
+            .sidebar.open { transform: translateX(0); }
+            .main-content { margin-left: 0; }
+            .menu-toggle { display: block; }
+            .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: calc(var(--z-sidebar) - 1); }
+            .sidebar-overlay.show { display: block; }
+        }
+
+        /* ===== Chat Specific Styles ===== */
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            background: var(--color-light);
+            overflow: hidden;
+            position: relative;
+        }
+
+        .chat-history {
+            flex: 1;
+            padding: var(--space-6) var(--space-8);
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-6);
+        }
+
+        .chat-message {
+            display: flex;
+            gap: var(--space-4);
+            max-width: 800px;
+        }
+
+        .chat-message.user {
+            align-self: flex-end;
+            flex-direction: row-reverse;
+        }
+
+        .chat-message.system {
+            align-self: flex-start;
+        }
+
+        .chat-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: var(--radius-full);
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: var(--font-size-lg);
+        }
+
+        .chat-message.system .chat-avatar {
+            background: linear-gradient(135deg, var(--color-secondary), var(--color-primary-light));
+            color: white;
+        }
+
+        .chat-message.user .chat-avatar {
+            background: var(--color-dark-200);
+            color: var(--color-dark);
+            font-weight: bold;
+        }
+
+        .chat-bubble {
+            background: var(--color-white);
+            padding: var(--space-4) var(--space-5);
+            border-radius: var(--radius-xl);
+            box-shadow: var(--shadow-sm);
+            font-size: var(--font-size-sm);
+            line-height: 1.6;
+            color: var(--color-dark-700);
+            overflow-x: auto;
+        }
+
+        .chat-message.user .chat-bubble {
+            background: var(--color-primary);
+            color: var(--color-white);
+            border-radius: var(--radius-xl) 0 var(--radius-xl) var(--radius-xl);
+        }
+
+        .chat-message.system .chat-bubble {
+            border-radius: 0 var(--radius-xl) var(--radius-xl) var(--radius-xl);
+            border: 1px solid var(--color-dark-200);
+        }
+
+        /* Markdown Styling inside bubble */
+        .chat-bubble p { margin-bottom: 0.5em; }
+        .chat-bubble p:last-child { margin-bottom: 0; }
+        .chat-bubble strong { font-weight: 600; }
+        .chat-bubble ul, .chat-bubble ol { margin-left: 1.5em; margin-bottom: 0.5em; }
+        .chat-bubble table { width: 100%; border-collapse: collapse; margin-top: 0.5em; margin-bottom: 0.5em;}
+        .chat-bubble th, .chat-bubble td { border: 1px solid var(--color-dark-200); padding: 8px; text-align: left; }
+        .chat-bubble th { background: var(--color-dark-100); }
+        .chat-message.user .chat-bubble table,
+        .chat-message.user .chat-bubble th,
+        .chat-message.user .chat-bubble td { border-color: rgba(255,255,255,0.2); background: transparent; }
+        .chat-bubble pre { background: #1e1e1e; color: #d4d4d4; padding: 10px; border-radius: 8px; overflow-x: auto; font-family: monospace; }
+        .chat-bubble code { background: rgba(0,0,0,0.05); padding: 2px 4px; border-radius: 4px; font-family: monospace; }
+        .chat-message.user .chat-bubble code { background: rgba(255,255,255,0.2); }
+
+        /* Input Area */
+        .chat-input-container {
+            padding: var(--space-6) var(--space-8);
+            background: var(--color-white);
+            border-top: 1px solid var(--color-dark-200);
+            flex-shrink: 0;
+            display: flex;
+            justify-content: center;
+        }
+
+        .chat-input-wrapper {
+            max-width: 800px;
+            width: 100%;
+            position: relative;
+            display: flex;
+            align-items: flex-end;
+            background: var(--color-light);
+            border: 1px solid var(--color-dark-300);
+            border-radius: var(--radius-xl);
+            padding: var(--space-2) var(--space-4);
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+            transition: border-color var(--transition-base), box-shadow var(--transition-base);
+        }
+
+        .chat-input-wrapper:focus-within {
+            border-color: var(--color-primary);
+            box-shadow: 0 0 0 3px rgba(43, 108, 176, 0.1);
+        }
+
+        .chat-input {
+            flex: 1;
+            border: none;
+            background: transparent;
+            padding: var(--space-2) 0;
+            font-size: var(--font-size-base);
+            font-family: inherit;
+            color: var(--color-dark);
+            resize: none;
+            min-height: 44px;
+            max-height: 200px;
+            outline: none;
+            line-height: 1.5;
+        }
+
+        .chat-send-btn {
+            background: var(--color-primary);
+            color: var(--color-white);
+            border: none;
+            border-radius: var(--radius-lg);
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            margin-bottom: 4px;
+        }
+
+        .chat-send-btn:hover {
+            background: var(--color-primary-dark);
+            transform: scale(1.05);
+        }
+
+        .chat-send-btn:disabled {
+            background: var(--color-dark-300);
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Loading indicator */
+        .typing-indicator {
+            display: inline-flex;
+            gap: 4px;
+            align-items: center;
+            height: 24px;
+        }
+
+        .typing-dot {
+            width: 6px;
+            height: 6px;
+            background: var(--color-dark-400);
+            border-radius: 50%;
+            animation: typing 1.4s infinite ease-in-out;
+        }
+
+        .typing-dot:nth-child(1) { animation-delay: -0.32s; }
+        .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+        .typing-dot:nth-child(3) { animation-delay: 0s; }
+
+        @keyframes typing {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard-layout">
+        <!-- Sidebar Overlay (mobile) -->
+        <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo">
+                    <img src="/static/img/logo.png" alt="Logo">
+                </div>
+                <div class="sidebar-brand">
+                    Brasileiros <span>no Atacama</span>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <div class="nav-section">
+                    <div class="nav-section-title">Principal</div>
+                </div>
+                <a href="/dashboard" class="nav-item">
+                    <span class="nav-icon">📊</span>
+                    <span>Dashboard</span>
+                </a>
+                
+                <div class="nav-section">
+                    <div class="nav-section-title">Inteligência</div>
+                </div>
+                <a href="/ai" class="nav-item active">
+                    <span class="nav-icon">✨</span>
+                    <span>Assistente IA</span>
+                </a>
+
+                <div class="nav-section">
+                    <div class="nav-section-title">CRM</div>
+                </div>
+                <a href="/leads" class="nav-item">
+                    <span class="nav-icon">👥</span>
+                    <span>Leads</span>
+                </a>
+                <a href="/tags" class="nav-item">
+                    <span class="nav-icon">🏷️</span>
+                    <span>Tags</span>
+                </a>
+                <a href="/pipeline" class="nav-item">
+                    <span class="nav-icon">🎯</span>
+                    <span>Pipeline</span>
+                </a>
+                <a href="/segmentacao" class="nav-item">
+                    <span class="nav-icon">🔍</span>
+                    <span>Segmentação</span>
+                </a>
+                <a href="/tarefas" class="nav-item">
+                    <span class="nav-icon">📋</span>
+                    <span>Tarefas</span>
+                </a>
+
+                <div class="nav-section">
+                    <div class="nav-section-title">Conf. Admin</div>
+                </div>
+                <a href="/relatorios" class="nav-item">
+                    <span class="nav-icon">📈</span>
+                    <span>Relatórios</span>
+                </a>
+                <a href="/equipe" class="nav-item">
+                    <span class="nav-icon">👥</span>
+                    <span>Equipe e Usuários</span>
+                </a>
+            </nav>
+
+            <div class="sidebar-footer">
+                <a href="#" class="nav-item" id="logoutBtn" style="border: none; padding-left: 0;">
+                    <span class="nav-icon">🚪</span>
+                    <span>Sair</span>
+                </a>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Top Header -->
+            <header class="top-header">
+                <div class="header-left">
+                    <button class="menu-toggle" id="menuToggle">☰</button>
+                    <h2 class="page-title">✨ Assistente de Inteligência Artificial</h2>
+                </div>
+                <div class="header-right">
+                    <div class="user-info">
+                        <div class="user-avatar" id="userAvatar">A</div>
+                        <div>
+                            <div class="user-name" id="userName">Carregando...</div>
+                            <div class="user-role" id="userRole">—</div>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Chat Area -->
+            <div class="chat-container">
+                <div class="chat-history" id="chatHistory">
+                    <!-- Informative welcome message -->
+                    <div class="chat-message system">
+                        <div class="chat-avatar">✨</div>
+                        <div class="chat-bubble">
+                            <p>Olá! Eu sou a sua inteligência artificial focada em te ajudar com tudo no sistema <strong>Brasileiros no Atacama</strong>.</p>
+                            <p>Eu tenho conhecimento em tempo real do banco de dados e posso realizar ações. Você pode me pedir coisas como:</p>
+                            <ul>
+                                <li><em>"Quantos leads novos chegaram esta semana?"</em></li>
+                                <li><em>"Quais são os status do funil de vendas?"</em></li>
+                                <li><em>"Mude o lead joao@email.com para o status de perda e adicione o motivo cancelou a viagem."</em></li>
+                                <li><em>"Crie uma tarefa para eu ligar para o contato X amanhã."</em></li>
+                            </ul>
+                            <p>Como posso te ajudar agora?</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="chat-input-container">
+                    <div class="chat-input-wrapper">
+                        <textarea 
+                            id="chatInput" 
+                            class="chat-input" 
+                            placeholder="Pergunte sobre os leads ou peça para eu automatizar algo..."
+                            rows="1"
+                            oninput="this.style.height = ''; this.style.height = (this.scrollHeight > 200 ? 200 : this.scrollHeight) + 'px'"></textarea>
+                        <button id="sendBtn" class="chat-send-btn">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <line x1="22" y1="2" x2="11" y2="13"></line>
+                                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/js/auth.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            if (!Auth.requireAuth()) return;
+            const user = Auth.getUser();
+            if (user) {
+                document.getElementById('userName').textContent = user.nome;
+                document.getElementById('userRole').textContent = user.role === 'admin' ? 'Administrador' : 'Usuário';
+                document.getElementById('userAvatar').textContent = user.nome.charAt(0).toUpperCase();
+            }
+
+            document.getElementById('logoutBtn').addEventListener('click', (e) => {
+                e.preventDefault();
+                Auth.logout();
+            });
+
+            // Mobile menu config
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebarOverlay');
+            document.getElementById('menuToggle').addEventListener('click', () => {
+                sidebar.classList.toggle('open');
+                overlay.classList.toggle('show');
+            });
+            overlay.addEventListener('click', () => {
+                sidebar.classList.remove('open');
+                overlay.classList.remove('show');
+            });
+
+            // Chat logic
+            const chatInput = document.getElementById('chatInput');
+            const sendBtn = document.getElementById('sendBtn');
+            const chatHistory = document.getElementById('chatHistory');
+            
+            // Conversation state linked to the user
+            const chatMemoryKey = `crm_ai_messages_${user.email}`;
+            let messages = JSON.parse(localStorage.getItem(chatMemoryKey) || '[]');
+
+            // Configure marked for safety and new lines
+            marked.setOptions({
+                breaks: true,
+                gfm: true
+            });
+
+            const appendMessage = (role, content, save = true) => {
+                const isUser = role === 'user';
+                const div = document.createElement('div');
+                div.className = `chat-message ${isUser ? 'user' : 'system'}`;
+                
+                const avatar = document.createElement('div');
+                avatar.className = 'chat-avatar';
+                avatar.textContent = isUser ? user.nome.charAt(0).toUpperCase() : '✨';
+                
+                const bubble = document.createElement('div');
+                bubble.className = 'chat-bubble';
+                // Render markdown only for system messages
+                bubble.innerHTML = isUser ? content.replace(/\n/g, '<br>') : marked.parse(content);
+                
+                div.appendChild(avatar);
+                div.appendChild(bubble);
+                
+                chatHistory.appendChild(div);
+                scrollToBottom();
+
+                if (save) {
+                    messages.push({ role, content });
+                    localStorage.setItem(chatMemoryKey, JSON.stringify(messages));
+                }
+            };
+
+            // Restore chat history on load
+            if (messages.length > 0) {
+                // Remove the default welcome message if there is history
+                chatHistory.innerHTML = '';
+                // The array is already loaded, we just need to render it to the DOM without saving again
+                const historyCopy = [...messages];
+                messages = []; // Temp clear so we don't duplicate on append
+                historyCopy.forEach(msg => {
+                    appendMessage(msg.role, msg.content, true);
+                });
+            }
+
+            const appendTypingIndicator = () => {
+                const div = document.createElement('div');
+                div.className = 'chat-message system';
+                div.id = 'typingIndicator';
+                
+                const avatar = document.createElement('div');
+                avatar.className = 'chat-avatar';
+                avatar.textContent = '✨';
+                
+                const bubble = document.createElement('div');
+                bubble.className = 'chat-bubble';
+                
+                const indicator = document.createElement('div');
+                indicator.className = 'typing-indicator';
+                for(let i=0; i<3; i++) {
+                    const dot = document.createElement('div');
+                    dot.className = 'typing-dot';
+                    indicator.appendChild(dot);
+                }
+                
+                bubble.appendChild(indicator);
+                div.appendChild(avatar);
+                div.appendChild(bubble);
+                chatHistory.appendChild(div);
+                scrollToBottom();
+            };
+
+            const removeTypingIndicator = () => {
+                const indicator = document.getElementById('typingIndicator');
+                if (indicator) indicator.remove();
+            };
+
+            const scrollToBottom = () => {
+                chatHistory.scrollTop = chatHistory.scrollHeight;
+            };
+
+            const sendMessage = async () => {
+                const text = chatInput.value.trim();
+                if (!text) return;
+
+                // Lock input
+                chatInput.value = '';
+                chatInput.style.height = '';
+                chatInput.disabled = true;
+                sendBtn.disabled = true;
+
+                // Add to UI
+                appendMessage('user', text, true);
+
+                // Show typing
+                appendTypingIndicator();
+
+                try {
+                    const response = await Auth.apiRequest('/api/ai/chat', {
+                        method: 'POST',
+                        body: JSON.stringify({ messages })
+                    });
+
+                    removeTypingIndicator();
+
+                    if (!response.ok) {
+                        const err = await response.json();
+                        appendMessage('system', `❌ **Erro:** ${err.detail || 'Ocorreu um erro inesperado.'}`, false);
+                    } else {
+                        const data = await response.json();
+                        appendMessage('system', data.content, true);
+                    }
+                } catch (error) {
+                    removeTypingIndicator();
+                    appendMessage('system', `❌ **Erro de conexão:** ${error.message}`, false);
+                } finally {
+                    chatInput.disabled = false;
+                    sendBtn.disabled = false;
+                    chatInput.focus();
+                }
+            };
+
+            // Added clear history button
+            const headerRight = document.querySelector('.header-right');
+            const clearBtn = document.createElement('button');
+            clearBtn.textContent = '🗑️ Limpar Chat';
+            clearBtn.className = 'btn btn-outline';
+            clearBtn.style.marginRight = '12px';
+            clearBtn.style.padding = '6px 12px';
+            clearBtn.style.fontSize = '12px';
+            clearBtn.onclick = () => {
+                if(confirm('Apagar todo o histórico de conversa com a IA?')) {
+                    localStorage.removeItem(chatMemoryKey);
+                    location.reload();
+                }
+            };
+            headerRight.insertBefore(clearBtn, headerRight.firstChild);
+
+            sendBtn.addEventListener('click', sendMessage);
+            
+            chatInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                }
+            });
+        });
+    </script>
+</body>
+</html>

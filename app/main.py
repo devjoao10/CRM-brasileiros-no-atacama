@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import PROJECT_NAME, VERSION, DESCRIPTION, API_PREFIX
 from app.database import engine, Base
-from app.routers import auth, users, leads, tags, pipeline, segments, teams, pages, tasks, analytics
+from app.routers import auth, users, leads, tags, pipeline, segments, teams, pages, tasks, analytics, ai
 from app.models.lead import Lead  # noqa: F401
 from app.models.tag import Tag, lead_tags  # noqa: F401
 from app.models.pipeline import Funnel, FunnelEntry, LeadHistory  # noqa: F401
@@ -59,7 +59,7 @@ app.include_router(segments.router)
 app.include_router(teams.router)
 app.include_router(tasks.router)
 app.include_router(analytics.router)
-
+app.include_router(ai.router)
 # Include page routes (must be last to not conflict with API routes)
 app.include_router(pages.router)
 

@@ -61,3 +61,8 @@ async def tarefas_page(request: Request):
 async def relatorios_page(request: Request):
     """Serve the advanced reports page."""
     return templates.TemplateResponse("relatorios.html", {"request": request})
+
+@router.get("/ai", response_class=HTMLResponse, include_in_schema=False)
+async def ai_page(request: Request):
+    """Serve the AI Assistant integration page."""
+    return templates.TemplateResponse("ai.html", {"request": request})

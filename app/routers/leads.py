@@ -363,20 +363,21 @@ async def update_lead(
     return _build_lead_response(lead, db)
 
 
-@router.delete("/{lead_id}", summary="Desativar lead")
+@router.delete("/{lead_id}", summary="Excluir lead permanentemente")
 async def delete_lead(
     lead_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Desativa um lead (soft delete)."""
+    """Exclui um lead permanentemente do banco de dados (Hard delete)."""
     lead = db.query(Lead).filter(Lead.id == lead_id).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead não encontrado")
 
-    lead.is_active = False
+    # The database will handle cascades if configured, but let's delete explicitly
+    db.delete(lead)
     db.commit()
-    return {"message": f"Lead '{lead.nome}' desativado"}
+    return {"message": f"Lead '{lead.nome}' excluído permanentemente"}
 
 
 # ─── IMPORT ──────────────────────────────────────────────────────────
