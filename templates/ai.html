@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Assistente IA — CRM Brasileiros no Atacama</title>
+    <title>Pepétua — Assistente IA — CRM Brasileiros no Atacama</title>
     
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -42,7 +42,7 @@
         .top-header { height: 64px; background: var(--color-white); border-bottom: 1px solid var(--color-dark-200); display: flex; align-items: center; justify-content: space-between; padding: 0 var(--space-8); flex-shrink: 0;}
         .header-left { display: flex; align-items: center; gap: var(--space-4); }
         .page-title { font-size: var(--font-size-lg); font-weight: var(--font-weight-semibold); color: var(--color-dark); }
-        .header-right { display: flex; align-items: center; gap: var(--space-4); }
+        .header-right { display: flex; align-items: center; gap: var(--space-3); }
         .user-info { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-4); border-radius: var(--radius-lg); cursor: pointer; }
         .user-avatar { width: 36px; height: 36px; border-radius: var(--radius-full); background: linear-gradient(135deg, var(--color-primary), var(--color-secondary)); color: var(--color-white); display: flex; align-items: center; justify-content: center; font-weight: var(--font-weight-bold); font-size: var(--font-size-sm); }
         .user-name { font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); color: var(--color-dark); }
@@ -58,7 +58,103 @@
             .sidebar-overlay.show { display: block; }
         }
 
-        /* ===== Chat Specific Styles ===== */
+        /* ===== Chat Layout with Sessions Sidebar ===== */
+        .chat-layout {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* Sessions Panel */
+        .sessions-panel {
+            width: 280px;
+            background: var(--color-white);
+            border-right: 1px solid var(--color-dark-200);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+        }
+        .sessions-header {
+            padding: var(--space-4);
+            border-bottom: 1px solid var(--color-dark-100);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .sessions-header h3 {
+            font-size: var(--font-size-sm);
+            font-weight: var(--font-weight-semibold);
+            color: var(--color-dark-600);
+        }
+        .new-chat-btn {
+            background: var(--color-primary);
+            color: white;
+            border: none;
+            border-radius: var(--radius-lg);
+            padding: var(--space-2) var(--space-3);
+            font-size: var(--font-size-xs);
+            font-weight: var(--font-weight-semibold);
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            display: flex;
+            align-items: center;
+            gap: var(--space-1);
+        }
+        .new-chat-btn:hover { background: var(--color-primary-dark); transform: scale(1.02); }
+        
+        .sessions-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: var(--space-2);
+        }
+        .session-item {
+            padding: var(--space-3) var(--space-4);
+            border-radius: var(--radius-lg);
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: var(--space-2);
+            margin-bottom: var(--space-1);
+        }
+        .session-item:hover { background: var(--color-dark-100); }
+        .session-item.active {
+            background: linear-gradient(135deg, rgba(43,108,176,0.08), rgba(43,108,176,0.15));
+            border: 1px solid rgba(43,108,176,0.2);
+        }
+        .session-item-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .session-item-title {
+            font-size: var(--font-size-sm);
+            font-weight: var(--font-weight-medium);
+            color: var(--color-dark);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .session-item-date {
+            font-size: 10px;
+            color: var(--color-dark-400);
+            margin-top: 2px;
+        }
+        .session-delete-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: var(--font-size-sm);
+            color: var(--color-dark-400);
+            padding: 2px;
+            border-radius: var(--radius-sm);
+            opacity: 0;
+            transition: all var(--transition-fast);
+        }
+        .session-item:hover .session-delete-btn { opacity: 1; }
+        .session-delete-btn:hover { color: var(--color-error); background: rgba(229,62,62,0.1); }
+
+        /* Chat Container */
         .chat-container {
             display: flex;
             flex-direction: column;
@@ -151,15 +247,70 @@
         .chat-bubble code { background: rgba(0,0,0,0.05); padding: 2px 4px; border-radius: 4px; font-family: monospace; }
         .chat-message.user .chat-bubble code { background: rgba(255,255,255,0.2); }
 
+        /* Download links styling */
+        .chat-bubble a[href*="/api/ai/download/"] {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: linear-gradient(135deg, #2B6CB0, #2C5282);
+            color: white !important;
+            padding: 8px 16px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 13px;
+            margin: 4px 0;
+            transition: all 0.2s;
+            box-shadow: 0 2px 6px rgba(43,108,176,0.3);
+        }
+        .chat-bubble a[href*="/api/ai/download/"]:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(43,108,176,0.4);
+        }
+
         /* Input Area */
         .chat-input-container {
-            padding: var(--space-6) var(--space-8);
+            padding: var(--space-4) var(--space-8) var(--space-6);
             background: var(--color-white);
             border-top: 1px solid var(--color-dark-200);
             flex-shrink: 0;
             display: flex;
-            justify-content: center;
+            flex-direction: column;
+            align-items: center;
         }
+
+        /* File preview */
+        .file-preview {
+            max-width: 800px;
+            width: 100%;
+            margin-bottom: var(--space-3);
+            display: none;
+        }
+        .file-preview.show { display: flex; }
+        .file-preview-inner {
+            display: flex;
+            align-items: center;
+            gap: var(--space-3);
+            background: linear-gradient(135deg, #EBF4FF, #E2E8F0);
+            border: 1px solid var(--color-dark-200);
+            border-radius: var(--radius-lg);
+            padding: var(--space-2) var(--space-4);
+            font-size: var(--font-size-sm);
+            width: 100%;
+        }
+        .file-preview-icon { font-size: var(--font-size-xl); }
+        .file-preview-info { flex: 1; }
+        .file-preview-name { font-weight: var(--font-weight-semibold); color: var(--color-dark); }
+        .file-preview-status { font-size: var(--font-size-xs); color: var(--color-dark-500); }
+        .file-preview-remove {
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: var(--color-dark-400);
+            font-size: var(--font-size-base);
+            padding: var(--space-1);
+        }
+        .file-preview-remove:hover { color: var(--color-error); }
 
         .chat-input-wrapper {
             max-width: 800px;
@@ -194,6 +345,20 @@
             outline: none;
             line-height: 1.5;
         }
+
+        .chat-attach-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: var(--color-dark-400);
+            font-size: var(--font-size-lg);
+            padding: var(--space-1);
+            margin-bottom: 6px;
+            margin-right: var(--space-2);
+            border-radius: var(--radius-md);
+            transition: all var(--transition-fast);
+        }
+        .chat-attach-btn:hover { color: var(--color-primary); background: rgba(43,108,176,0.08); }
 
         .chat-send-btn {
             background: var(--color-primary);
@@ -244,6 +409,67 @@
         @keyframes typing {
             0%, 80%, 100% { transform: scale(0); }
             40% { transform: scale(1); }
+        }
+
+        /* Welcome screen */
+        .welcome-screen {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: var(--space-8);
+        }
+        .welcome-icon {
+            font-size: 64px;
+            margin-bottom: var(--space-4);
+            animation: float 3s ease-in-out infinite;
+        }
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+        .welcome-title {
+            font-size: var(--font-size-2xl);
+            font-weight: var(--font-weight-bold);
+            color: var(--color-dark);
+            margin-bottom: var(--space-2);
+        }
+        .welcome-sub {
+            color: var(--color-dark-500);
+            font-size: var(--font-size-base);
+            max-width: 500px;
+            line-height: 1.6;
+            margin-bottom: var(--space-8);
+        }
+        .welcome-suggestions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: var(--space-3);
+            max-width: 600px;
+            width: 100%;
+        }
+        .suggestion-card {
+            background: var(--color-white);
+            border: 1px solid var(--color-dark-200);
+            border-radius: var(--radius-xl);
+            padding: var(--space-4);
+            text-align: left;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+        }
+        .suggestion-card:hover {
+            border-color: var(--color-primary);
+            box-shadow: 0 4px 12px rgba(43,108,176,0.15);
+            transform: translateY(-2px);
+        }
+        .suggestion-card-icon { font-size: var(--font-size-xl); margin-bottom: var(--space-2); }
+        .suggestion-card-text { font-size: var(--font-size-sm); color: var(--color-dark-600); line-height: 1.4; }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .sessions-panel { display: none; }
         }
     </style>
 </head>
@@ -331,7 +557,7 @@
             <header class="top-header">
                 <div class="header-left">
                     <button class="menu-toggle" id="menuToggle">☰</button>
-                    <h2 class="page-title">✨ Assistente de Inteligência Artificial</h2>
+                    <h2 class="page-title">✨ Pepétua — Assistente de IA</h2>
                 </div>
                 <div class="header-right">
                     <div class="user-info">
@@ -344,40 +570,84 @@
                 </div>
             </header>
 
-            <!-- Chat Area -->
-            <div class="chat-container">
-                <div class="chat-history" id="chatHistory">
-                    <!-- Informative welcome message -->
-                    <div class="chat-message system">
-                        <div class="chat-avatar">✨</div>
-                        <div class="chat-bubble">
-                            <p>Olá! Eu sou a sua inteligência artificial focada em te ajudar com tudo no sistema <strong>Brasileiros no Atacama</strong>.</p>
-                            <p>Eu tenho conhecimento em tempo real do banco de dados e posso realizar ações. Você pode me pedir coisas como:</p>
-                            <ul>
-                                <li><em>"Quantos leads novos chegaram esta semana?"</em></li>
-                                <li><em>"Quais são os status do funil de vendas?"</em></li>
-                                <li><em>"Mude o lead joao@email.com para o status de perda e adicione o motivo cancelou a viagem."</em></li>
-                                <li><em>"Crie uma tarefa para eu ligar para o contato X amanhã."</em></li>
-                            </ul>
-                            <p>Como posso te ajudar agora?</p>
-                        </div>
+            <!-- Chat Layout -->
+            <div class="chat-layout">
+                <!-- Sessions Panel -->
+                <div class="sessions-panel">
+                    <div class="sessions-header">
+                        <h3>💬 Conversas</h3>
+                        <button class="new-chat-btn" id="newChatBtn" title="Nova conversa">
+                            ✚ Nova
+                        </button>
+                    </div>
+                    <div class="sessions-list" id="sessionsList">
+                        <!-- Sessions loaded dynamically -->
                     </div>
                 </div>
 
-                <div class="chat-input-container">
-                    <div class="chat-input-wrapper">
-                        <textarea 
-                            id="chatInput" 
-                            class="chat-input" 
-                            placeholder="Pergunte sobre os leads ou peça para eu automatizar algo..."
-                            rows="1"
-                            oninput="this.style.height = ''; this.style.height = (this.scrollHeight > 200 ? 200 : this.scrollHeight) + 'px'"></textarea>
-                        <button id="sendBtn" class="chat-send-btn">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <line x1="22" y1="2" x2="11" y2="13"></line>
-                                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                            </svg>
-                        </button>
+                <!-- Chat Area -->
+                <div class="chat-container">
+                    <div class="chat-history" id="chatHistory">
+                        <!-- Welcome screen or messages -->
+                        <div class="welcome-screen" id="welcomeScreen">
+                            <div class="welcome-icon">✨</div>
+                            <h2 class="welcome-title">Olá! Eu sou a Pepétua</h2>
+                            <p class="welcome-sub">
+                                Sua inteligência artificial do CRM Brasileiros no Atacama.
+                                Posso consultar dados, gerenciar leads, gerar relatórios em PDF e Excel, e muito mais!
+                            </p>
+                            <div class="welcome-suggestions">
+                                <div class="suggestion-card" onclick="useSuggestion('Quantos leads novos chegaram esta semana?')">
+                                    <div class="suggestion-card-icon">📊</div>
+                                    <div class="suggestion-card-text">Quantos leads novos chegaram esta semana?</div>
+                                </div>
+                                <div class="suggestion-card" onclick="useSuggestion('Gere um relatório em Excel com todos os leads ativos')">
+                                    <div class="suggestion-card-icon">📥</div>
+                                    <div class="suggestion-card-text">Gere um relatório em Excel com todos os leads</div>
+                                </div>
+                                <div class="suggestion-card" onclick="useSuggestion('Quais leads estão com viagem marcada para este mês?')">
+                                    <div class="suggestion-card-icon">✈️</div>
+                                    <div class="suggestion-card-text">Leads com viagem marcada para este mês?</div>
+                                </div>
+                                <div class="suggestion-card" onclick="useSuggestion('Crie um PDF com o resumo de vendas do mês')">
+                                    <div class="suggestion-card-icon">📄</div>
+                                    <div class="suggestion-card-text">Crie um PDF com o resumo de vendas do mês</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="chat-input-container">
+                        <!-- File Preview -->
+                        <div class="file-preview" id="filePreview">
+                            <div class="file-preview-inner">
+                                <span class="file-preview-icon" id="filePreviewIcon">📄</span>
+                                <div class="file-preview-info">
+                                    <div class="file-preview-name" id="filePreviewName"></div>
+                                    <div class="file-preview-status" id="filePreviewStatus">Pronto para enviar</div>
+                                </div>
+                                <button class="file-preview-remove" onclick="removeAttachedFile()" title="Remover arquivo">✕</button>
+                            </div>
+                        </div>
+
+                        <div class="chat-input-wrapper">
+                            <button class="chat-attach-btn" id="attachBtn" title="Anexar arquivo (PDF, Excel, CSV, DOCX, TXT)">
+                                📎
+                            </button>
+                            <input type="file" id="fileInput" accept=".pdf,.xlsx,.xls,.csv,.docx,.txt" style="display:none">
+                            <textarea 
+                                id="chatInput" 
+                                class="chat-input" 
+                                placeholder="Pergunte algo para a Pepétua ou envie um arquivo..."
+                                rows="1"
+                                oninput="this.style.height = ''; this.style.height = (this.scrollHeight > 200 ? 200 : this.scrollHeight) + 'px'"></textarea>
+                            <button id="sendBtn" class="chat-send-btn">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                                </svg>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -412,25 +682,249 @@
                 overlay.classList.remove('show');
             });
 
-            // Chat logic
+            // ─── State ────────────────────────────────────
+            let currentSessionId = null;
+            let attachedFileText = null;
+            let attachedFileName = null;
+
             const chatInput = document.getElementById('chatInput');
             const sendBtn = document.getElementById('sendBtn');
             const chatHistory = document.getElementById('chatHistory');
-            
-            // Conversation state linked to the user
-            const chatMemoryKey = `crm_ai_messages_${user.email}`;
-            let messages = JSON.parse(localStorage.getItem(chatMemoryKey) || '[]');
+            const sessionsList = document.getElementById('sessionsList');
+            const welcomeScreen = document.getElementById('welcomeScreen');
+            const fileInput = document.getElementById('fileInput');
+            const filePreview = document.getElementById('filePreview');
 
-            // Configure marked for safety and new lines
-            marked.setOptions({
-                breaks: true,
-                gfm: true
+            // Configure marked
+            marked.setOptions({ breaks: true, gfm: true });
+
+            // ─── Sessions ─────────────────────────────────
+
+            async function loadSessions() {
+                const resp = await Auth.apiRequest('/api/ai/sessions');
+                if (!resp || !resp.ok) return;
+                const data = await resp.json();
+                
+                sessionsList.innerHTML = '';
+                if (data.sessions.length === 0) {
+                    sessionsList.innerHTML = '<div style="padding:16px;text-align:center;color:var(--color-dark-400);font-size:12px;">Nenhuma conversa ainda.<br>Clique em "+ Nova" para começar!</div>';
+                    return;
+                }
+
+                data.sessions.forEach(s => {
+                    const div = document.createElement('div');
+                    div.className = `session-item ${s.id === currentSessionId ? 'active' : ''}`;
+                    div.innerHTML = `
+                        <div class="session-item-info" onclick="loadSession(${s.id})">
+                            <div class="session-item-title">${escapeHtml(s.titulo)}</div>
+                            <div class="session-item-date">${formatSessionDate(s.updated_at)} · ${s.message_count} msgs</div>
+                        </div>
+                        <button class="session-delete-btn" onclick="event.stopPropagation();deleteSession(${s.id})" title="Excluir conversa">🗑️</button>
+                    `;
+                    sessionsList.appendChild(div);
+                });
+            }
+
+            window.loadSession = async function(sessionId) {
+                currentSessionId = sessionId;
+                
+                const resp = await Auth.apiRequest(`/api/ai/sessions/${sessionId}/messages`);
+                if (!resp || !resp.ok) return;
+                const data = await resp.json();
+                
+                // Clear chat and hide welcome
+                chatHistory.innerHTML = '';
+                welcomeScreen?.remove();
+                
+                // Render messages
+                data.messages.forEach(msg => {
+                    appendMessage(msg.role === 'model' ? 'system' : 'user', msg.content, false);
+                });
+                
+                scrollToBottom();
+                loadSessions(); // refresh active state
+            };
+
+            window.deleteSession = async function(sessionId) {
+                if (!confirm('Excluir esta conversa permanentemente?')) return;
+                const resp = await Auth.apiRequest(`/api/ai/sessions/${sessionId}`, { method: 'DELETE' });
+                if (resp && resp.ok) {
+                    if (currentSessionId === sessionId) {
+                        currentSessionId = null;
+                        chatHistory.innerHTML = '';
+                        showWelcome();
+                    }
+                    loadSessions();
+                }
+            };
+
+            document.getElementById('newChatBtn').addEventListener('click', () => {
+                currentSessionId = null;
+                chatHistory.innerHTML = '';
+                showWelcome();
+                loadSessions();
             });
 
-            const appendMessage = (role, content, save = true) => {
+            function showWelcome() {
+                chatHistory.innerHTML = `
+                    <div class="welcome-screen" id="welcomeScreen">
+                        <div class="welcome-icon">✨</div>
+                        <h2 class="welcome-title">Olá! Eu sou a Pepétua</h2>
+                        <p class="welcome-sub">
+                            Sua inteligência artificial do CRM Brasileiros no Atacama.
+                            Posso consultar dados, gerenciar leads, gerar relatórios em PDF e Excel, e muito mais!
+                        </p>
+                        <div class="welcome-suggestions">
+                            <div class="suggestion-card" onclick="useSuggestion('Quantos leads novos chegaram esta semana?')">
+                                <div class="suggestion-card-icon">📊</div>
+                                <div class="suggestion-card-text">Quantos leads novos chegaram esta semana?</div>
+                            </div>
+                            <div class="suggestion-card" onclick="useSuggestion('Gere um relatório em Excel com todos os leads ativos')">
+                                <div class="suggestion-card-icon">📥</div>
+                                <div class="suggestion-card-text">Gere um relatório em Excel com todos os leads</div>
+                            </div>
+                            <div class="suggestion-card" onclick="useSuggestion('Quais leads estão com viagem marcada para este mês?')">
+                                <div class="suggestion-card-icon">✈️</div>
+                                <div class="suggestion-card-text">Leads com viagem marcada para este mês?</div>
+                            </div>
+                            <div class="suggestion-card" onclick="useSuggestion('Crie um PDF com o resumo de vendas do mês')">
+                                <div class="suggestion-card-icon">📄</div>
+                                <div class="suggestion-card-text">Crie um PDF com o resumo de vendas do mês</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // ─── File Upload ──────────────────────────────
+
+            document.getElementById('attachBtn').addEventListener('click', () => {
+                fileInput.click();
+            });
+
+            fileInput.addEventListener('change', async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                attachedFileName = file.name;
+                const ext = file.name.split('.').pop().toLowerCase();
+                const iconMap = {
+                    'pdf': '📕', 'xlsx': '📗', 'xls': '📗', 'csv': '📊',
+                    'docx': '📘', 'txt': '📝'
+                };
+                
+                document.getElementById('filePreviewIcon').textContent = iconMap[ext] || '📄';
+                document.getElementById('filePreviewName').textContent = file.name;
+                document.getElementById('filePreviewStatus').textContent = 'Processando...';
+                filePreview.classList.add('show');
+
+                // Upload and extract text
+                const formData = new FormData();
+                formData.append('file', file);
+
+                try {
+                    const token = Auth.getToken();
+                    const resp = await fetch('/api/ai/upload', {
+                        method: 'POST',
+                        headers: { 'Authorization': `Bearer ${token}` },
+                        body: formData
+                    });
+
+                    if (!resp.ok) {
+                        const err = await resp.json();
+                        document.getElementById('filePreviewStatus').textContent = `❌ ${err.detail || 'Erro ao processar'}`;
+                        attachedFileText = null;
+                        return;
+                    }
+
+                    const data = await resp.json();
+                    attachedFileText = data.text;
+                    document.getElementById('filePreviewStatus').textContent = `✅ ${data.chars_extracted.toLocaleString()} caracteres extraídos`;
+                } catch (err) {
+                    document.getElementById('filePreviewStatus').textContent = '❌ Erro de conexão';
+                    attachedFileText = null;
+                }
+                
+                fileInput.value = '';
+            });
+
+            window.removeAttachedFile = function() {
+                attachedFileText = null;
+                attachedFileName = null;
+                filePreview.classList.remove('show');
+                fileInput.value = '';
+            };
+
+            // ─── Chat Logic ──────────────────────────────
+
+            // Event delegation: captura TODOS os cliques em links de download no chat
+            chatHistory.addEventListener('click', async function(e) {
+                const link = e.target.closest('a');
+                if (!link) return;
+                
+                const href = link.getAttribute('href') || '';
+                
+                // Detectar se é um link de download de arquivo gerado pela IA
+                const downloadMatch = href.match(/\/(?:api\/)?ai\/download\/([^\s\?"#]+\.\w+)/);
+                if (!downloadMatch) return;
+                
+                // Bloquear navegação padrão
+                e.preventDefault();
+                e.stopPropagation();
+                
+                const filename = downloadMatch[1];
+                const correctUrl = '/api/ai/download/' + filename;
+                
+                // Método robusto: Checa erros com fetch, mas usa a URL real para o download
+                // Isso evita o bug do browser ignorar o nome do arquivo em URLs 'blob:'
+                try {
+                    link.style.opacity = '0.5';
+                    link.style.pointerEvents = 'none';
+                    
+                    // 1. Checa se o arquivo existe e o servidor não retorna erro
+                    const resp = await fetch(correctUrl);
+                    
+                    if (!resp.ok) {
+                        let errMsg = 'Arquivo não encontrado';
+                        try {
+                            const errData = await resp.json();
+                            errMsg = errData.detail || errMsg;
+                        } catch(_) {
+                            errMsg = await resp.text();
+                        }
+                        console.error('[Download] Erro HTTP:', resp.status, errMsg);
+                        alert('Erro ao baixar arquivo: ' + errMsg);
+                        return;
+                    }
+                    
+                    // Adiciona um timestamp na URL para "quebrar" definitivamente o cache do navegador
+                    const finalUrl = correctUrl + '?t=' + new Date().getTime();
+                    
+                    // 2. Aciona o download nativo usando Content-Disposition do servidor
+                    console.log('[Download] Acionando download nativo para:', filename);
+                    
+                    // Maneira 100% infalível de disparar download no browser sem criar Blobs:
+                    window.location.href = finalUrl;
+                    
+                } catch (err) {
+                    console.error('[Download] Erro de rede:', err);
+                    alert('Erro de conexão ao baixar o arquivo.');
+                } finally {
+                    link.style.opacity = '';
+                    link.style.pointerEvents = '';
+                }
+            });
+
+            const appendMessage = (role, content, animate = true) => {
                 const isUser = role === 'user';
+                
+                // Remove welcome screen if present
+                const ws = document.getElementById('welcomeScreen');
+                if (ws) ws.remove();
+                
                 const div = document.createElement('div');
                 div.className = `chat-message ${isUser ? 'user' : 'system'}`;
+                if (animate) div.style.animation = 'modalSlideIn 0.3s ease';
                 
                 const avatar = document.createElement('div');
                 avatar.className = 'chat-avatar';
@@ -438,7 +932,6 @@
                 
                 const bubble = document.createElement('div');
                 bubble.className = 'chat-bubble';
-                // Render markdown only for system messages
                 bubble.innerHTML = isUser ? content.replace(/\n/g, '<br>') : marked.parse(content);
                 
                 div.appendChild(avatar);
@@ -446,24 +939,7 @@
                 
                 chatHistory.appendChild(div);
                 scrollToBottom();
-
-                if (save) {
-                    messages.push({ role, content });
-                    localStorage.setItem(chatMemoryKey, JSON.stringify(messages));
-                }
             };
-
-            // Restore chat history on load
-            if (messages.length > 0) {
-                // Remove the default welcome message if there is history
-                chatHistory.innerHTML = '';
-                // The array is already loaded, we just need to render it to the DOM without saving again
-                const historyCopy = [...messages];
-                messages = []; // Temp clear so we don't duplicate on append
-                historyCopy.forEach(msg => {
-                    appendMessage(msg.role, msg.content, true);
-                });
-            }
 
             const appendTypingIndicator = () => {
                 const div = document.createElement('div');
@@ -503,7 +979,13 @@
 
             const sendMessage = async () => {
                 const text = chatInput.value.trim();
-                if (!text) return;
+                if (!text && !attachedFileText) return;
+
+                const displayText = attachedFileName && text 
+                    ? `📎 ${attachedFileName}\n\n${text}` 
+                    : attachedFileName 
+                        ? `📎 ${attachedFileName}\n\n${text || 'Analise este arquivo'}` 
+                        : text;
 
                 // Lock input
                 chatInput.value = '';
@@ -512,7 +994,19 @@
                 sendBtn.disabled = true;
 
                 // Add to UI
-                appendMessage('user', text, true);
+                appendMessage('user', displayText, true);
+
+                // Prepare request body
+                const body = {
+                    session_id: currentSessionId,
+                    message: text || 'Analise o arquivo que enviei.',
+                };
+                if (attachedFileText) {
+                    body.file_context = attachedFileText;
+                }
+
+                // Clear file attachment
+                removeAttachedFile();
 
                 // Show typing
                 appendTypingIndicator();
@@ -520,21 +1014,29 @@
                 try {
                     const response = await Auth.apiRequest('/api/ai/chat', {
                         method: 'POST',
-                        body: JSON.stringify({ messages })
+                        body: JSON.stringify(body)
                     });
 
                     removeTypingIndicator();
 
                     if (!response.ok) {
                         const err = await response.json();
-                        appendMessage('system', `❌ **Erro:** ${err.detail || 'Ocorreu um erro inesperado.'}`, false);
+                        appendMessage('system', `❌ **Erro:** ${err.detail || 'Ocorreu um erro inesperado.'}`, true);
                     } else {
                         const data = await response.json();
                         appendMessage('system', data.content, true);
+                        
+                        // Update session ID if new session was created
+                        if (data.session_id && data.session_id !== currentSessionId) {
+                            currentSessionId = data.session_id;
+                        }
+                        
+                        // Refresh sessions list
+                        loadSessions();
                     }
                 } catch (error) {
                     removeTypingIndicator();
-                    appendMessage('system', `❌ **Erro de conexão:** ${error.message}`, false);
+                    appendMessage('system', `❌ **Erro de conexão:** ${error.message}`, true);
                 } finally {
                     chatInput.disabled = false;
                     sendBtn.disabled = false;
@@ -542,21 +1044,10 @@
                 }
             };
 
-            // Added clear history button
-            const headerRight = document.querySelector('.header-right');
-            const clearBtn = document.createElement('button');
-            clearBtn.textContent = '🗑️ Limpar Chat';
-            clearBtn.className = 'btn btn-outline';
-            clearBtn.style.marginRight = '12px';
-            clearBtn.style.padding = '6px 12px';
-            clearBtn.style.fontSize = '12px';
-            clearBtn.onclick = () => {
-                if(confirm('Apagar todo o histórico de conversa com a IA?')) {
-                    localStorage.removeItem(chatMemoryKey);
-                    location.reload();
-                }
+            window.useSuggestion = function(text) {
+                chatInput.value = text;
+                sendMessage();
             };
-            headerRight.insertBefore(clearBtn, headerRight.firstChild);
 
             sendBtn.addEventListener('click', sendMessage);
             
@@ -566,6 +1057,34 @@
                     sendMessage();
                 }
             });
+
+            // ─── Helpers ──────────────────────────────────
+
+            function escapeHtml(str) {
+                if (!str) return '';
+                const div = document.createElement('div');
+                div.textContent = str;
+                return div.innerHTML;
+            }
+
+            function formatSessionDate(dateStr) {
+                if (!dateStr) return '';
+                const d = new Date(dateStr);
+                const now = new Date();
+                const diffMs = now - d;
+                const diffMin = Math.floor(diffMs / 60000);
+                const diffHrs = Math.floor(diffMs / 3600000);
+                const diffDays = Math.floor(diffMs / 86400000);
+
+                if (diffMin < 1) return 'agora';
+                if (diffMin < 60) return `${diffMin}min atrás`;
+                if (diffHrs < 24) return `${diffHrs}h atrás`;
+                if (diffDays < 7) return `${diffDays}d atrás`;
+                return d.toLocaleDateString('pt-BR');
+            }
+
+            // ─── Init ─────────────────────────────────────
+            loadSessions();
         });
     </script>
 </body>

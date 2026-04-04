@@ -374,7 +374,18 @@ async def delete_lead(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead não encontrado")
 
-    # The database will handle cascades if configured, but let's delete explicitly
+    # Limpar todas as referências explicitamente para evitar problemas com SQLite
+    # 1. Tags (many-to-many)
+    lead.tags.clear()
+    # 2. Funnel entries
+    db.query(FunnelEntry).filter(FunnelEntry.lead_id == lead_id).delete()
+    # 3. Lead history
+    from app.models.pipeline import LeadHistory
+    db.query(LeadHistory).filter(LeadHistory.lead_id == lead_id).delete()
+    # 4. Tasks
+    from app.models.task import Task
+    db.query(Task).filter(Task.lead_id == lead_id).delete()
+
     db.delete(lead)
     db.commit()
     return {"message": f"Lead '{lead.nome}' excluído permanentemente"}

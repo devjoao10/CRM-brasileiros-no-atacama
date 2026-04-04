@@ -273,11 +273,201 @@ def call_internal_api(method: str, path: str, payload_json: str = None) -> str:
     except Exception as e:
         return json.dumps({"error": str(e)})
 
+# =====================================================================
+# Document Generation Tools
+# =====================================================================
+
+UPLOAD_DIR = None
+
+def _get_upload_dir():
+    global UPLOAD_DIR
+    if UPLOAD_DIR is None:
+        import os
+        UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads")
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+    return UPLOAD_DIR
+
+def generate_excel_document(filename: str, sheet_name: str, headers: str, rows: str) -> str:
+    """
+    Gera um arquivo Excel (.xlsx) com os dados fornecidos e retorna o link para download.
+    Use esta ferramenta quando o usuário pedir um relatório, lista ou dados em formato Excel/planilha.
+    
+    Args:
+        filename: Nome do arquivo sem extensão (ex: 'relatorio_leads'). Será adicionado .xlsx automaticamente.
+        sheet_name: Nome da aba/planilha (ex: 'Leads').
+        headers: Cabeçalhos das colunas separados por '|' (ex: 'Nome|Email|Status').
+        rows: Linhas de dados, cada linha separada por ';;' e cada coluna por '|' (ex: 'João|joao@email.com|Ativo;;Maria|maria@email.com|Inativo').
+    """
+    import os
+    import uuid
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = sheet_name
+
+        # Parse headers
+        header_list = [h.strip() for h in headers.split("|")]
+        
+        # Estilizar cabeçalhos
+        header_font = Font(bold=True, color="FFFFFF", size=11)
+        header_fill = PatternFill(start_color="2B6CB0", end_color="2B6CB0", fill_type="solid")
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+
+        for col_idx, header in enumerate(header_list, 1):
+            cell = ws.cell(row=1, column=col_idx, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center')
+            cell.border = thin_border
+
+        # Parse e inserir dados
+        if rows and rows.strip():
+            row_list = rows.split(";;")
+            for row_idx, row_data in enumerate(row_list, 2):
+                cols = [c.strip() for c in row_data.split("|")]
+                for col_idx, value in enumerate(cols, 1):
+                    cell = ws.cell(row=row_idx, column=col_idx, value=value)
+                    cell.border = thin_border
+
+        # Auto-ajustar largura das colunas
+        for col in ws.columns:
+            max_length = 0
+            col_letter = col[0].column_letter
+            for cell in col:
+                try:
+                    if cell.value:
+                        max_length = max(max_length, len(str(cell.value)))
+                except:
+                    pass
+            ws.column_dimensions[col_letter].width = min(max_length + 4, 50)
+
+        # Salvar
+        safe_filename = f"{filename.replace(' ', '_')}_{uuid.uuid4().hex[:6]}.xlsx"
+        filepath = os.path.join(_get_upload_dir(), safe_filename)
+        wb.save(filepath)
+
+        # Validação pós-save: confirmar que o arquivo foi realmente salvo e é válido
+        if not os.path.isfile(filepath):
+            return json.dumps({"error": f"Falha ao salvar arquivo: {filepath} não existe após wb.save()"})
+        
+        saved_size = os.path.getsize(filepath)
+        with open(filepath, "rb") as check_f:
+            magic = check_f.read(4)
+        
+        if magic != b'PK\x03\x04':
+            return json.dumps({"error": f"Arquivo salvo mas não é XLSX válido (magic bytes: {magic})"})
+        
+        print(f"[EXCEL_GEN] Arquivo gerado: {safe_filename} | {saved_size} bytes | path: {filepath}")
+
+        download_url = f"/api/ai/download/{safe_filename}"
+        return json.dumps({
+            "success": True,
+            "filename": safe_filename,
+            "file_size_bytes": saved_size,
+            "download_url": download_url,
+            "message": f"Arquivo Excel gerado com sucesso! Link: {download_url}"
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return json.dumps({"error": str(e)})
+
+def generate_pdf_document(filename: str, title: str, content: str) -> str:
+    """
+    Gera um arquivo PDF com o conteúdo fornecido e retorna o link para download.
+    Use esta ferramenta quando o usuário pedir um documento, relatório ou contrato em PDF.
+    
+    Args:
+        filename: Nome do arquivo sem extensão (ex: 'relatorio_mensal'). Será adicionado .pdf automaticamente.
+        title: Título do documento que aparecerá no topo do PDF.
+        content: Conteúdo do documento. Use '\\n' para quebras de linha. Use '## ' no início de uma linha para subtítulos. Use '- ' no início para listas.
+    """
+    import os
+    import uuid
+    try:
+        from fpdf import FPDF
+
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_auto_page_break(auto=True, margin=20)
+        
+        # Título
+        pdf.set_font("Helvetica", "B", 18)
+        pdf.set_text_color(43, 108, 176)  # Cor primária do CRM
+        pdf.cell(0, 15, title, new_x="LMARGIN", new_y="NEXT", align="C")
+        pdf.ln(5)
+        
+        # Linha decorativa
+        pdf.set_draw_color(43, 108, 176)
+        pdf.set_line_width(0.5)
+        pdf.line(20, pdf.get_y(), 190, pdf.get_y())
+        pdf.ln(8)
+        
+        # Data de geração
+        from datetime import datetime
+        pdf.set_font("Helvetica", "I", 9)
+        pdf.set_text_color(128, 128, 128)
+        pdf.cell(0, 6, f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x="LMARGIN", new_y="NEXT", align="R")
+        pdf.ln(5)
+
+        # Conteúdo
+        lines = content.split("\\n") if "\\n" in content else content.split("\n")
+        for line in lines:
+            line = line.strip()
+            if not line:
+                pdf.ln(4)
+                continue
+                
+            if line.startswith("## "):
+                pdf.set_font("Helvetica", "B", 13)
+                pdf.set_text_color(43, 108, 176)
+                pdf.cell(0, 10, line[3:], new_x="LMARGIN", new_y="NEXT")
+                pdf.ln(2)
+            elif line.startswith("- "):
+                pdf.set_font("Helvetica", "", 10)
+                pdf.set_text_color(50, 50, 50)
+                pdf.cell(8, 6, chr(8226))  # bullet point
+                pdf.multi_cell(0, 6, line[2:])
+            else:
+                pdf.set_font("Helvetica", "", 10)
+                pdf.set_text_color(50, 50, 50)
+                pdf.multi_cell(0, 6, line)
+
+        # Rodapé
+        pdf.ln(10)
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.set_text_color(150, 150, 150)
+        pdf.cell(0, 6, "CRM Brasileiros no Atacama - Documento gerado automaticamente pela IA", new_x="LMARGIN", new_y="NEXT", align="C")
+
+        safe_filename = f"{filename.replace(' ', '_')}_{uuid.uuid4().hex[:6]}.pdf"
+        filepath = os.path.join(_get_upload_dir(), safe_filename)
+        pdf.output(filepath)
+
+        download_url = f"/api/ai/download/{safe_filename}"
+        return json.dumps({
+            "success": True,
+            "filename": safe_filename,
+            "download_url": download_url,
+            "message": f"PDF gerado com sucesso! Link: {download_url}"
+        })
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
 # List of tools to pass to Gemini
 AVAILABLE_TOOLS = [
     get_database_schema, run_select_query, run_sql_write_query, 
     update_lead_status, create_task, create_lead, add_tag_to_lead,
-    get_api_endpoints, call_internal_api
+    get_api_endpoints, call_internal_api,
+    generate_excel_document, generate_pdf_document
 ]
 
 # Dictionary to map function names to actual functions during execution
@@ -291,4 +481,6 @@ TOOL_FUNCTIONS = {
     "add_tag_to_lead": add_tag_to_lead,
     "get_api_endpoints": get_api_endpoints,
     "call_internal_api": call_internal_api,
+    "generate_excel_document": generate_excel_document,
+    "generate_pdf_document": generate_pdf_document,
 }

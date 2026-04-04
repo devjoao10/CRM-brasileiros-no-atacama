@@ -11,6 +11,7 @@ from app.models.pipeline import Funnel, FunnelEntry, LeadHistory  # noqa: F401
 from app.models.segment import Segment  # noqa: F401
 from app.models.team import Team, user_teams  # noqa: F401
 from app.models.task import Task  # noqa: F401
+from app.models.chat import ChatSession, ChatMessage  # noqa: F401
 from app.seed import seed_database
 
 # Create tables & seed on startup

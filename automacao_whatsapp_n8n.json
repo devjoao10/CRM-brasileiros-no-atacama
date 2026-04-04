@@ -1,0 +1,219 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-webhook",
+        "options": {}
+      },
+      "id": "e7b0e2ad-8c10-449e-b816-1f7c10b7f8f9",
+      "name": "Webhook (WhatsApp)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [0, 200]
+    },
+    {
+      "parameters": {
+        "url": "=http://SEU_DOMINIO/api/leads?search={{$json.body.numero}}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer SEU_TOKEN"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a931a784-0ab1-4209-844c-c0e8620baea4",
+      "name": "Buscar Lead (CRM)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [220, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.total > 0}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "f516a8b1-bf7c-482a-aead-0af85d829156",
+      "name": "Lead Existe?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [440, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://SEU_DOMINIO/api/leads",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "nome",
+              "value": "Lead WhatsApp"
+            },
+            {
+              "name": "whatsapp",
+              "value": "={{ $('Webhook (WhatsApp)').item.json.body.numero }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "51def59e-afde-48dc-b6fa-9a008c2a3d0b",
+      "name": "Criar Novo Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [660, 360]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://SEU_DOMINIO/api/pipeline/funnels/1/leads",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "lead_id",
+              "value": "={{$json.id}}"
+            },
+            {
+              "name": "etapa_id",
+              "value": "novo"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "62e15b5e-2f92-48df-bdeb-82ed0ff25707",
+      "name": "Colocar no Funil",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [880, 360]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Webhook (WhatsApp)').item.json.body.mensagem }}",
+        "options": {
+          "systemMessage": "=Você é Bia, especialista de vendas da Brasileiros no Atacama. ID do Lead com quem vc fala é {{$('Lead Existe?').item.json.id}}. Qualifique esse lead. Use suas Tools para atualizar o sistema."
+        }
+      },
+      "id": "21e204c3-fc14-419b-ab0a-31ac726b2aa1",
+      "name": "AI Agent (Gemini)",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1,
+      "position": [1100, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "URL_DO_SEU_WHATSAPP_API",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "to",
+              "value": "={{ $('Webhook (WhatsApp)').item.json.body.numero }}"
+            },
+            {
+              "name": "message",
+              "value": "={{ $json.output }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9218d6e3-53d9-4b68-9844-0b13cfcdbcbb",
+      "name": "Enviar Resposta WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1400, 200]
+    }
+  ],
+  "connections": {
+    "Webhook (WhatsApp)": {
+      "main": [
+        [
+          {
+            "node": "Buscar Lead (CRM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Lead (CRM)": {
+      "main": [
+        [
+          {
+            "node": "Lead Existe?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lead Existe?": {
+      "main": [
+        [
+          {
+            "node": "AI Agent (Gemini)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Criar Novo Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar Novo Lead": {
+      "main": [
+        [
+          {
+            "node": "Colocar no Funil",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Colocar no Funil": {
+      "main": [
+        [
+          {
+            "node": "AI Agent (Gemini)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent (Gemini)": {
+      "main": [
+        [
+          {
+            "node": "Enviar Resposta WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
