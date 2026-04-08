@@ -23,6 +23,28 @@ router = APIRouter(prefix="/api/ai", tags=["Assistente IA"])
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+@router.get("/test_pdf")
+def debug_test_pdf():
+    from app.services.ai_tools import generate_pdf_document
+    import traceback
+    try:
+        ret = generate_pdf_document("test", "Test PDF", "Hello world")
+        return {"result": ret}
+    except Exception as e:
+        return {"error": str(e), "trace": traceback.format_exc()}
+
+@router.get("/install_deps")
+def install_dependencies():
+    import subprocess
+    import sys
+    try:
+        out = subprocess.check_output([sys.executable, "-m", "pip", "install", "fpdf2"], stderr=subprocess.STDOUT)
+        return {"success": True, "output": out.decode()}
+    except subprocess.CalledProcessError as e:
+        return {"success": False, "error": e.output.decode()}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 # Inicializa as credenciais da Gemini
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)

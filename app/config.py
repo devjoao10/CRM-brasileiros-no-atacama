@@ -20,6 +20,14 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"
 # Database
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./crm_atacama.db")
 
+# E-mail (SMTP)
+MAIL_USERNAME = os.getenv("MAIL_USERNAME", "seu_email@empresa.com")
+MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "sua_senha")
+MAIL_FROM = os.getenv("MAIL_FROM", "seu_email@empresa.com")
+MAIL_PORT = int(os.getenv("MAIL_PORT", 587))
+MAIL_SERVER = os.getenv("MAIL_SERVER", "smtp.hostinger.com")
+MAIL_FROM_NAME = os.getenv("MAIL_FROM_NAME", "Brasileiros no Atacama")
+
 # API
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 API_PREFIX = "/api"

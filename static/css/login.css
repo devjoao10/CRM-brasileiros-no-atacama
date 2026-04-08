@@ -1,6 +1,7 @@
 /* ============================================
    LOGIN PAGE
    ============================================ */
+@import url('https://fonts.googleapis.com/css2?family=Caveat+Brush&display=swap');
 
 .login-container {
     display: flex;
@@ -29,8 +30,8 @@
     left: -50%;
     width: 200%;
     height: 200%;
-    background: radial-gradient(circle at 30% 70%, rgba(192, 86, 33, 0.15) 0%, transparent 50%),
-                radial-gradient(circle at 70% 30%, rgba(43, 108, 176, 0.2) 0%, transparent 50%);
+    background: radial-gradient(circle at 30% 70%, rgba(163, 117, 84, 0.15) 0%, transparent 50%),
+                radial-gradient(circle at 70% 30%, rgba(54, 107, 133, 0.2) 0%, transparent 50%);
     animation: brandGlow 8s ease-in-out infinite alternate;
 }
 
@@ -57,13 +58,14 @@
 }
 
 .brand-logo {
-    width: 160px;
-    height: 160px;
-    margin: 0 auto var(--space-8);
-    border-radius: var(--radius-full);
-    overflow: hidden;
-    box-shadow: 0 0 40px rgba(214, 158, 46, 0.3), 0 0 80px rgba(43, 108, 176, 0.2);
+    width: auto;
+    max-width: 280px;
+    height: auto;
+    margin: 0 auto;
     animation: logoFloat 3s ease-in-out infinite alternate;
+    display: flex;
+    justify-content: center;
+    align-items: center;
 }
 
 @keyframes logoFloat {
@@ -73,16 +75,19 @@
 
 .brand-logo img {
     width: 100%;
-    height: 100%;
-    object-fit: cover;
+    height: auto;
+    object-fit: contain;
 }
 
 .brand-title {
-    font-size: var(--font-size-3xl);
-    font-weight: var(--font-weight-bold);
+    font-family: 'Caveat Brush', cursive;
+    font-size: 3.5rem;
+    font-weight: 400;
     color: var(--color-white);
     margin-bottom: var(--space-3);
-    letter-spacing: -0.02em;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    line-height: 1;
 }
 
 .brand-title span {
@@ -185,7 +190,7 @@
 .login-form .form-input:focus {
     background: var(--color-white);
     border-color: var(--color-primary);
-    box-shadow: 0 0 0 4px rgba(43, 108, 176, 0.1);
+    box-shadow: 0 0 0 4px rgba(54, 107, 133, 0.1);
 }
 
 .login-submit {
@@ -213,17 +218,18 @@
 }
 
 .mobile-logo img {
-    width: 80px;
-    height: 80px;
-    border-radius: var(--radius-full);
+    width: auto;
+    max-width: 140px;
+    height: auto;
     margin: 0 auto;
-    box-shadow: var(--shadow-lg);
 }
 
 .mobile-logo .mobile-brand-name {
     margin-top: var(--space-3);
-    font-size: var(--font-size-lg);
-    font-weight: var(--font-weight-bold);
+    font-family: 'Caveat Brush', cursive;
+    font-size: 2rem;
+    font-weight: 400;
+    text-transform: uppercase;
     color: var(--color-dark);
 }
 

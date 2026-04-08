@@ -1,128 +1,666 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Equipe e Usuários — CRM Brasileiros no Atacama</title>
-    
+
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    
+
     <link rel="stylesheet" href="/static/css/variables.css">
     <link rel="stylesheet" href="/static/css/base.css">
     <link rel="stylesheet" href="/static/css/components.css">
     <link rel="icon" href="/static/img/logo.png" type="image/png">
 
     <style>
-        .dashboard-layout { display: flex; min-height: 100vh; }
-        
-        /* Sidebar (Same as dashboard) */
-        .sidebar { width: 260px; background: linear-gradient(180deg, var(--color-dark) 0%, var(--color-dark-700) 100%); color: var(--color-white); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: var(--z-sidebar); }
-        .sidebar-header { padding: var(--space-6); display: flex; align-items: center; gap: var(--space-4); border-bottom: 1px solid rgba(255, 255, 255, 0.1); }
-        .sidebar-logo { width: 44px; height: 44px; border-radius: var(--radius-full); overflow: hidden; flex-shrink: 0; }
-        .sidebar-logo img { width: 100%; height: 100%; object-fit: cover; }
-        .sidebar-brand { font-size: var(--font-size-sm); font-weight: var(--font-weight-bold); line-height: 1.3; }
-        .sidebar-brand span { color: var(--color-accent-light); }
-        .sidebar-nav { flex: 1; padding: var(--space-4) 0; overflow-y: auto; }
-        .nav-section { padding: var(--space-2) var(--space-6); margin-top: var(--space-4); }
-        .nav-section-title { font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255, 255, 255, 0.4); margin-bottom: var(--space-2); }
-        .nav-item { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-6); color: rgba(255, 255, 255, 0.7); font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); transition: all var(--transition-fast); cursor: pointer; text-decoration: none; border-left: 3px solid transparent; }
-        .nav-item:hover { background: rgba(255, 255, 255, 0.05); color: var(--color-white); }
-        .nav-item.active { background: rgba(43, 108, 176, 0.15); color: var(--color-white); border-left-color: var(--color-primary-light); }
-        .nav-item .nav-icon { font-size: var(--font-size-lg); width: 24px; text-align: center; }
-        .nav-item .nav-badge { margin-left: auto; background: var(--color-secondary); color: var(--color-white); font-size: var(--font-size-xs); padding: 2px 8px; border-radius: var(--radius-full); font-weight: var(--font-weight-semibold); }
-        .sidebar-footer { padding: var(--space-4) var(--space-6); border-top: 1px solid rgba(255, 255, 255, 0.1); }
+        .dashboard-layout {
+            display: flex;
+            min-height: 100vh;
+        }
 
-        .main-content { flex: 1; margin-left: 260px; display: flex; flex-direction: column; }
-        .top-header { height: 64px; background: var(--color-white); border-bottom: 1px solid var(--color-dark-200); display: flex; align-items: center; justify-content: space-between; padding: 0 var(--space-8); position: sticky; top: 0; z-index: 100; }
-        .header-left { display: flex; align-items: center; gap: var(--space-4); }
-        .menu-toggle { display: none; background: none; border: none; font-size: var(--font-size-xl); cursor: pointer; padding: var(--space-2); color: var(--color-dark-600); }
-        .page-title { font-size: var(--font-size-lg); font-weight: var(--font-weight-semibold); color: var(--color-dark); }
-        .header-right { display: flex; align-items: center; gap: var(--space-4); }
-        .user-info { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-4); border-radius: var(--radius-lg); cursor: pointer; transition: background var(--transition-fast); }
-        .user-info:hover { background: var(--color-dark-100); }
-        .user-avatar { width: 36px; height: 36px; border-radius: var(--radius-full); background: linear-gradient(135deg, var(--color-primary), var(--color-secondary)); color: var(--color-white); display: flex; align-items: center; justify-content: center; font-weight: var(--font-weight-bold); font-size: var(--font-size-sm); }
-        .user-name { font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); color: var(--color-dark); }
-        .user-role { font-size: var(--font-size-xs); color: var(--color-dark-500); }
-        .content-area { flex: 1; padding: var(--space-8); background: var(--color-light); }
+        /* Sidebar (Same as dashboard) */
+        .sidebar {
+            width: 260px;
+            background: linear-gradient(180deg, var(--color-dark) 0%, var(--color-dark-700) 100%);
+            color: var(--color-white);
+            display: flex;
+            flex-direction: column;
+            position: fixed;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            z-index: var(--z-sidebar);
+        }
+
+        .sidebar-header {
+            padding: var(--space-6);
+            display: flex;
+            align-items: center;
+            gap: var(--space-4);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .sidebar-logo {
+            width: 44px;
+            height: 44px;
+            border-radius: var(--radius-full);
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+
+        .sidebar-logo img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .sidebar-brand {
+            font-size: var(--font-size-sm);
+            font-weight: var(--font-weight-bold);
+            line-height: 1.3;
+        }
+
+        .sidebar-brand span {
+            color: var(--color-accent-light);
+        }
+
+        .sidebar-nav {
+            flex: 1;
+            padding: var(--space-4) 0;
+            overflow-y: auto;
+        }
+
+        .nav-section {
+            padding: var(--space-2) var(--space-6);
+            margin-top: var(--space-4);
+        }
+
+        .nav-section-title {
+            font-size: var(--font-size-xs);
+            font-weight: var(--font-weight-semibold);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: rgba(255, 255, 255, 0.4);
+            margin-bottom: var(--space-2);
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: var(--space-3);
+            padding: var(--space-3) var(--space-6);
+            color: rgba(255, 255, 255, 0.7);
+            font-size: var(--font-size-sm);
+            font-weight: var(--font-weight-medium);
+            transition: all var(--transition-fast);
+            cursor: pointer;
+            text-decoration: none;
+            border-left: 3px solid transparent;
+        }
+
+        .nav-item:hover {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--color-white);
+        }
+
+        .nav-item.active {
+            background: rgba(54, 107, 133, 0.15);
+            color: var(--color-white);
+            border-left-color: var(--color-primary-light);
+        }
+
+        .nav-item .nav-icon {
+            font-size: var(--font-size-lg);
+            width: 24px;
+            text-align: center;
+        }
+
+        .nav-item .nav-badge {
+            margin-left: auto;
+            background: var(--color-secondary);
+            color: var(--color-white);
+            font-size: var(--font-size-xs);
+            padding: 2px 8px;
+            border-radius: var(--radius-full);
+            font-weight: var(--font-weight-semibold);
+        }
+
+        .sidebar-footer {
+            padding: var(--space-4) var(--space-6);
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .main-content {
+            flex: 1;
+            margin-left: 260px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .top-header {
+            height: 64px;
+            background: var(--color-white);
+            border-bottom: 1px solid var(--color-dark-200);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 var(--space-8);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: var(--space-4);
+        }
+
+        .menu-toggle {
+            display: none;
+            background: none;
+            border: none;
+            font-size: var(--font-size-xl);
+            cursor: pointer;
+            padding: var(--space-2);
+            color: var(--color-dark-600);
+        }
+
+        .page-title {
+            font-size: var(--font-size-lg);
+            font-weight: var(--font-weight-semibold);
+            color: var(--color-dark);
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: var(--space-4);
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: var(--space-3);
+            padding: var(--space-2) var(--space-4);
+            border-radius: var(--radius-lg);
+            cursor: pointer;
+            transition: background var(--transition-fast);
+        }
+
+        .user-info:hover {
+            background: var(--color-dark-100);
+        }
+
+        .user-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: var(--radius-full);
+            background: linear-gradient(135deg, var(--color-primary), var(--color-secondary));
+            color: var(--color-white);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: var(--font-weight-bold);
+            font-size: var(--font-size-sm);
+        }
+
+        .user-name {
+            font-size: var(--font-size-sm);
+            font-weight: var(--font-weight-medium);
+            color: var(--color-dark);
+        }
+
+        .user-role {
+            font-size: var(--font-size-xs);
+            color: var(--color-dark-500);
+        }
+
+        .content-area {
+            flex: 1;
+            padding: var(--space-8);
+            background: var(--color-light);
+        }
 
         /* Tabs */
-        .tabs-nav { display: flex; gap: var(--space-6); border-bottom: 2px solid var(--color-dark-200); margin-bottom: var(--space-6); }
-        .tab-btn { background: none; border: none; padding: var(--space-3) var(--space-2); font-size: var(--font-size-base); font-weight: var(--font-weight-semibold); color: var(--color-dark-500); cursor: pointer; position: relative; transition: color var(--transition-fast); }
-        .tab-btn:hover { color: var(--color-dark); }
-        .tab-btn.active { color: var(--color-primary); }
-        .tab-btn.active::after { content: ''; position: absolute; bottom: -2px; left: 0; width: 100%; height: 2px; background: var(--color-primary); border-radius: 2px 2px 0 0; }
-        
-        .tab-content { display: none; animation: fadeIn .3s ease; }
-        .tab-content.active { display: block; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        .tabs-nav {
+            display: flex;
+            gap: var(--space-6);
+            border-bottom: 2px solid var(--color-dark-200);
+            margin-bottom: var(--space-6);
+        }
+
+        .tab-btn {
+            background: none;
+            border: none;
+            padding: var(--space-3) var(--space-2);
+            font-size: var(--font-size-base);
+            font-weight: var(--font-weight-semibold);
+            color: var(--color-dark-500);
+            cursor: pointer;
+            position: relative;
+            transition: color var(--transition-fast);
+        }
+
+        .tab-btn:hover {
+            color: var(--color-dark);
+        }
+
+        .tab-btn.active {
+            color: var(--color-primary);
+        }
+
+        .tab-btn.active::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: var(--color-primary);
+            border-radius: 2px 2px 0 0;
+        }
+
+        .tab-content {
+            display: none;
+            animation: fadeIn .3s ease;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(5px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
 
         /* Table Styles */
-        .card-table-wrapper { background: var(--color-white); border-radius: var(--radius-xl); box-shadow: var(--shadow-sm); overflow: hidden; margin-top: var(--space-4); }
-        .data-table { width: 100%; border-collapse: collapse; text-align: left; }
-        .data-table th { padding: var(--space-4) var(--space-6); background: var(--color-dark-50); font-weight: var(--font-weight-semibold); font-size: var(--font-size-xs); text-transform: uppercase; color: var(--color-dark-500); letter-spacing: 0.05em; border-bottom: 2px solid var(--color-dark-100); }
-        .data-table td { padding: var(--space-4) var(--space-6); border-bottom: 1px solid var(--color-dark-100); font-size: var(--font-size-sm); color: var(--color-dark-700); vertical-align: middle; }
-        .data-table tr:hover td { background: var(--color-dark-50); }
-        .actions-cell button { background: none; border: none; cursor: pointer; padding: var(--space-1) var(--space-2); font-size: var(--font-size-base); border-radius: var(--radius-sm); transition: background var(--transition-fast); }
-        .actions-cell button:hover { background: var(--color-dark-200); }
+        .card-table-wrapper {
+            background: var(--color-white);
+            border-radius: var(--radius-xl);
+            box-shadow: var(--shadow-sm);
+            overflow: hidden;
+            margin-top: var(--space-4);
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+
+        .data-table th {
+            padding: var(--space-4) var(--space-6);
+            background: var(--color-dark-50);
+            font-weight: var(--font-weight-semibold);
+            font-size: var(--font-size-xs);
+            text-transform: uppercase;
+            color: var(--color-dark-500);
+            letter-spacing: 0.05em;
+            border-bottom: 2px solid var(--color-dark-100);
+        }
+
+        .data-table td {
+            padding: var(--space-4) var(--space-6);
+            border-bottom: 1px solid var(--color-dark-100);
+            font-size: var(--font-size-sm);
+            color: var(--color-dark-700);
+            vertical-align: middle;
+        }
+
+        .data-table tr:hover td {
+            background: var(--color-dark-50);
+        }
+
+        .actions-cell button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: var(--space-1) var(--space-2);
+            font-size: var(--font-size-base);
+            border-radius: var(--radius-sm);
+            transition: background var(--transition-fast);
+        }
+
+        .actions-cell button:hover {
+            background: var(--color-dark-200);
+        }
 
         /* Status & Badges */
-        .status-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: var(--radius-full); font-size: 11px; font-weight: 600; }
-        .status-active { background: rgba(56, 161, 105, 0.1); color: var(--color-success); }
-        .status-inactive { background: rgba(229, 62, 62, 0.1); color: var(--color-danger); }
-        .email-badge { padding: 2px 8px; border-radius: var(--radius-full); font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
-        .email-verified { background: rgba(43, 108, 176, 0.1); color: var(--color-primary); }
-        .email-pending { background: rgba(221, 107, 32, 0.1); color: var(--color-warning); }
-        .team-pill { display: inline-block; padding: 2px 8px; background: var(--color-dark-100); border-radius: var(--radius-full); font-size: 11px; font-weight: 600; margin: 2px; }
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: var(--radius-full);
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .status-active {
+            background: rgba(56, 161, 105, 0.1);
+            color: var(--color-success);
+        }
+
+        .status-inactive {
+            background: rgba(229, 62, 62, 0.1);
+            color: var(--color-danger);
+        }
+
+        .email-badge {
+            padding: 2px 8px;
+            border-radius: var(--radius-full);
+            font-size: 11px;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .email-verified {
+            background: rgba(54, 107, 133, 0.1);
+            color: var(--color-primary);
+        }
+
+        .email-pending {
+            background: rgba(221, 107, 32, 0.1);
+            color: var(--color-warning);
+        }
+
+        .team-pill {
+            display: inline-block;
+            padding: 2px 8px;
+            background: var(--color-dark-100);
+            border-radius: var(--radius-full);
+            font-size: 11px;
+            font-weight: 600;
+            margin: 2px;
+        }
 
         /* Teams Grid */
-        .teams-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--space-6); margin-top: var(--space-4); }
-        .team-card { background: var(--color-white); border-radius: var(--radius-xl); box-shadow: var(--shadow-sm); overflow: hidden; border-left: 5px solid transparent; transition: all var(--transition-base); }
-        .team-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); }
-        .team-header { padding: var(--space-5) var(--space-6); border-bottom: 1px solid var(--color-dark-100); display: flex; justify-content: space-between; align-items: flex-start; }
-        .team-name { font-size: var(--font-size-lg); font-weight: var(--font-weight-bold); color: var(--color-dark); }
-        .team-desc { font-size: var(--font-size-sm); color: var(--color-dark-500); margin-top: var(--space-1); }
-        .team-body { padding: var(--space-5) var(--space-6); }
-        .team-members-title { font-size: var(--font-size-xs); font-weight: 600; color: var(--color-dark-400); text-transform: uppercase; margin-bottom: var(--space-3); }
-        .team-member-list { display: flex; flex-direction: column; gap: var(--space-2); }
-        .team-member-item { display: flex; align-items: center; gap: var(--space-3); font-size: var(--font-size-sm); }
-        .member-avatar { width: 28px; height: 28px; border-radius: var(--radius-full); background: var(--color-dark-100); color: var(--color-dark); font-weight: 600; display: flex; align-items: center; justify-content: center; font-size: 11px; }
+        .teams-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: var(--space-6);
+            margin-top: var(--space-4);
+        }
 
-        .header-actions { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-4); }
+        .team-card {
+            background: var(--color-white);
+            border-radius: var(--radius-xl);
+            box-shadow: var(--shadow-sm);
+            overflow: hidden;
+            border-left: 5px solid transparent;
+            transition: all var(--transition-base);
+        }
+
+        .team-card:hover {
+            transform: translateY(-3px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .team-header {
+            padding: var(--space-5) var(--space-6);
+            border-bottom: 1px solid var(--color-dark-100);
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+
+        .team-name {
+            font-size: var(--font-size-lg);
+            font-weight: var(--font-weight-bold);
+            color: var(--color-dark);
+        }
+
+        .team-desc {
+            font-size: var(--font-size-sm);
+            color: var(--color-dark-500);
+            margin-top: var(--space-1);
+        }
+
+        .team-body {
+            padding: var(--space-5) var(--space-6);
+        }
+
+        .team-members-title {
+            font-size: var(--font-size-xs);
+            font-weight: 600;
+            color: var(--color-dark-400);
+            text-transform: uppercase;
+            margin-bottom: var(--space-3);
+        }
+
+        .team-member-list {
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-2);
+        }
+
+        .team-member-item {
+            display: flex;
+            align-items: center;
+            gap: var(--space-3);
+            font-size: var(--font-size-sm);
+        }
+
+        .member-avatar {
+            width: 28px;
+            height: 28px;
+            border-radius: var(--radius-full);
+            background: var(--color-dark-100);
+            color: var(--color-dark);
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+        }
+
+        .header-actions {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: var(--space-4);
+        }
 
         /* Modal Styles */
-        .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: var(--z-modal); align-items: center; justify-content: center; backdrop-filter: blur(4px); }
-        .modal-overlay.show { display: flex; }
-        .modal { background: var(--color-white); border-radius: var(--radius-2xl); width: 92%; max-width: 500px; box-shadow: var(--shadow-xl); animation: modalSlideIn .3s ease; }
-        @keyframes modalSlideIn { from { opacity: 0; transform: translateY(20px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
-        .modal-header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-5) var(--space-6); border-bottom: 1px solid var(--color-dark-100); }
-        .modal-header h3 { font-size: var(--font-size-xl); font-weight: var(--font-weight-bold); }
-        .modal-close { background: none; border: none; font-size: var(--font-size-xl); cursor: pointer; color: var(--color-dark-400); padding: var(--space-2); border-radius: var(--radius-md); transition: all var(--transition-fast); }
-        .modal-close:hover { background: var(--color-dark-100); color: var(--color-dark); }
-        .modal-body { padding: var(--space-6); max-height: 70vh; overflow-y: auto; }
-        .modal-footer { padding: var(--space-4) var(--space-6); border-top: 1px solid var(--color-dark-100); display: flex; justify-content: flex-end; gap: var(--space-3); }
-        
-        .form-group { margin-bottom: var(--space-4); }
-        
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: var(--z-modal);
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(4px);
+        }
+
+        .modal-overlay.show {
+            display: flex;
+        }
+
+        .modal {
+            background: var(--color-white);
+            border-radius: var(--radius-2xl);
+            width: 92%;
+            max-width: 500px;
+            box-shadow: var(--shadow-xl);
+            animation: modalSlideIn .3s ease;
+        }
+
+        @keyframes modalSlideIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px) scale(.98);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: var(--space-5) var(--space-6);
+            border-bottom: 1px solid var(--color-dark-100);
+        }
+
+        .modal-header h3 {
+            font-size: var(--font-size-xl);
+            font-weight: var(--font-weight-bold);
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: var(--font-size-xl);
+            cursor: pointer;
+            color: var(--color-dark-400);
+            padding: var(--space-2);
+            border-radius: var(--radius-md);
+            transition: all var(--transition-fast);
+        }
+
+        .modal-close:hover {
+            background: var(--color-dark-100);
+            color: var(--color-dark);
+        }
+
+        .modal-body {
+            padding: var(--space-6);
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+
+        .modal-footer {
+            padding: var(--space-4) var(--space-6);
+            border-top: 1px solid var(--color-dark-100);
+            display: flex;
+            justify-content: flex-end;
+            gap: var(--space-3);
+        }
+
+        .form-group {
+            margin-bottom: var(--space-4);
+        }
+
         /* Users selection in Team Modal */
-        .users-checklist { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-2); border: 1px solid var(--color-dark-200); border-radius: var(--radius-md); padding: var(--space-3); max-height: 200px; overflow-y: auto; }
-        .user-check-item { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2); border-radius: var(--radius-sm); cursor: pointer; transition: background .15s; }
-        .user-check-item:hover { background: var(--color-dark-50); }
-        .user-check-item input { accent-color: var(--color-primary); width: 16px; height: 16px; }
+        .users-checklist {
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-2);
+            margin-top: var(--space-2);
+            border: 1px solid var(--color-dark-200);
+            border-radius: var(--radius-md);
+            padding: var(--space-3);
+            max-height: 200px;
+            overflow-y: auto;
+        }
 
-        .empty-state { text-align: center; padding: var(--space-8); color: var(--color-dark-400); }
-        
+        .user-check-item {
+            display: flex;
+            align-items: center;
+            gap: var(--space-3);
+            padding: var(--space-2);
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: background .15s;
+        }
+
+        .user-check-item:hover {
+            background: var(--color-dark-50);
+        }
+
+        .user-check-item input {
+            accent-color: var(--color-primary);
+            width: 16px;
+            height: 16px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: var(--space-8);
+            color: var(--color-dark-400);
+        }
+
         /* Color Picker */
-        .color-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: var(--space-2); }
-        .color-dot { width: 32px; height: 32px; border-radius: var(--radius-full); cursor: pointer; border: 3px solid transparent; transition: transform var(--transition-fast); display: flex; align-items: center; justify-content: center; font-size: 12px; color: #fff; }
-        .color-dot:hover { transform: scale(1.1); }
-        .color-dot.sel { border-color: var(--color-dark-700); box-shadow: var(--shadow-sm); }
+        .color-row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: var(--space-2);
+        }
 
-        .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: calc(var(--z-sidebar) - 1); }
-        @media (max-width: 1024px) { .sidebar { transform: translateX(-100%); } .sidebar.open { transform: translateX(0); } .main-content { margin-left: 0; } .menu-toggle { display: block; } .sidebar-overlay.show { display: block; } }
+        .color-dot {
+            width: 32px;
+            height: 32px;
+            border-radius: var(--radius-full);
+            cursor: pointer;
+            border: 3px solid transparent;
+            transition: transform var(--transition-fast);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            color: #fff;
+        }
+
+        .color-dot:hover {
+            transform: scale(1.1);
+        }
+
+        .color-dot.sel {
+            border-color: var(--color-dark-700);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .sidebar-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: calc(var(--z-sidebar) - 1);
+        }
+
+        @media (max-width: 1024px) {
+            .sidebar {
+                transform: translateX(-100%);
+            }
+
+            .sidebar.open {
+                transform: translateX(0);
+            }
+
+            .main-content {
+                margin-left: 0;
+            }
+
+            .menu-toggle {
+                display: block;
+            }
+
+            .sidebar-overlay.show {
+                display: block;
+            }
+        }
     </style>
 </head>
+
 <body>
     <div class="dashboard-layout">
         <div class="sidebar-overlay" id="sidebarOverlay"></div>
@@ -133,28 +671,39 @@
                 <div class="sidebar-brand">Brasileiros <span>no Atacama</span></div>
             </div>
             <nav class="sidebar-nav">
-                <div class="nav-section"><div class="nav-section-title">Principal</div></div>
+                <div class="nav-section">
+                    <div class="nav-section-title">Principal</div>
+                </div>
                 <a href="/dashboard" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
-                
-                <div class="nav-section"><div class="nav-section-title">CRM</div></div>
+
+                <div class="nav-section">
+                    <div class="nav-section-title">CRM</div>
+                </div>
                 <a href="/leads" class="nav-item"><span class="nav-icon">👥</span><span>Leads</span></a>
                 <a href="/tags" class="nav-item"><span class="nav-icon">🏷️</span><span>Tags</span></a>
                 <a href="/pipeline" class="nav-item"><span class="nav-icon">🎯</span><span>Pipeline</span></a>
                 <a href="/segmentacao" class="nav-item"><span class="nav-icon">🔍</span><span>Segmentação</span></a>
                 <a href="/tarefas" class="nav-item"><span class="nav-icon">📋</span><span>Tarefas</span></a>
-                
-                <div class="nav-section"><div class="nav-section-title">Conf. Admin</div></div>
+
+                <div class="nav-section">
+                    <div class="nav-section-title">Conf. Admin</div>
+                </div>
                 <a href="/relatorios" class="nav-item"><span class="nav-icon">📈</span><span>Relatórios</span></a>
-                <a href="/ai" class="nav-item" style="color: #6B46C1; background: #FAF5FF; border-left: 2px solid #6B46C1;">
+                <a href="/ai" class="nav-item"
+                    style="color: #6B46C1; background: #FAF5FF; border-left: 2px solid #6B46C1;">
                     <span class="nav-icon">✨</span>
                     <span>Assistente IA</span>
                 </a>
-                <a href="/equipe" class="nav-item active"><span class="nav-icon">👥</span><span>Equipe e Usuários</span></a>
-                <a href="/docs" class="nav-item" target="_blank"><span class="nav-icon">📖</span><span>API Docs</span></a>
-                <a href="http://localhost:5678" class="nav-item" target="_blank"><span class="nav-icon">⚡</span><span>Servidor n8n</span></a>
+                <a href="/equipe" class="nav-item active"><span class="nav-icon">👥</span><span>Equipe e
+                        Usuários</span></a>
+                <a href="/docs" class="nav-item" target="_blank"><span class="nav-icon">📖</span><span>API
+                        Docs</span></a>
+                <a href="http://localhost:5678" class="nav-item" target="_blank"><span
+                        class="nav-icon">⚡</span><span>Servidor n8n</span></a>
             </nav>
             <div class="sidebar-footer">
-                <a href="#" class="nav-item" id="logoutBtn" style="border:none;padding-left:0"><span class="nav-icon">🚪</span><span>Sair</span></a>
+                <a href="#" class="nav-item" id="logoutBtn" style="border:none;padding-left:0"><span
+                        class="nav-icon">🚪</span><span>Sair</span></a>
             </div>
         </aside>
 
@@ -202,7 +751,11 @@
                                 </tr>
                             </thead>
                             <tbody id="usersTableBody">
-                                <tr><td colspan="7"><div class="empty-state">Carregando usuários...</div></td></tr>
+                                <tr>
+                                    <td colspan="7">
+                                        <div class="empty-state">Carregando usuários...</div>
+                                    </td>
+                                </tr>
                             </tbody>
                         </table>
                     </div>
@@ -252,11 +805,13 @@
                 <div class="form-group" id="userPassWrapper">
                     <label class="form-label" for="userPass">Senha de Acesso</label>
                     <input type="password" id="userPass" class="form-input" placeholder="Mínimo 6 caracteres">
-                    <span style="font-size: 11px; color: var(--color-dark-400);" id="userPassHint">Para alterar a senha, digite uma nova, ou deixe em branco.</span>
+                    <span style="font-size: 11px; color: var(--color-dark-400);" id="userPassHint">Para alterar a senha,
+                        digite uma nova, ou deixe em branco.</span>
                 </div>
                 <div class="form-group" id="userActiveWrap" style="display:none">
                     <label class="form-label">
-                        <input type="checkbox" id="userActive" style="margin-right:8px; accent-color: var(--color-primary);"> 
+                        <input type="checkbox" id="userActive"
+                            style="margin-right:8px; accent-color: var(--color-primary);">
                         Cadastro Ativo (permitir login)
                     </label>
                 </div>
@@ -290,12 +845,13 @@
                     <label class="form-label">Cor Visual</label>
                     <div class="color-row" id="teamColorPicker"></div>
                 </div>
-                
+
                 <hr style="border:none; border-top: 1px solid var(--color-dark-100); margin: var(--space-5) 0;">
 
                 <div class="form-group">
                     <label class="form-label">Membros da Equipe</label>
-                    <div style="font-size: 12px; color: var(--color-dark-400);">Vincule os usuários do sistema que pertencem a esta equipe.</div>
+                    <div style="font-size: 12px; color: var(--color-dark-400);">Vincule os usuários do sistema que
+                        pertencem a esta equipe.</div>
                     <div class="users-checklist" id="teamUsersChecklist">
                         <!-- Filled by JS -->
                     </div>
@@ -312,8 +868,8 @@
     <script>
         let allUsers = [];
         let allTeams = [];
-        let selColor = "#2B6CB0";
-        const COLORS = ['#2B6CB0', '#3182CE', '#C05621', '#DD6B20', '#38A169', '#48BB78', '#D69E2E', '#E53E3E', '#805AD5', '#D53F8C', '#4A5568'];
+        let selColor = "#366B85";
+        const COLORS = ['#366B85', '#3182CE', '#C05621', '#DD6B20', '#3D8562', '#48BB78', '#D69E2E', '#E53E3E', '#805AD5', '#D53F8C', '#4A5568'];
 
         // ======= INIT =======
         document.addEventListener('DOMContentLoaded', () => {
@@ -345,7 +901,7 @@
         }
 
         async function loadAllData() {
-            await Promise.all([ fetchUsers(), fetchTeams() ]);
+            await Promise.all([fetchUsers(), fetchTeams()]);
             renderUsers();
             renderTeams();
         }
@@ -375,13 +931,13 @@
             }
             tbody.innerHTML = allUsers.map(u => {
                 const badgeStatus = u.is_active ? '<span class="status-badge status-active">🟢 Ativo</span>' : '<span class="status-badge status-inactive">🔴 Inativo</span>';
-                const badgeEmail = u.email_verified 
-                    ? '<span class="email-badge email-verified">✅ Confirmado</span>' 
+                const badgeEmail = u.email_verified
+                    ? '<span class="email-badge email-verified">✅ Confirmado</span>'
                     : '<span class="email-badge email-pending">⏳ Pendente</span>';
-                
+
                 const roleBadge = u.role === 'admin' ? '<b>Admin</b>' : 'User';
                 const teamsHtml = (u.teams || []).map(t => `<span class="team-pill" style="border-left: 3px solid ${esc(t.cor)}">${esc(t.nome)}</span>`).join('') || '<span style="color:#a0aec0;font-size:11px">Sem equipe</span>';
-                
+
                 return `<tr>
                     <td><strong>${esc(u.nome)}</strong></td>
                     <td>${esc(u.email)}</td>
@@ -400,13 +956,13 @@
         function openUserModal(user = null) {
             document.getElementById('userModal').classList.add('show');
             document.getElementById('userAlert').classList.add('hidden');
-            
+
             document.getElementById('userId').value = user ? user.id : '';
             document.getElementById('userNome').value = user ? user.nome : '';
             document.getElementById('userEmail').value = user ? user.email : '';
             document.getElementById('userRoleForm').value = user ? user.role : 'user';
             document.getElementById('userPass').value = '';
-            
+
             if (user) {
                 document.getElementById('userModalTitle').textContent = "Editar Usuário";
                 document.getElementById('userPassHint').textContent = "Digite uma senha apenas se desejar alterá-la. Deixe em branco para manter a atual.";
@@ -442,7 +998,7 @@
 
             const method = id ? 'PUT' : 'POST';
             const url = id ? `/api/users/${id}` : '/api/users';
-            
+
             const resp = await Auth.apiRequest(url, { method, body: JSON.stringify(payload) });
             if (!resp) return;
             if (resp.ok) {
@@ -458,7 +1014,7 @@
         // ======= RENDER EQUIPES =======
         function buildColorPicker() {
             document.getElementById('teamColorPicker').innerHTML = COLORS.map(c =>
-                `<div class="color-dot${c===selColor?' sel':''}" style="background:${c}" onclick="pickColor('${c}')">${c===selColor?'✓':''}</div>`
+                `<div class="color-dot${c === selColor ? ' sel' : ''}" style="background:${c}" onclick="pickColor('${c}')">${c === selColor ? '✓' : ''}</div>`
             ).join('');
         }
         function pickColor(c) { selColor = c; buildColorPicker(); }
@@ -471,7 +1027,7 @@
             }
             grid.innerHTML = allTeams.map(t => {
                 // Find members by finding users who have this team.id
-                const members = allUsers.filter(u => (u.teams||[]).some(tm => tm.id === t.id));
+                const members = allUsers.filter(u => (u.teams || []).some(tm => tm.id === t.id));
                 const memListHtml = members.length > 0
                     ? members.map(m => `<div class="team-member-item"><div class="member-avatar">${m.nome.charAt(0).toUpperCase()}</div> <span>${esc(m.nome)}</span></div>`).join('')
                     : '<span style="color:var(--color-dark-300);font-size:12px;">Nenhum usuário assinalado.</span>';
@@ -499,11 +1055,11 @@
         function openTeamModal(team = null) {
             document.getElementById('teamModal').classList.add('show');
             document.getElementById('teamAlert').classList.add('hidden');
-            
+
             document.getElementById('teamId').value = team ? team.id : '';
             document.getElementById('teamNome').value = team ? team.nome : '';
             document.getElementById('teamDesc').value = team ? team.descricao || '' : '';
-            selColor = team ? team.cor : '#2B6CB0';
+            selColor = team ? team.cor : '#366B85';
             buildColorPicker();
 
             document.getElementById('teamModalTitle').textContent = team ? 'Editar Equipe' : 'Criar Equipe';
@@ -513,7 +1069,7 @@
             if (!allUsers.length) {
                 chkContainer.innerHTML = '<div style="font-size:12px; color:var(--color-dark-400)">Não há usuários para assinalar. Crie na aba lateral primeiro.</div>';
             } else {
-                const teamUsers = team ? allUsers.filter(u => (u.teams||[]).some(tm => tm.id === team.id)).map(u => u.id) : [];
+                const teamUsers = team ? allUsers.filter(u => (u.teams || []).some(tm => tm.id === team.id)).map(u => u.id) : [];
                 chkContainer.innerHTML = allUsers.map(u => `
                     <label class="user-check-item">
                         <input type="checkbox" value="${u.id}" ${teamUsers.includes(u.id) ? 'checked' : ''} class="team-user-cb">
@@ -544,13 +1100,13 @@
 
             const method = id ? 'PUT' : 'POST';
             const url = id ? `/api/teams/${id}` : '/api/teams';
-            
+
             const resp = await Auth.apiRequest(url, { method, body: JSON.stringify(payload) });
             if (!resp) return;
-            
+
             if (resp.ok) {
                 const team = await resp.json();
-                
+
                 // Save Members
                 const selectedUsers = Array.from(document.querySelectorAll('.team-user-cb:checked')).map(cb => parseInt(cb.value));
                 await Auth.apiRequest(`/api/teams/${team.id}/members`, {
@@ -585,4 +1141,5 @@
         }
     </script>
 </body>
+
 </html>

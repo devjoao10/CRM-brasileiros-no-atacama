@@ -56,14 +56,19 @@ async def list_funnels(
     db: Session = Depends(get_db),
 ):
     """Lista todos os funis de vendas."""
-    query = db.query(Funnel)
-    if is_active is not None:
-        query = query.filter(Funnel.is_active == is_active)
-    funnels = query.order_by(Funnel.created_at).all()
-    return FunnelListResponse(
-        total=len(funnels),
-        funnels=[FunnelResponse.model_validate(f) for f in funnels],
-    )
+    try:
+        query = db.query(Funnel)
+        if is_active is not None:
+            query = query.filter(Funnel.is_active == is_active)
+        funnels = query.order_by(Funnel.created_at).all()
+        return FunnelListResponse(
+            total=len(funnels),
+            funnels=[FunnelResponse.model_validate(f) for f in funnels],
+        )
+    except Exception as e:
+        import traceback
+        error_msg = traceback.format_exc()
+        raise HTTPException(status_code=500, detail=str(error_msg))
 
 
 @router.get("/funnels/{funnel_id}", response_model=FunnelResponse, summary="Detalhes de um funil")
@@ -177,57 +182,62 @@ async def get_kanban_board(
 
     **N8N**: Use para monitorar o estado atual do pipeline e reagir a mudanças.
     """
-    funnel = db.query(Funnel).filter(Funnel.id == funnel_id).first()
-    if not funnel:
-        raise HTTPException(status_code=404, detail="Funil não encontrado")
+    try:
+        funnel = db.query(Funnel).filter(Funnel.id == funnel_id).first()
+        if not funnel:
+            raise HTTPException(status_code=404, detail="Funil não encontrado")
 
-    entries = (
-        db.query(FunnelEntry)
-        .filter(FunnelEntry.funnel_id == funnel_id)
-        .options(joinedload(FunnelEntry.lead))
-        .order_by(FunnelEntry.posicao)
-        .all()
-    )
+        entries = (
+            db.query(FunnelEntry)
+            .filter(FunnelEntry.funnel_id == funnel_id)
+            .options(joinedload(FunnelEntry.lead))
+            .order_by(FunnelEntry.posicao)
+            .all()
+        )
 
-    # Group entries by stage
-    stage_entries = {}
-    for entry in entries:
-        if entry.etapa_id not in stage_entries:
-            stage_entries[entry.etapa_id] = []
-        lead = entry.lead
-        if lead and lead.is_active:
-            stage_entries[entry.etapa_id].append(
-                LeadCardResponse(
-                    entry_id=entry.id,
-                    lead_id=lead.id,
-                    nome=lead.nome,
-                    email=lead.email,
-                    whatsapp=lead.whatsapp,
-                    destinos=lead.destinos,
-                    data_chegada=lead.data_chegada,
-                    data_partida=lead.data_partida,
-                    etapa_id=entry.etapa_id,
-                    posicao=entry.posicao,
-                    tags=[TagResponse.model_validate(t) for t in lead.tags],
+        # Group entries by stage
+        stage_entries = {}
+        for entry in entries:
+            if entry.etapa_id not in stage_entries:
+                stage_entries[entry.etapa_id] = []
+            lead = entry.lead
+            if lead and lead.is_active:
+                stage_entries[entry.etapa_id].append(
+                    LeadCardResponse(
+                        entry_id=entry.id,
+                        lead_id=lead.id,
+                        nome=lead.nome,
+                        email=lead.email,
+                        whatsapp=lead.whatsapp,
+                        destinos=lead.destinos,
+                        data_chegada=lead.data_chegada,
+                        data_partida=lead.data_partida,
+                        etapa_id=entry.etapa_id,
+                        posicao=entry.posicao,
+                        tags=[TagResponse.model_validate(t) for t in lead.tags],
+                    )
                 )
-            )
 
-    stages = []
-    total = 0
-    for stage in funnel.etapas:
-        leads_in_stage = stage_entries.get(stage["id"], [])
-        total += len(leads_in_stage)
-        stages.append(KanbanStageResponse(
-            id=stage["id"],
-            nome=stage["nome"],
-            leads=leads_in_stage,
-        ))
+        stages = []
+        total = 0
+        for stage in funnel.etapas:
+            leads_in_stage = stage_entries.get(stage["id"], [])
+            total += len(leads_in_stage)
+            stages.append(KanbanStageResponse(
+                id=stage["id"],
+                nome=stage["nome"],
+                leads=leads_in_stage,
+            ))
 
-    return KanbanBoardResponse(
-        funnel=FunnelResponse.model_validate(funnel),
-        stages=stages,
-        total_leads=total,
-    )
+        return KanbanBoardResponse(
+            funnel=FunnelResponse.model_validate(funnel),
+            stages=stages,
+            total_leads=total,
+        )
+    except Exception as e:
+        import traceback
+        error_msg = traceback.format_exc()
+        raise HTTPException(status_code=500, detail=str(error_msg))
 
 
 # ─── Lead Entries ────────────────────────────────

@@ -1,0 +1,294 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-chat",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook (WhatsApp)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [0, 200]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.body.mensagem }}",
+        "options": {
+          "systemMessage": "=Você é Bia, assistente de vendas da Brasileiros no Atacama. O WhatsApp do cliente é: {{ $('Webhook (WhatsApp)').item.json.body.numero }}. \n\nSua missão é conduzir o cliente e realizar TUDO o que for necessário no sistema.\n- Se for o primeiro contato, crie o lead e anote informações cruciais (destinos de interesse, datas, orçamento) usando as ferramentas de atualização e notas.\n- Sempre que captar uma nova informação sobre a viagem do cliente, atualize o PERFIL ou o HISTÓRICO dele.\n- Use a ferramenta para colocá-lo no Funil e lembre-se de ir movendo a etapa (novo -> em_contato -> negociacao) à medida que conversam.\n- Crie tarefas para a equipe humana se você agendar reuniões com o cliente."
+        }
+      },
+      "id": "agent-bia",
+      "name": "AI Agent (Bia)",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1,
+      "position": [300, 200]
+    },
+    {
+      "parameters": {
+        "model": "gemini-2.5-flash"
+      },
+      "id": "gemini-model",
+      "name": "Google Gemini Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [150, 450]
+    },
+    {
+      "parameters": {
+        "name": "crm_buscar_leads",
+        "description": "Busca leads no sistema (pelo nome, telefone ou email). Retorna a lista de leads com seus respectivos IDs. Sempre use antes de criar um lead.",
+        "method": "GET",
+        "url": "http://127.0.0.1:8000/api/leads",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "X-API-Key", "value": "TOKEN" } ] },
+        "sendQuery": true,
+        "queryParameters": { "parameters": [ { "name": "search", "value": "={{ $fromAI('termo_busca') }}" } ] }
+      },
+      "id": "tool-buscar-leads",
+      "name": "Buscar Leads",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1,
+      "position": [400, 400]
+    },
+    {
+      "parameters": {
+        "name": "crm_criar_lead",
+        "description": "Cria um novo lead. Informe nome e whatsapp. Retorna o ID gerado que deve ser memorizado na sessão.",
+        "method": "POST",
+        "url": "http://127.0.0.1:8000/api/leads",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "X-API-Key", "value": "TOKEN" } ] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"nome\": \"{{ $fromAI('nome') }}\",\n  \"whatsapp\": \"{{ $fromAI('whatsapp') }}\"\n}"
+      },
+      "id": "tool-criar-lead",
+      "name": "Criar Lead",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1,
+      "position": [550, 400]
+    },
+    {
+      "parameters": {
+        "name": "crm_detalhar_lead",
+        "description": "Busca O PERFIL COMPLETO de um lead específico pelo seu ID. Retorna todos os campos atuais.",
+        "method": "GET",
+        "url": "http://127.0.0.1:8000/api/leads/{{ $fromAI('lead_id') }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "X-API-Key", "value": "TOKEN" } ] }
+      },
+      "id": "tool-detalhes-lead",
+      "name": "Detalhar Lead",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1,
+      "position": [700, 400]
+    },
+    {
+      "parameters": {
+        "name": "crm_atualizar_lead",
+        "description": "Edita os campos principais e adiciona campos_personalizados (JSON formato dictionary com keys customizadas como 'origem', 'interesse', 'budget').",
+        "method": "PUT",
+        "url": "http://127.0.0.1:8000/api/leads/{{ $fromAI('lead_id') }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "X-API-Key", "value": "TOKEN" } ] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"destinos\": {{ JSON.stringify($fromAI('lista_destinos')) }},\n  \"campos_personalizados\": {{ JSON.stringify($fromAI('campos_dict_json')) }},\n  \"data_chegada\": \"{{ $fromAI('chegada_yyyy_mm_dd') }}\",\n  \"data_partida\": \"{{ $fromAI('partida_yyyy_mm_dd') }}\"\n}"
+      },
+      "id": "tool-atualizar-lead",
+      "name": "Atualizar Lead",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1,
+      "position": [850, 400]
+    },
+    {
+      "parameters": {
+        "name": "crm_listar_funis",
+        "description": "Lista os funis e as Etapas disponíveis. Útil para descobrir os IDs corretos. Sem argumentos.",
+        "method": "GET",
+        "url": "http://127.0.0.1:8000/api/pipeline/funnels",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "X-API-Key", "value": "TOKEN" } ] }
+      },
+      "id": "tool-listar-funis",
+      "name": "Listar Funis",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1,
+      "position": [400, 550]
+    },
+    {
+      "parameters": {
+        "name": "crm_adicionar_ao_funil",
+        "description": "Coloca o lead dentro de um funil pela primeira vez. funnel_id=1 geralmente.",
+        "method": "POST",
+        "url": "http://127.0.0.1:8000/api/pipeline/funnels/{{ $fromAI('funnel_id') }}/leads",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "X-API-Key", "value": "TOKEN" } ] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"lead_id\": {{ $fromAI('lead_id') }},\n  \"etapa_id\": \"{{ $fromAI('etapa_id') }}\"\n}"
+      },
+      "id": "tool-adicionar-funil",
+      "name": "Adicionar ao Funil",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1,
+      "position": [550, 550]
+    },
+    {
+      "parameters": {
+        "name": "crm_mover_etapa_funil",
+        "description": "Move o lead para uma nova etapa. PRECISA SER entry_id (ID da entrada no pipeline, fornecido no detalhamento do lead).",
+        "method": "PUT",
+        "url": "http://127.0.0.1:8000/api/pipeline/entries/{{ $fromAI('entry_id') }}/move",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "X-API-Key", "value": "TOKEN" } ] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"etapa_id\": \"{{ $fromAI('nova_etapa_id') }}\"\n}"
+      },
+      "id": "tool-mover-funil",
+      "name": "Mover no Funil",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1,
+      "position": [700, 550]
+    },
+    {
+      "parameters": {
+        "name": "crm_adicionar_nota_historico",
+        "description": "Ferramenta essencial para MURAL DA NEGOCIAÇÂO. Você salva resumos do que discutiu/avançou com o cliente (limite 250 chars).",
+        "method": "POST",
+        "url": "http://127.0.0.1:8000/api/pipeline/history/{{ $fromAI('lead_id') }}/note",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "X-API-Key", "value": "TOKEN" } ] },
+        "sendQuery": true,
+        "queryParameters": { "parameters": [ { "name": "descricao", "value": "={{ $fromAI('texto_resumo_da_interacao') }}" } ] }
+      },
+      "id": "tool-adicionar-nota",
+      "name": "Adicionar Nota",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1,
+      "position": [850, 550]
+    },
+    {
+      "parameters": {
+        "name": "crm_listar_tags",
+        "description": "Descobre os IDs de todas tags do sistema para usá-las depois (exposição do array de objetos tag).",
+        "method": "GET",
+        "url": "http://127.0.0.1:8000/api/tags",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "X-API-Key", "value": "TOKEN" } ] }
+      },
+      "id": "tool-listar-tags",
+      "name": "Listar Tags CRM",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1,
+      "position": [400, 700]
+    },
+    {
+      "parameters": {
+        "name": "crm_adicionar_tags",
+        "description": "Substitui as tags do lead passando um array de IDs: tag_ids: [1, 2].",
+        "method": "PUT",
+        "url": "http://127.0.0.1:8000/api/tags/lead/{{ $fromAI('lead_id') }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "X-API-Key", "value": "TOKEN" } ] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"tag_ids\": {{ JSON.stringify($fromAI('array_de_ids')) }}\n}"
+      },
+      "id": "tool-adicionar-tags",
+      "name": "Adicionar Tags",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1,
+      "position": [550, 700]
+    },
+    {
+      "parameters": {
+        "name": "crm_criar_tarefa",
+        "description": "Cria checklist ou agendamento pendende no CRM.",
+        "method": "POST",
+        "url": "http://127.0.0.1:8000/api/tasks",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "X-API-Key", "value": "TOKEN" } ] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"titulo\": \"{{ $fromAI('titulo_da_tarefa') }}\",\n  \"descricao\": \"{{ $fromAI('detalhes') }}\",\n  \"lead_id\": {{ $fromAI('lead_id') }},\n  \"data_vencimento\": \"{{ $fromAI('data_iso_formato_opcional') }}\"\n}"
+      },
+      "id": "tool-criar-tarefa",
+      "name": "Criar Tarefa",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1,
+      "position": [700, 700]
+    },
+    {
+      "parameters": {
+        "name": "crm_listar_tarefas",
+        "description": "Puxa as tarefas pendentes de um lead (status=pendente&lead_id=ID).",
+        "method": "GET",
+        "url": "http://127.0.0.1:8000/api/tasks",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "X-API-Key", "value": "TOKEN" } ] },
+        "sendQuery": true,
+        "queryParameters": { "parameters": [ { "name": "lead_id", "value": "={{ $fromAI('lead_id') }}" }, { "name": "status", "value": "pendente" } ] }
+      },
+      "id": "tool-listar-tarefas",
+      "name": "Listar Tarefas",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1,
+      "position": [850, 700]
+    },
+    {
+      "parameters": {
+        "name": "crm_concluir_tarefa",
+        "description": "Atualiza uma tarefa pela ID para status 'concluido' ou altera prazo.",
+        "method": "PUT",
+        "url": "http://127.0.0.1:8000/api/tasks/{{ $fromAI('task_id') }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "X-API-Key", "value": "TOKEN" } ] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"{{ $fromAI('status_novo_ex_concluido') }}\"\n}"
+      },
+      "id": "tool-atualizar-tarefa",
+      "name": "Concluir Tarefa",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1,
+      "position": [400, 850]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "URL_DO_SEU_WHATSAPP_API",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"to\": \"{{ $('Webhook (WhatsApp)').item.json.body.numero }}\",\n  \"message\": \"{{ $json.output }}\"\n}"
+      },
+      "id": "webhook-response",
+      "name": "Enviar Resposta WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [700, 200]
+    }
+  ],
+  "connections": {
+    "Webhook (WhatsApp)": { "main": [ [ { "node": "AI Agent (Bia)", "type": "main", "index": 0 } ] ] },
+    "AI Agent (Bia)": { "main": [ [ { "node": "Enviar Resposta WhatsApp", "type": "main", "index": 0 } ] ] },
+    "Google Gemini Model": { "ai_languageModel": [ [ { "node": "AI Agent (Bia)", "type": "ai_languageModel", "index": 0 } ] ] },
+    "Buscar Leads": { "ai_tool": [ [ { "node": "AI Agent (Bia)", "type": "ai_tool", "index": 0 } ] ] },
+    "Criar Lead": { "ai_tool": [ [ { "node": "AI Agent (Bia)", "type": "ai_tool", "index": 0 } ] ] },
+    "Detalhar Lead": { "ai_tool": [ [ { "node": "AI Agent (Bia)", "type": "ai_tool", "index": 0 } ] ] },
+    "Atualizar Lead": { "ai_tool": [ [ { "node": "AI Agent (Bia)", "type": "ai_tool", "index": 0 } ] ] },
+    "Listar Funis": { "ai_tool": [ [ { "node": "AI Agent (Bia)", "type": "ai_tool", "index": 0 } ] ] },
+    "Adicionar ao Funil": { "ai_tool": [ [ { "node": "AI Agent (Bia)", "type": "ai_tool", "index": 0 } ] ] },
+    "Mover no Funil": { "ai_tool": [ [ { "node": "AI Agent (Bia)", "type": "ai_tool", "index": 0 } ] ] },
+    "Adicionar Nota": { "ai_tool": [ [ { "node": "AI Agent (Bia)", "type": "ai_tool", "index": 0 } ] ] },
+    "Listar Tags CRM": { "ai_tool": [ [ { "node": "AI Agent (Bia)", "type": "ai_tool", "index": 0 } ] ] },
+    "Adicionar Tags": { "ai_tool": [ [ { "node": "AI Agent (Bia)", "type": "ai_tool", "index": 0 } ] ] },
+    "Criar Tarefa": { "ai_tool": [ [ { "node": "AI Agent (Bia)", "type": "ai_tool", "index": 0 } ] ] },
+    "Listar Tarefas": { "ai_tool": [ [ { "node": "AI Agent (Bia)", "type": "ai_tool", "index": 0 } ] ] },
+    "Concluir Tarefa": { "ai_tool": [ [ { "node": "AI Agent (Bia)", "type": "ai_tool", "index": 0 } ] ] }
+  }
+}

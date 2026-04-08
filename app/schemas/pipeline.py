@@ -65,7 +65,7 @@ class FunnelEntryResponse(BaseModel):
     lead_id: int
     funnel_id: int
     etapa_id: str
-    posicao: int
+    posicao: Optional[int] = 0
     created_at: Optional[datetime] = None
 
     class Config:
@@ -83,7 +83,7 @@ class LeadCardResponse(BaseModel):
     data_chegada: Optional[date] = None
     data_partida: Optional[date] = None
     etapa_id: str
-    posicao: int
+    posicao: Optional[int] = 0
     tags: list[TagResponse] = []
 
 

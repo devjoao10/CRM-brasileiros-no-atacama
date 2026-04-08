@@ -161,7 +161,7 @@
         .add-stage-btn:hover { background: rgba(43,108,176,0.05); }
 
         /* Add lead dropdown */
-        .add-lead-dropdown { position: absolute; top: 100%; right: 0; width: 280px; background: var(--color-white); border-radius: var(--radius-lg); box-shadow: var(--shadow-xl); z-index: 200; padding: var(--space-3); display: none; }
+        .add-lead-dropdown { position: absolute; top: 100%; right: 0; width: 280px; background: var(--color-white); border-radius: var(--radius-lg); box-shadow: var(--shadow-xl); z-index: 200; padding: var(--space-3); display: none; color: var(--color-dark); text-align: left; font-weight: var(--font-weight-medium); cursor: default; }
         .add-lead-dropdown.show { display: block; }
         .add-lead-search { width: 100%; padding: var(--space-2) var(--space-3); border: 1.5px solid var(--color-dark-200); border-radius: var(--radius-md); font-size: var(--font-size-sm); outline: none; margin-bottom: var(--space-2); }
         .add-lead-list { max-height: 200px; overflow-y: auto; }
@@ -204,7 +204,6 @@
                 </a>
                 <a href="/equipe" class="nav-item"><span class="nav-icon">👥</span><span>Equipe e Usuários</span></a>
                 <div class="nav-section"><div class="nav-section-title">Sistema</div></div>
-                <a href="#" class="nav-item" data-coming-soon><span class="nav-icon">⚙️</span><span>Configurações</span></a>
                 <a href="/docs" class="nav-item" target="_blank"><span class="nav-icon">📖</span><span>API Docs</span></a>
                 <a href="http://localhost:5678" class="nav-item" target="_blank"><span class="nav-icon">⚡</span><span>Servidor n8n</span></a>
             </nav>
@@ -445,22 +444,41 @@
     // ─── Funnels ─────────────────────────────────
 
     async function loadFunnels() {
-        const resp = await Auth.apiRequest('/api/pipeline/funnels');
-        if (!resp) return;
-        const data = await resp.json();
-        funnels = data.funnels || [];
+        try {
+            const resp = await Auth.apiRequest('/api/pipeline/funnels');
+            if (!resp) return;
+            
+            let data;
+            try {
+                data = await resp.json();
+            } catch (e) {
+                alert("Erro ao processar resposta do servidor (provável erro 500 no Funnels). Verifique o terminal.");
+                console.error("JSON parse error em loadFunnels:", e);
+                return;
+            }
 
-        if (funnels.length === 0) {
-            renderEmptyState();
-            return;
+            if (!resp.ok) {
+                alert("Erro do Backend em Funnels: " + (data.detail || JSON.stringify(data)));
+                return;
+            }
+
+            funnels = data.funnels || [];
+
+            if (funnels.length === 0) {
+                renderEmptyState();
+                return;
+            }
+
+            if (!currentFunnelId || !funnels.find(f => f.id === currentFunnelId)) {
+                currentFunnelId = funnels[0].id;
+            }
+
+            renderFunnelTabs();
+            loadBoard();
+        } catch (error) {
+            alert("Erro catastrófico no loadFunnels: " + error.message);
+            console.error(error);
         }
-
-        if (!currentFunnelId || !funnels.find(f => f.id === currentFunnelId)) {
-            currentFunnelId = funnels[0].id;
-        }
-
-        renderFunnelTabs();
-        loadBoard();
     }
 
     function renderFunnelTabs() {
@@ -493,7 +511,15 @@
         if (!currentFunnelId) return;
         const resp = await Auth.apiRequest(`/api/pipeline/board/${currentFunnelId}`);
         if (!resp) return;
+        
         boardDataFull = await resp.json();
+        
+        if (!resp.ok) {
+            alert("Backend Error: " + (boardDataFull.detail || JSON.stringify(boardDataFull)));
+            console.error("Backend Error payload:", boardDataFull);
+            document.getElementById('kanbanBoard').innerHTML = `<div style="padding: 2rem; color: red;">Error: ${boardDataFull.detail}</div>`;
+            return;
+        }
 
         // Update tab count
         const countEl = document.getElementById(`tabCount${currentFunnelId}`);
@@ -503,23 +529,12 @@
         document.getElementById('filterBar').style.display = 'flex';
 
         // Fetch lead details for date filtering (arrival/departure)
-        await cacheleadDates();
+        // No longer needed: data_chegada is natively included in LeadCardResponse
 
         applyFilters();
     }
 
-    async function cacheleadDates() {
-        // Get all lead IDs in the board that we haven't cached yet
-        const ids = [];
-        boardDataFull.stages.forEach(s => s.leads.forEach(l => {
-            if (!leadDetailsCache[l.lead_id]) ids.push(l.lead_id);
-        }));
-        // Batch fetch (only uncached)
-        for (const id of ids) {
-            const r = await Auth.apiRequest(`/api/leads/${id}`);
-            if (r) leadDetailsCache[id] = await r.json();
-        }
-    }
+    // Function cacheleadDates removed because LeadCardResponse natively includes lead.data_chegada.
 
     function renderBoard() {
         if (!boardData) return;
@@ -648,34 +663,28 @@
                         if (!hasTag) return false;
                     }
 
-                    // Date filters (use cached lead details)
-                    const details = leadDetailsCache[lead.lead_id];
-                    if (details) {
-                        const chegada = details.data_chegada ? new Date(details.data_chegada + 'T00:00:00') : null;
+                    // Date filters (use embedded lead date)
+                    const chegada = lead.data_chegada ? new Date(lead.data_chegada + 'T00:00:00') : null;
 
-                        // Days window: chegada within next N days
-                        if (daysStr) {
-                            const days = parseInt(daysStr);
-                            if (!isNaN(days)) {
-                                if (!chegada) return false;
-                                const maxDate = new Date(today);
-                                maxDate.setDate(maxDate.getDate() + days);
-                                if (chegada < today || chegada > maxDate) return false;
-                            }
+                    // Days window: chegada within next N days
+                    if (daysStr) {
+                        const days = parseInt(daysStr);
+                        if (!isNaN(days)) {
+                            if (!chegada) return false;
+                            const maxDate = new Date(today);
+                            maxDate.setDate(maxDate.getDate() + days);
+                            if (chegada < today || chegada > maxDate) return false;
                         }
+                    }
 
-                        // Date range
-                        if (dateFrom) {
-                            const from = new Date(dateFrom + 'T00:00:00');
-                            if (!chegada || chegada < from) return false;
-                        }
-                        if (dateTo) {
-                            const to = new Date(dateTo + 'T00:00:00');
-                            if (!chegada || chegada > to) return false;
-                        }
-                    } else if (daysStr || dateFrom || dateTo) {
-                        // No cached details and date filter active — exclude
-                        return false;
+                    // Date range
+                    if (dateFrom) {
+                        const from = new Date(dateFrom + 'T00:00:00');
+                        if (!chegada || chegada < from) return false;
+                    }
+                    if (dateTo) {
+                        const to = new Date(dateTo + 'T00:00:00');
+                        if (!chegada || chegada > to) return false;
                     }
 
                     return true;

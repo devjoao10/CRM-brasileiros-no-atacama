@@ -214,9 +214,9 @@ def create_lead(nome: str, email: str = None, whatsapp: str = None, destinos: st
 
 def get_api_endpoints() -> str:
     """
-    Retorna a lista de todos os endpoints REST disponíveis no sistema baseados na doc OpenAPI.
-    Isso diz à IA quais métodos HTTP em '/api/...' ela pode acessar, bem como um resumo.
-    Use essa ferramenta antes de chamar call_internal_api para saber a URL e o método.
+    Retorna a lista de todos os endpoints REST disponíveis no sistema baseados na doc OpenAPI,
+    incluindo um resumo dos campos necessários no corpo da requisição (JSON Payload).
+    Use essa ferramenta antes de chamar call_internal_api para saber como montar a requisição perfeitamente.
     """
     try:
         req = urllib.request.Request("http://127.0.0.1:8000/openapi.json", headers={'Accept': 'application/json'})
@@ -229,7 +229,24 @@ def get_api_endpoints() -> str:
                 continue
             for method, details in methods.items():
                 desc = details.get("summary", "")
-                endpoints.append(f"[{method.upper()}] {path} - {desc}")
+                
+                # Extract payload info if available
+                payload_info = ""
+                try:
+                    if "requestBody" in details:
+                        content = details["requestBody"].get("content", {})
+                        if "application/json" in content:
+                            schema = content["application/json"].get("schema", {})
+                            if "$ref" in schema:
+                                ref_name = schema["$ref"].split("/")[-1]
+                                model_schema = data.get("components", {}).get("schemas", {}).get(ref_name, {})
+                                props = list(model_schema.get("properties", {}).keys())
+                                if props:
+                                    payload_info = f" | Payload JSON ({ref_name}): " + ", ".join(props)
+                except Exception:
+                    pass
+                    
+                endpoints.append(f"[{method.upper()}] {path} - {desc}{payload_info}")
                 
         return json.dumps({"endpoints": endpoints})
     except Exception as e:
@@ -402,24 +419,26 @@ def generate_pdf_document(filename: str, title: str, content: str) -> str:
         # Título
         pdf.set_font("Helvetica", "B", 18)
         pdf.set_text_color(43, 108, 176)  # Cor primária do CRM
-        pdf.cell(0, 15, title, new_x="LMARGIN", new_y="NEXT", align="C")
-        pdf.ln(5)
+        pdf.cell(0, 10, txt=str(title).encode('latin-1', 'replace').decode('latin-1'), border=0, ln=1, align="C")
+        pdf.ln(2)
         
         # Linha decorativa
         pdf.set_draw_color(43, 108, 176)
         pdf.set_line_width(0.5)
         pdf.line(20, pdf.get_y(), 190, pdf.get_y())
-        pdf.ln(8)
+        pdf.ln(6)
         
         # Data de geração
         from datetime import datetime
         pdf.set_font("Helvetica", "I", 9)
         pdf.set_text_color(128, 128, 128)
-        pdf.cell(0, 6, f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x="LMARGIN", new_y="NEXT", align="R")
+        pdf.cell(0, 6, txt=f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}", border=0, ln=1, align="R")
         pdf.ln(5)
 
         # Conteúdo
+        content = str(content).encode('latin-1', 'replace').decode('latin-1')
         lines = content.split("\\n") if "\\n" in content else content.split("\n")
+        
         for line in lines:
             line = line.strip()
             if not line:
@@ -429,23 +448,23 @@ def generate_pdf_document(filename: str, title: str, content: str) -> str:
             if line.startswith("## "):
                 pdf.set_font("Helvetica", "B", 13)
                 pdf.set_text_color(43, 108, 176)
-                pdf.cell(0, 10, line[3:], new_x="LMARGIN", new_y="NEXT")
-                pdf.ln(2)
+                pdf.cell(0, 8, txt=line[3:], border=0, ln=1)
+                pdf.ln(1)
             elif line.startswith("- "):
                 pdf.set_font("Helvetica", "", 10)
                 pdf.set_text_color(50, 50, 50)
-                pdf.cell(8, 6, chr(8226))  # bullet point
-                pdf.multi_cell(0, 6, line[2:])
+                pdf.cell(5, 6, txt="-", border=0, ln=0)
+                pdf.multi_cell(0, 6, txt=line[2:])
             else:
                 pdf.set_font("Helvetica", "", 10)
                 pdf.set_text_color(50, 50, 50)
-                pdf.multi_cell(0, 6, line)
+                pdf.multi_cell(0, 6, txt=line)
 
         # Rodapé
         pdf.ln(10)
         pdf.set_font("Helvetica", "I", 8)
         pdf.set_text_color(150, 150, 150)
-        pdf.cell(0, 6, "CRM Brasileiros no Atacama - Documento gerado automaticamente pela IA", new_x="LMARGIN", new_y="NEXT", align="C")
+        pdf.cell(0, 6, txt="CRM Brasileiros no Atacama - Documento gerado automaticamente pela IA", border=0, ln=1, align="C")
 
         safe_filename = f"{filename.replace(' ', '_')}_{uuid.uuid4().hex[:6]}.pdf"
         filepath = os.path.join(_get_upload_dir(), safe_filename)
@@ -459,6 +478,9 @@ def generate_pdf_document(filename: str, title: str, content: str) -> str:
             "message": f"PDF gerado com sucesso! Link: {download_url}"
         })
     except Exception as e:
+        import traceback
+        with open("h:/CRM brasileiros no atacama/pdf_error.log", "w") as f:
+            f.write(traceback.format_exc())
         return json.dumps({"error": str(e)})
 
 

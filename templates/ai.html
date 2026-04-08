@@ -35,7 +35,7 @@
         .nav-section-title { font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255, 255, 255, 0.4); margin-bottom: var(--space-2); }
         .nav-item { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-6); color: rgba(255, 255, 255, 0.7); font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); transition: all var(--transition-fast); cursor: pointer; text-decoration: none; border-left: 3px solid transparent; }
         .nav-item:hover { background: rgba(255, 255, 255, 0.05); color: var(--color-white); }
-        .nav-item.active { background: rgba(43, 108, 176, 0.15); color: var(--color-white); border-left-color: var(--color-primary-light); }
+        .nav-item.active { background: rgba(54, 107, 133, 0.15); color: var(--color-white); border-left-color: var(--color-primary-light); }
         .nav-item .nav-icon { font-size: var(--font-size-lg); width: 24px; text-align: center; }
         .sidebar-footer { padding: var(--space-4) var(--space-6); border-top: 1px solid rgba(255, 255, 255, 0.1); }
         .main-content { flex: 1; margin-left: 260px; display: flex; flex-direction: column; height: 100vh; }
@@ -252,7 +252,7 @@
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            background: linear-gradient(135deg, #2B6CB0, #2C5282);
+            background: linear-gradient(135deg, #366B85, #22516A);
             color: white !important;
             padding: 8px 16px;
             border-radius: 8px;
@@ -328,7 +328,7 @@
 
         .chat-input-wrapper:focus-within {
             border-color: var(--color-primary);
-            box-shadow: 0 0 0 3px rgba(43, 108, 176, 0.1);
+            box-shadow: 0 0 0 3px rgba(54, 107, 133, 0.1);
         }
 
         .chat-input {
@@ -509,6 +509,7 @@
                 <div class="nav-section">
                     <div class="nav-section-title">CRM</div>
                 </div>
+                <a href="/docs" class="nav-item" target="_blank"><span class="nav-icon">📖</span><span>API Docs</span></a>
                 <a href="/leads" class="nav-item">
                     <span class="nav-icon">👥</span>
                     <span>Leads</span>

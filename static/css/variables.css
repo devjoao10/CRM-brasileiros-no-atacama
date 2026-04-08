@@ -4,38 +4,42 @@
 
 :root {
     /* --- Brand Colors (from logo) --- */
-    --color-primary: #2B6CB0;
-    --color-primary-light: #3B82C4;
-    --color-primary-dark: #1E4E8C;
+    /* Azul Principal - Céu do Atacama */
+    --color-primary: #366B85;
+    --color-primary-light: #4A8BA8;
+    --color-primary-dark: #22516A;
     
-    --color-secondary: #C05621;
-    --color-secondary-light: #DD6B20;
-    --color-secondary-dark: #9C4221;
+    /* Marrom Escuro - Montanha Base */
+    --color-secondary: #5A3716;
+    --color-secondary-light: #73451B;
+    --color-secondary-dark: #3F2309;
     
-    --color-accent: #D69E2E;
-    --color-accent-light: #ECC94B;
-    --color-accent-dark: #B7791F;
+    /* Marrom Claro / Areia - Destaques */
+    --color-accent: #A37554;
+    --color-accent-light: #B48C6F;
+    --color-accent-dark: #8F5E3D;
     
     /* --- Neutrals --- */
-    --color-dark: #1A202C;
-    --color-dark-700: #2D3748;
-    --color-dark-600: #4A5568;
-    --color-dark-500: #718096;
-    --color-dark-400: #A0AEC0;
-    --color-dark-300: #CBD5E0;
-    --color-dark-200: #E2E8F0;
-    --color-dark-100: #EDF2F7;
-    --color-light: #F7FAFC;
+    --color-dark: #1F1915; /* Um pouco mais quente */
+    --color-dark-700: #2C241E;
+    --color-dark-600: #423831;
+    --color-dark-500: #6B5B53;
+    --color-dark-400: #9C887E;
+    --color-dark-300: #C2B4AB;
+    --color-dark-200: #DFD7D1;
+    --color-dark-100: #EFECE9;
+    --color-light: #F9F8F7;
     --color-white: #FFFFFF;
     
     /* --- Semantic --- */
-    --color-success: #38A169;
-    --color-error: #E53E3E;
+    --color-success: #3D8562;
+    --color-error: #B54545;
     --color-warning: #D69E2E;
-    --color-info: #3182CE;
+    --color-info: #366B85;
     
     /* --- Typography --- */
     --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-family-display: 'Outfit', 'Inter', -apple-system, sans-serif;
     --font-size-xs: 0.75rem;
     --font-size-sm: 0.875rem;
     --font-size-base: 1rem;
@@ -49,6 +53,7 @@
     --font-weight-medium: 500;
     --font-weight-semibold: 600;
     --font-weight-bold: 700;
+    --font-weight-extrabold: 800;
     
     /* --- Spacing --- */
     --space-1: 0.25rem;
@@ -71,17 +76,19 @@
     --radius-2xl: 1.5rem;
     --radius-full: 9999px;
     
-    /* --- Shadows --- */
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
-    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
-    --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
-    --shadow-glow: 0 0 20px rgba(43, 108, 176, 0.3);
+    /* --- Shadows Premium --- */
+    --shadow-sm: 0 2px 4px rgba(31, 25, 21, 0.05);
+    --shadow-md: 0 4px 12px rgba(31, 25, 21, 0.08);
+    --shadow-lg: 0 12px 24px -4px rgba(31, 25, 21, 0.12);
+    --shadow-xl: 0 24px 48px -12px rgba(31, 25, 21, 0.18);
+    --shadow-glow: 0 0 20px rgba(54, 107, 133, 0.3);
+    --shadow-glow-accent: 0 0 20px rgba(163, 117, 84, 0.4);
     
     /* --- Transitions --- */
-    --transition-fast: 150ms ease;
-    --transition-base: 250ms ease;
-    --transition-slow: 350ms ease;
+    --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-base: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-slow: 400ms cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-bounce: 500ms cubic-bezier(0.34, 1.56, 0.64, 1);
     
     /* --- Z-Index --- */
     --z-dropdown: 100;
