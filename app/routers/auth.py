@@ -34,11 +34,11 @@ async def login(data: LoginRequest, response: Response, db: Session = Depends(ge
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Conta desativada"
         )
-    if not user.email_verified:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Por favor, verifique seu e-mail para ativar a conta."
-        )
+    # if not user.email_verified:
+    #     raise HTTPException(
+    #         status_code=status.HTTP_403_FORBIDDEN,
+    #         detail="Por favor, verifique seu e-mail para ativar a conta."
+    #     )
 
     access_token = create_access_token(data={"sub": user.email})
 

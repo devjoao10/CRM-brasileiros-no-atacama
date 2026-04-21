@@ -14,7 +14,7 @@ from app.schemas.user import (
     UserListResponse,
 )
 from app.auth import get_current_user, require_admin, hash_password, create_access_token, decode_token
-from app.services.mail_service import send_verification_email
+# from app.services.mail_service import send_verification_email
 
 router = APIRouter(prefix="/api/users", tags=["Usuários"])
 
@@ -74,7 +74,6 @@ async def get_user(
 @router.post("", response_model=UserResponse, status_code=201, summary="Criar usuário")
 async def create_user(
     data: UserCreate,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
@@ -110,9 +109,9 @@ async def create_user(
     db.commit()
     db.refresh(user)
 
-    # 3. Disparo Assíncrono do E-mail de Confirmação
+    # 3. Disparo Assíncrono do E-mail de Confirmação (Desativado temporariamente)
     token = create_access_token(data={"sub": user.email, "type": "verify_email"})
-    background_tasks.add_task(send_verification_email, user.email, token, is_lead=False)
+    # background_tasks.add_task(send_verification_email, user.email, token, is_lead=False)
 
     return UserResponse.model_validate(user)
 
