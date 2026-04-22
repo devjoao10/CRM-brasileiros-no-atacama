@@ -98,66 +98,9 @@ def run_select_query(query: str) -> str:
         logger.warning(f"[AI SQL READ ERROR] {query[:200]} -> {e}")
         return json.dumps({"error": str(e)})
 
-# Tabelas que a IA pode modificar (whitelist)
-_WRITABLE_TABLES = {"leads", "tags", "lead_tags", "tasks", "funnel_entries", "lead_history", "segments"}
-# Tabelas que a IA NUNCA pode modificar
-_PROTECTED_TABLES = {"users", "chat_sessions", "chat_messages"}
-
-def run_sql_write_query(query: str) -> str:
-    """
-    Executa comandos SQL de ESCRITA (INSERT, UPDATE, DELETE) no banco de dados.
-    Permite modificar dados das tabelas do sistema. Use com cautela!
-    Retorna o número de linhas afetadas ou o erro.
-    
-    RESTRIÇÕES DE SEGURANÇA:
-    - Comandos DDL (DROP, ALTER, TRUNCATE, CREATE) são BLOQUEADOS
-    - Apenas INSERT, UPDATE e DELETE são permitidos
-    - Tabelas protegidas (users, chat_sessions) não podem ser alteradas
-    - Máximo de 100 linhas afetadas por operação
-    
-    Args:
-        query: A query SQL de escrita a ser executada.
-    """
-    query = query.strip().rstrip(";")
-    
-    # Bloquear múltiplos statements
-    if ";" in query:
-        return json.dumps({"error": "Apenas um comando por vez é permitido."})
-    
-    if query.lower().startswith("select"):
-        return json.dumps({"error": "Use run_select_query para SELECT."})
-    
-    # Bloquear comandos destrutivos/DDL via regex em qualquer posição
-    _blocked_pattern = re.compile(r'\b(drop|alter|truncate|create|attach|detach|pragma|vacuum|reindex)\b', re.IGNORECASE)
-    if _blocked_pattern.search(query):
-        return json.dumps({"error": "Query contém comandos DDL bloqueados por segurança."})
-    
-    # Verificar se começa com um comando permitido
-    first_word = query.split()[0].lower() if query.split() else ""
-    _allowed = ["insert", "update", "delete"]
-    if first_word not in _allowed:
-        return json.dumps({"error": f"Comando '{first_word}' não permitido. Use apenas INSERT, UPDATE ou DELETE."})
-    
-    # Verificar se a tabela é protegida
-    query_lower = query.lower()
-    for protected in _PROTECTED_TABLES:
-        if protected in query_lower:
-            return json.dumps({"error": f"A tabela '{protected}' é protegida e não pode ser modificada pela IA. Use os endpoints da API."})
-    
-    try:
-        with engine.begin() as conn:
-            result = conn.execute(text(query))
-            affected = result.rowcount
-            
-            # Limitar operações em massa
-            if affected > 100:
-                logger.warning(f"[AI SQL WRITE] Operação em massa: {affected} linhas afetadas. Query: {query[:200]}")
-            
-            logger.info(f"[AI SQL WRITE] {query[:200]} -> {affected} rows affected")
-            return json.dumps({"success": True, "rows_affected": affected})
-    except Exception as e:
-        logger.warning(f"[AI SQL WRITE ERROR] {query[:200]} -> {e}")
-        return json.dumps({"error": str(e)})
+# run_sql_write_query REMOVIDO por segurança.
+# A IA deve usar call_internal_api para todas as operações de escrita,
+# passando pelas rotas oficiais que aplicam validações e auditoria.
 
 # =====================================================================
 # Operational Tools
@@ -358,16 +301,9 @@ def call_internal_api(method: str, path: str, payload_json: str = None) -> str:
     # Usar a API key do usuário atual (setada pelo router de AI)
     api_key = _current_user_api_key
     
-    # Fallback: buscar API key do admin (necessário para funcionar se contexto não foi setado)
+    # Sem fallback — cada user usa sua própria API key
     if not api_key:
-        try:
-            db = SessionLocal()
-            admin_user = db.query(User).filter(User.role == "admin", User.is_active == True).first()
-            if admin_user and admin_user.api_key:
-                api_key = admin_user.api_key
-            db.close()
-        except Exception:
-            pass
+        return json.dumps({"error": "Usuário não possui API Key configurada. Gere uma em Configurações > API Key."})
     
     headers = {
         'Content-Type': 'application/json',
@@ -593,7 +529,7 @@ def generate_pdf_document(filename: str, title: str, content: str) -> str:
 
 # List of tools to pass to Gemini
 AVAILABLE_TOOLS = [
-    get_database_schema, run_select_query, run_sql_write_query, 
+    get_database_schema, run_select_query,
     update_lead_status, create_task, create_lead, add_tag_to_lead,
     get_api_endpoints, call_internal_api,
     generate_excel_document, generate_pdf_document
@@ -603,7 +539,6 @@ AVAILABLE_TOOLS = [
 TOOL_FUNCTIONS = {
     "get_database_schema": get_database_schema,
     "run_select_query": run_select_query,
-    "run_sql_write_query": run_sql_write_query,
     "update_lead_status": update_lead_status,
     "create_task": create_task,
     "create_lead": create_lead,
