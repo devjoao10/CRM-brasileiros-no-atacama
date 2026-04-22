@@ -6,7 +6,9 @@ from app.config import (
     MAIL_FROM, 
     MAIL_PORT, 
     MAIL_SERVER, 
-    MAIL_FROM_NAME
+    MAIL_FROM_NAME,
+    ENVIRONMENT,
+    APP_DOMAIN,
 )
 
 # Configuração Padrão do fastapi-mail
@@ -20,7 +22,7 @@ conf = ConnectionConfig(
     MAIL_STARTTLS=True,
     MAIL_SSL_TLS=False,
     USE_CREDENTIALS=True,
-    VALIDATE_CERTS=False # Relaxed for dev, should be True in production
+    VALIDATE_CERTS=ENVIRONMENT == "production"  # True em produção, False em dev local
 )
 
 mail_handler = FastMail(conf)
@@ -29,7 +31,7 @@ async def send_verification_email(email_to: str, token: str, is_lead: bool = Fal
     """
     Envia um email (Double Opt-in) contendo o link mágico com o Token JWT de verificação.
     """
-    domain = "http://127.0.0.1:8000" # Mudar para seu dominio real no futuro
+    domain = APP_DOMAIN
     
     # Rota GET que vamos criar para receber o clique
     verify_url = f"{domain}/api/users/verify-click?token={token}"

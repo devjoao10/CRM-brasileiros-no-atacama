@@ -1,38 +1,76 @@
 version: '3.8'
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: crm_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: crm_atacama
+      POSTGRES_USER: ${POSTGRES_USER:-crm_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no .env}
+      # Senha do user read-only (criado pelo init.sql)
+      CRM_READONLY_PASSWORD: ${CRM_READONLY_PASSWORD:?Defina CRM_READONLY_PASSWORD no .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Scripts de inicialização (executados na PRIMEIRA vez que o container sobe)
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./docker/postgres/init-hardening.sh:/docker-entrypoint-initdb.d/02-hardening.sh:ro
+      # Configuração customizada de segurança
+      - ./docker/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./docker/postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+    command: >
+      postgres
+      -c config_file=/etc/postgresql/postgresql.conf
+      -c hba_file=/etc/postgresql/pg_hba.conf
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-crm_user} -d crm_atacama"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    # Sem port mapping externo — banco acessível APENAS dentro do Docker
+
   crm:
     build: .
     container_name: crm_app
     restart: always
     ports:
       - "8000:8000"
-    volumes:
-      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       - ENVIRONMENT=production
-    # Como o seu banco de dados atual é SQLite (crm_atacama.db), ele continuará funcionando no volume mapeado
-    # Se formos migrar para PostgreSQL, adicionaremos o container aqui depois.
+      # App usa crm_user (owner) — pode criar tabelas + DML
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-crm_user}:${POSTGRES_PASSWORD}@postgres:5432/crm_atacama
+      # IA usa user read-only — APENAS SELECT, timeout 10s, max 5 conexões
+      - DATABASE_READONLY_URL=postgresql://crm_readonly:${CRM_READONLY_PASSWORD}@postgres:5432/crm_atacama
+      - SECRET_KEY=${SECRET_KEY:?Defina SECRET_KEY no .env}
+      - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD:?Defina ADMIN_INITIAL_PASSWORD no .env}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.crm.rule=Host(`crm.crmbrasileirosnoatacama.cloud`)"
       - "traefik.http.routers.crm.entrypoints=websecure"
       - "traefik.http.routers.crm.tls.certresolver=letsencrypt"
       - "traefik.http.services.crm.loadbalancer.server.port=8000"
+
   n8n:
     image: docker.n8n.io/n8nio/n8n
     container_name: n8n_server
     restart: always
-    ports:
-      - "5678:5678"
+    expose:
+      - "5678"
     environment:
-      - N8N_HOST=187.127.24.242 
+      - N8N_HOST=${N8N_HOST:-localhost}
       - N8N_PORT=5678
-      - N8N_PROTOCOL=http
+      - N8N_PROTOCOL=${N8N_PROTOCOL:-http}
       - NODE_ENV=production
-      - WEBHOOK_URL=http://187.127.24.242:5678/
+      - WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://localhost:5678/}
       - GENERIC_TIMEZONE=America/Sao_Paulo
-      - N8N_SECURE_COOKIE=false
+      - N8N_SECURE_COOKIE=true
     volumes:
       - n8n_data:/home/node/.n8n
     labels:
@@ -43,4 +81,5 @@ services:
       - "traefik.http.services.n8n.loadbalancer.server.port=5678"
 
 volumes:
+  pgdata:
   n8n_data:

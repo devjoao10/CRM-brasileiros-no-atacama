@@ -6,19 +6,55 @@ try:
     load_dotenv()
 except ImportError:
     pass
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
+
+# Environment
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+
 # Security
-# Chave secreta fixa para não derrubar o login a cada restart do Uvicorn
-SECRET_KEY = os.getenv("SECRET_KEY", "bna_secret_dev_key_2026_xyz_001_fixed")
+# Em produção, SECRET_KEY DEVE ser definida via variável de ambiente.
+# Em dev, gera uma chave aleatória por sessão (tokens invalidam ao reiniciar, mas é seguro).
+_default_key = secrets.token_urlsafe(64) if ENVIRONMENT == "development" else None
+SECRET_KEY = os.getenv("SECRET_KEY", _default_key)
+if not SECRET_KEY:
+    raise RuntimeError(
+        "\n\n🔒 ERRO CRÍTICO: SECRET_KEY não está definida!\n"
+        "Defina a variável de ambiente SECRET_KEY antes de rodar em produção.\n"
+        "Gere uma com: python -c \"import secrets; print(secrets.token_urlsafe(64))\"\n"
+    )
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))  # 8 hours
 
-# Database
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./crm_atacama.db")
+# Database — SQLite em dev local, PostgreSQL em produção/Docker
+_default_db = "sqlite:///./crm_atacama.db" if ENVIRONMENT == "development" else None
+DATABASE_URL = os.getenv("DATABASE_URL", _default_db)
+if not DATABASE_URL:
+    raise RuntimeError(
+        "\n\n🔒 ERRO CRÍTICO: DATABASE_URL não está definida!\n"
+        "Defina a variável de ambiente DATABASE_URL antes de rodar em produção.\n"
+        "Exemplo: postgresql://crm_app:SENHA@postgres:5432/crm_atacama\n"
+    )
+
+# Conexão read-only para queries da IA (usa user separado com permissões limitadas)
+# Em dev local, usa a mesma URL (SQLite não tem users separados)
+DATABASE_READONLY_URL = os.getenv("DATABASE_READONLY_URL", DATABASE_URL)
+
+# Application
+APP_DOMAIN = os.getenv("APP_DOMAIN", "http://127.0.0.1:8000")
+
+# Senha inicial do admin — OBRIGATÓRIA em produção, fallback inseguro apenas em dev
+_default_admin_pwd = "admin123" if ENVIRONMENT == "development" else None
+ADMIN_INITIAL_PASSWORD = os.getenv("ADMIN_INITIAL_PASSWORD", _default_admin_pwd)
+if not ADMIN_INITIAL_PASSWORD:
+    raise RuntimeError(
+        "\n\n🔒 ERRO CRÍTICO: ADMIN_INITIAL_PASSWORD não está definida!\n"
+        "Defina a variável de ambiente ADMIN_INITIAL_PASSWORD antes de rodar em produção.\n"
+    )
+
+# Upload
+MAX_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_UPLOAD_SIZE_BYTES", str(10 * 1024 * 1024)))  # 10MB
+
+# API Key expiry (days, 0 = never expires)
+API_KEY_EXPIRY_DAYS = int(os.getenv("API_KEY_EXPIRY_DAYS", "0"))
 
 # E-mail (SMTP)
 MAIL_USERNAME = os.getenv("MAIL_USERNAME", "seu_email@empresa.com")

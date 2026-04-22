@@ -4,8 +4,10 @@ from typing import Optional, List
 from datetime import datetime, date
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
+from app.config import MAX_UPLOAD_SIZE_BYTES
+from app.database import IS_SQLITE
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import or_, extract, and_, String
+from sqlalchemy import or_, extract, and_, String, func
 
 from app.database import get_db
 from app.models.lead import Lead
@@ -24,6 +26,17 @@ from app.schemas.lead import (
 from app.auth import get_current_user
 
 router = APIRouter(prefix="/api/leads", tags=["Leads"])
+
+
+def _json_list_contains(column, value: str):
+    """Filtra coluna JSON list que contenha um valor. Compatível com SQLite e PostgreSQL."""
+    if IS_SQLITE:
+        # SQLite armazena JSON como texto — LIKE funciona
+        return column.cast(String).ilike(f'%"{value}"%')
+    else:
+        # PostgreSQL: usar operador nativo @> (contains)
+        import json
+        return column.op("@>")(json.dumps([value]))
 
 
 def _build_lead_response(lead: Lead, db: Session) -> LeadResponse:
@@ -92,8 +105,7 @@ async def list_leads(
             )
         )
     if destino:
-        # JSON list contains — SQLite stores JSON as text, so LIKE works
-        query = query.filter(Lead.destinos.cast(String).ilike(f'%"{destino}"%'))
+        query = query.filter(_json_list_contains(Lead.destinos, destino))
     if status_venda:
         query = query.filter(Lead.status_venda == status_venda)
     if is_active is not None:
@@ -190,9 +202,8 @@ async def segment_leads(
             Lead.whatsapp.ilike(f),
         ))
 
-    # Destino (JSON list contains)
     if destino:
-        query = query.filter(Lead.destinos.cast(String).ilike(f'%"{destino}"%'))
+        query = query.filter(_json_list_contains(Lead.destinos, destino))
 
     # Status
     if status_venda:
@@ -492,6 +503,12 @@ async def import_leads(
     """
     filename = file.filename.lower() if file.filename else ""
     content = await file.read()
+    
+    if len(content) > MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Arquivo muito grande. Máximo permitido: {MAX_UPLOAD_SIZE_BYTES // (1024*1024)}MB"
+        )
 
     if not filename:
         raise HTTPException(status_code=400, detail="Nome do arquivo não informado")

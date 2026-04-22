@@ -183,10 +183,11 @@ async def delete_user(
 @router.post("/{user_id}/verify-email", summary="Confirmar email do usuário via API")
 async def verify_user_email(
     user_id: int,
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """
-    Aberto para webhook via requisição externa (n8n).
+    Confirma o email de um usuário. Requer autenticação (JWT ou API Key do N8N).
     """
     user = db.query(User).filter(User.id == user_id).first()
     if not user:

@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
+import os
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -13,10 +16,12 @@ from app.auth import (
 )
 
 router = APIRouter(prefix="/api/auth", tags=["Autenticação"])
+limiter = Limiter(key_func=get_remote_address)
 
 
 @router.post("/login", response_model=TokenResponse, summary="Login com email e senha")
-async def login(data: LoginRequest, response: Response, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+async def login(request: Request, data: LoginRequest, response: Response, db: Session = Depends(get_db)):
     """
     Autentica o usuário e retorna um JWT token.
     
@@ -43,10 +48,12 @@ async def login(data: LoginRequest, response: Response, db: Session = Depends(ge
     access_token = create_access_token(data={"sub": user.email})
 
     # Set cookie for frontend
+    is_production = os.getenv("ENVIRONMENT", "development") == "production"
     response.set_cookie(
         key="access_token",
         value=f"Bearer {access_token}",
         httponly=True,
+        secure=is_production,  # HTTPS only em produção
         max_age=28800,  # 8 hours
         samesite="lax"
     )

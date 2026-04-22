@@ -1,8 +1,11 @@
 import json
+import logging
 import os
 import uuid
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from fastapi.responses import Response
 from pydantic import BaseModel
 import google.generativeai as genai
@@ -10,40 +13,21 @@ from google.generativeai import protos as genai_protos
 from google.protobuf.struct_pb2 import Struct
 from sqlalchemy.orm import Session
 
-from app.config import GEMINI_API_KEY
+from app.config import GEMINI_API_KEY, MAX_UPLOAD_SIZE_BYTES
 from app.auth import get_current_user
 from app.models.user import User
 from app.models.chat import ChatSession, ChatMessage
 from app.database import get_db
-from app.services.ai_tools import AVAILABLE_TOOLS, TOOL_FUNCTIONS
+from app.services.ai_tools import AVAILABLE_TOOLS, TOOL_FUNCTIONS, set_ai_user_context, clear_ai_user_context
 
 router = APIRouter(prefix="/api/ai", tags=["Assistente IA"])
+_ai_limiter = Limiter(key_func=get_remote_address)
 
 # Diretório para uploads e documentos gerados
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-@router.get("/test_pdf")
-def debug_test_pdf():
-    from app.services.ai_tools import generate_pdf_document
-    import traceback
-    try:
-        ret = generate_pdf_document("test", "Test PDF", "Hello world")
-        return {"result": ret}
-    except Exception as e:
-        return {"error": str(e), "trace": traceback.format_exc()}
-
-@router.get("/install_deps")
-def install_dependencies():
-    import subprocess
-    import sys
-    try:
-        out = subprocess.check_output([sys.executable, "-m", "pip", "install", "fpdf2"], stderr=subprocess.STDOUT)
-        return {"success": True, "output": out.decode()}
-    except subprocess.CalledProcessError as e:
-        return {"success": False, "error": e.output.decode()}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+# Endpoints de debug removidos por segurança (test_pdf, install_deps)
 
 # Inicializa as credenciais da Gemini
 if GEMINI_API_KEY:
@@ -72,7 +56,7 @@ Seu papel é ajudar o usuário administrando leads, viagens, tarefas, equipes, e
 COMO COMPLETAR SUAS TAREFAS:
 Você tem duas abordagens principais para alterar ou consultar o sistema:
 1. **Agentic API (PREFERENCIAL)**: Você já tem mapeado em sua memória (veja abaixo) todas as rotas /api/ disponíveis. Use a ferramenta `call_internal_api` para simular requisições HTTP para essas rotas. Use preferencialmente as rotas oficias (ex: `POST /api/leads`) porque elas aplicam validações de campo, gatilham automações N8N e garantem a integridade dos dados!
-2. **God Mode SQL**: Se a rota não existir, não funcionar, ou for uma alteração em massa complexa, você tem as ferramentas `run_select_query` e `run_sql_write_query` para modificar **qualquer** tabela diretamente no banco SQLite (`leads`, `tags`, `users`, etc). Use `get_database_schema` se não souber os campos.
+2. **God Mode SQL**: Se a rota não existir, não funcionar, ou for uma alteração em massa complexa, você tem as ferramentas `run_select_query` e `run_sql_write_query` para modificar **qualquer** tabela diretamente no banco de dados (`leads`, `tags`, etc). Use `get_database_schema` se não souber os campos. NUNCA modifique a tabela `users` por SQL.
 3. Outros helpers fáceis: `create_lead`, `add_tag_to_lead`.
 
 CAPACIDADES DE DOCUMENTOS:
@@ -180,6 +164,13 @@ async def upload_file_for_ai(
     filename = file.filename.lower() if file.filename else ""
     content = await file.read()
     
+    # Limitar tamanho do upload
+    if len(content) > MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Arquivo muito grande. Máximo permitido: {MAX_UPLOAD_SIZE_BYTES // (1024*1024)}MB"
+        )
+    
     extracted_text = ""
     
     try:
@@ -264,8 +255,9 @@ async def upload_file_for_ai(
             response_class=Response)
 async def download_file(
     filename: str,
+    current_user: User = Depends(get_current_user),
 ):
-    """Baixa um arquivo gerado pela IA com validações robustas e logs de debug."""
+    """Baixa um arquivo gerado pela IA com validações robustas. Requer autenticação."""
     import logging
     logger = logging.getLogger("ai.download")
     
@@ -334,6 +326,7 @@ async def download_file(
 # ─── Chat ────────────────────────────────────────────────────────────
 
 @router.post("/chat", summary="Conversar com a IA do sistema")
+@_ai_limiter.limit("20/minute")
 def ai_chat(
     request: ChatRequest,
     req: Request,
@@ -342,6 +335,10 @@ def ai_chat(
 ):
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY não configurada no servidor.")
+    
+    # Propagar contexto do usuário para as ferramentas da IA (C3)
+    if current_user.api_key:
+        set_ai_user_context(current_user.api_key)
     
     # Buscar ou criar sessão
     session = None
@@ -536,7 +533,8 @@ def ai_chat(
         }
         
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erro interno da IA: {str(e)}")
+        logging.exception("Erro interno da IA")
+        raise HTTPException(status_code=500, detail="Erro interno da IA. Tente novamente.")
+    finally:
+        clear_ai_user_context()
 

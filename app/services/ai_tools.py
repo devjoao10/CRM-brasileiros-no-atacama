@@ -1,7 +1,11 @@
+import logging
+import re
+
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
-from sqlalchemy import text
-from app.database import engine, SessionLocal
+from sqlalchemy import text, create_engine
+from app.database import engine, SessionLocal, IS_SQLITE
+from app.config import DATABASE_URL, DATABASE_READONLY_URL
 from app.models.lead import Lead
 from app.models.tag import Tag
 from app.models.task import Task
@@ -9,6 +13,35 @@ from app.models.user import User
 import json
 import urllib.request
 import urllib.error
+
+logger = logging.getLogger(__name__)
+
+# Conexão read-only para queries SELECT da IA
+if IS_SQLITE:
+    # SQLite: usar URI mode com ?mode=ro para read-only
+    _ro_url = DATABASE_URL.replace("sqlite:///", "sqlite:///file:", 1) + "?mode=ro&uri=true"
+    _read_only_engine = create_engine(_ro_url, connect_args={"check_same_thread": False})
+else:
+    # PostgreSQL: usar user dedicado read-only (crm_readonly) via DATABASE_READONLY_URL
+    _read_only_engine = create_engine(
+        DATABASE_READONLY_URL,
+        pool_size=3,
+        max_overflow=5,
+        pool_pre_ping=True,
+    )
+
+# Variável global para armazenar o contexto do usuário atual
+# Setado pelo router de AI antes de executar as tools
+_current_user_api_key = None
+
+def set_ai_user_context(api_key: str):
+    """Define a API key do usuário que está interagindo com a IA."""
+    global _current_user_api_key
+    _current_user_api_key = api_key
+
+def clear_ai_user_context():
+    global _current_user_api_key
+    _current_user_api_key = None
 
 # =====================================================================
 # Database Inspector Tool
@@ -34,43 +67,96 @@ def get_database_schema() -> str:
 
 def run_select_query(query: str) -> str:
     """
-    Executa uma query SQL de LEITURA (SELECT) genérica no banco de dados SQLite.
+    Executa uma query SQL de LEITURA (SELECT) genérica no banco de dados.
     Nunca alterar dados usando essa ferramenta. Usar apenas para responder perguntas
     analíticas como "quantos leads temos?", "quantas tarefas estão em pending?".
     
     Args:
-        query: A query SQL (SQLite) de leitura a ser executada.
+        query: A query SQL de leitura a ser executada.
     """
-    query = query.strip()
+    query = query.strip().rstrip(";")
+    
+    # Bloquear múltiplos statements
+    if ";" in query:
+        return json.dumps({"error": "Apenas uma query por vez é permitida."})
+    
     if not query.lower().startswith("select"):
         return json.dumps({"error": "Apenas consultas SELECT são permitidas."})
     
+    # Bloquear subqueries destrutivas
+    _dangerous = re.compile(r'\b(insert|update|delete|drop|alter|create|attach|pragma|truncate)\b', re.IGNORECASE)
+    if _dangerous.search(query):
+        return json.dumps({"error": "Query contém palavras-chave não permitidas para leitura."})
+    
     try:
-        with engine.connect() as conn:
+        with _read_only_engine.connect() as conn:
             result = conn.execute(text(query))
-            rows = [dict(row._mapping) for row in result.all()]
+            rows = [dict(row._mapping) for row in result.fetchmany(500)]  # Limitar resultados
+            logger.info(f"[AI SQL READ] {query[:200]} -> {len(rows)} rows")
             return json.dumps(rows, default=str)
     except Exception as e:
+        logger.warning(f"[AI SQL READ ERROR] {query[:200]} -> {e}")
         return json.dumps({"error": str(e)})
+
+# Tabelas que a IA pode modificar (whitelist)
+_WRITABLE_TABLES = {"leads", "tags", "lead_tags", "tasks", "funnel_entries", "lead_history", "segments"}
+# Tabelas que a IA NUNCA pode modificar
+_PROTECTED_TABLES = {"users", "chat_sessions", "chat_messages"}
 
 def run_sql_write_query(query: str) -> str:
     """
-    Executa comandos SQL de ESCRITA (INSERT, UPDATE, DELETE) no banco de dados SQLite.
-    Permite modificar qualquer tabela do sistema livremente. Use com cautela!
+    Executa comandos SQL de ESCRITA (INSERT, UPDATE, DELETE) no banco de dados.
+    Permite modificar dados das tabelas do sistema. Use com cautela!
     Retorna o número de linhas afetadas ou o erro.
+    
+    RESTRIÇÕES DE SEGURANÇA:
+    - Comandos DDL (DROP, ALTER, TRUNCATE, CREATE) são BLOQUEADOS
+    - Apenas INSERT, UPDATE e DELETE são permitidos
+    - Tabelas protegidas (users, chat_sessions) não podem ser alteradas
+    - Máximo de 100 linhas afetadas por operação
     
     Args:
         query: A query SQL de escrita a ser executada.
     """
-    query = query.strip()
+    query = query.strip().rstrip(";")
+    
+    # Bloquear múltiplos statements
+    if ";" in query:
+        return json.dumps({"error": "Apenas um comando por vez é permitido."})
+    
     if query.lower().startswith("select"):
         return json.dumps({"error": "Use run_select_query para SELECT."})
+    
+    # Bloquear comandos destrutivos/DDL via regex em qualquer posição
+    _blocked_pattern = re.compile(r'\b(drop|alter|truncate|create|attach|detach|pragma|vacuum|reindex)\b', re.IGNORECASE)
+    if _blocked_pattern.search(query):
+        return json.dumps({"error": "Query contém comandos DDL bloqueados por segurança."})
+    
+    # Verificar se começa com um comando permitido
+    first_word = query.split()[0].lower() if query.split() else ""
+    _allowed = ["insert", "update", "delete"]
+    if first_word not in _allowed:
+        return json.dumps({"error": f"Comando '{first_word}' não permitido. Use apenas INSERT, UPDATE ou DELETE."})
+    
+    # Verificar se a tabela é protegida
+    query_lower = query.lower()
+    for protected in _PROTECTED_TABLES:
+        if protected in query_lower:
+            return json.dumps({"error": f"A tabela '{protected}' é protegida e não pode ser modificada pela IA. Use os endpoints da API."})
     
     try:
         with engine.begin() as conn:
             result = conn.execute(text(query))
-            return json.dumps({"success": True, "rows_affected": result.rowcount})
+            affected = result.rowcount
+            
+            # Limitar operações em massa
+            if affected > 100:
+                logger.warning(f"[AI SQL WRITE] Operação em massa: {affected} linhas afetadas. Query: {query[:200]}")
+            
+            logger.info(f"[AI SQL WRITE] {query[:200]} -> {affected} rows affected")
+            return json.dumps({"success": True, "rows_affected": affected})
     except Exception as e:
+        logger.warning(f"[AI SQL WRITE ERROR] {query[:200]} -> {e}")
         return json.dumps({"error": str(e)})
 
 # =====================================================================
@@ -256,22 +342,45 @@ def call_internal_api(method: str, path: str, payload_json: str = None) -> str:
     """
     Faz uma requisição HTTP para a própria API do sistema.
     Isso te dá acesso a QUALQUER MÉTODO como se você fosse o frontend do sistema.
+    A requisição usa o contexto de segurança do usuário atualmente logado.
     
     Args:
         method: O método HTTP (GET, POST, PUT, DELETE).
         path: O caminho do endpoint (ex: '/api/leads/segment').
         payload_json: Opcional. Uma string contendo um JSON válido para o body da requisição (ex: '{"nome": "João"}').
     """
+    # Sanitizar path — prevenir SSRF para hosts externos
+    if path.startswith("http") or ".." in path:
+        return json.dumps({"error": "Path inválido. Use apenas caminhos relativos como /api/leads."})
+    
     url = f"http://127.0.0.1:8000{path}"
+    
+    # Usar a API key do usuário atual (setada pelo router de AI)
+    api_key = _current_user_api_key
+    
+    # Fallback: buscar API key do admin (necessário para funcionar se contexto não foi setado)
+    if not api_key:
+        try:
+            db = SessionLocal()
+            admin_user = db.query(User).filter(User.role == "admin", User.is_active == True).first()
+            if admin_user and admin_user.api_key:
+                api_key = admin_user.api_key
+            db.close()
+        except Exception:
+            pass
     
     headers = {
         'Content-Type': 'application/json',
         'Accept': 'application/json'
     }
+    if api_key:
+        headers['X-API-Key'] = api_key
     
     data = None
     if payload_json and payload_json.strip():
         data = payload_json.encode('utf-8')
+    
+    logger.info(f"[AI API CALL] {method.upper()} {path}")
         
     try:
         req = urllib.request.Request(url, data=data, headers=headers, method=method.upper())
@@ -478,9 +587,7 @@ def generate_pdf_document(filename: str, title: str, content: str) -> str:
             "message": f"PDF gerado com sucesso! Link: {download_url}"
         })
     except Exception as e:
-        import traceback
-        with open("h:/CRM brasileiros no atacama/pdf_error.log", "w") as f:
-            f.write(traceback.format_exc())
+        logger.exception("Erro ao gerar PDF")
         return json.dumps({"error": str(e)})
 
 

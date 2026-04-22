@@ -1,3 +1,4 @@
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -66,9 +67,8 @@ async def list_funnels(
             funnels=[FunnelResponse.model_validate(f) for f in funnels],
         )
     except Exception as e:
-        import traceback
-        error_msg = traceback.format_exc()
-        raise HTTPException(status_code=500, detail=str(error_msg))
+        logging.exception("Erro ao listar funis")
+        raise HTTPException(status_code=500, detail="Erro interno do servidor")
 
 
 @router.get("/funnels/{funnel_id}", response_model=FunnelResponse, summary="Detalhes de um funil")
@@ -235,9 +235,8 @@ async def get_kanban_board(
             total_leads=total,
         )
     except Exception as e:
-        import traceback
-        error_msg = traceback.format_exc()
-        raise HTTPException(status_code=500, detail=str(error_msg))
+        logging.exception("Erro ao carregar board kanban")
+        raise HTTPException(status_code=500, detail="Erro interno do servidor")
 
 
 # ─── Lead Entries ────────────────────────────────

@@ -71,8 +71,7 @@ async def get_dashboard_analytics(
         curr_date += timedelta(days=1)
         
     for l in all_leads_period:
-        # Usa data de criacao pra agrupar (ou data do evento se o SQLite suportasse facilmente)
-        # Vamos agrupar os Leads novos do dia e Vendas do dia
+        # Agrupa leads novos e vendas do dia pela data de criação
         d_str = l.created_at.strftime("%Y-%m-%d")
         if d_str in chart_dict:
             chart_dict[d_str]["leads"] += 1

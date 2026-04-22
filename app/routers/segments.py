@@ -4,6 +4,7 @@ from datetime import datetime, date
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, extract, String
+from app.database import IS_SQLITE
 
 from app.database import get_db
 from app.models.segment import Segment
@@ -20,6 +21,15 @@ from app.models.pipeline import Funnel
 from app.auth import get_current_user
 
 router = APIRouter(prefix="/api/segments", tags=["Segmentação"])
+
+
+def _json_list_contains(column, value: str):
+    """Filtra coluna JSON list que contenha um valor. Compatível com SQLite e PostgreSQL."""
+    if IS_SQLITE:
+        return column.cast(String).ilike(f'%"{value}"%')
+    else:
+        import json
+        return column.op("@>")(json.dumps([value]))
 
 
 # ─── Helpers ─────────────────────────────────────
@@ -91,7 +101,7 @@ def _resolve_segment_query(filtros: dict, db: Session, for_count: bool = False):
         ))
 
     if destino:
-        query = query.filter(Lead.destinos.cast(String).ilike(f'%"{destino}"%'))
+        query = query.filter(_json_list_contains(Lead.destinos, destino))
 
     if is_active is not None:
         query = query.filter(Lead.is_active == is_active)
