@@ -46,8 +46,22 @@ class FunnelListResponse(BaseModel):
 # ─── Funnel Entry (lead in funnel) ───────────────
 
 class FunnelEntryCreate(BaseModel):
+    model_config = {"coerce_numbers_to_str": False}
     lead_id: int = Field(..., description="ID do lead")
     etapa_id: str = Field(..., description="ID da etapa onde posicionar o lead")
+
+    @classmethod
+    def __get_validators__(cls):
+        yield cls.validate
+
+    from pydantic import field_validator
+
+    @field_validator("lead_id", mode="before")
+    @classmethod
+    def coerce_lead_id(cls, v):
+        if isinstance(v, str):
+            return int(v)
+        return v
 
 
 class FunnelEntryMove(BaseModel):
