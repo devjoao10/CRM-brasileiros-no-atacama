@@ -18,6 +18,8 @@ async def list_tasks(
     due_date: Optional[date] = Query(None, description="Filtrar por data exata (YYYY-MM-DD)"),
     overdue: Optional[bool] = Query(False, description="Mostrar apenas atrasadas"),
     user_filter: Optional[int] = Query(None, description="Filtrar por ID do usuário (apenas Admin)"),
+    skip: int = Query(0, ge=0, description="Registros para pular"),
+    limit: int = Query(100, ge=1, le=500, description="Máximo de registros"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -43,8 +45,8 @@ async def list_tasks(
     if overdue:
         query = query.filter(Task.data_vencimento < datetime.now(), Task.status != TaskStatus.CONCLUIDO, Task.status != TaskStatus.CANCELADO)
 
-    # Order by due date
-    tasks = query.order_by(Task.data_vencimento.asc()).all()
+    # Order by due date with pagination
+    tasks = query.order_by(Task.data_vencimento.asc()).offset(skip).limit(limit).all()
     return tasks
 
 @router.post("", response_model=TaskResponse, status_code=201, summary="Criar tarefa")

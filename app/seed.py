@@ -1,14 +1,12 @@
 """Seed script to create initial admin user."""
-from app.database import SessionLocal, engine, Base
+from app.database import SessionLocal
 from app.models.user import User, UserRole
 from app.auth import hash_password
 from app.config import ADMIN_INITIAL_PASSWORD
 
 
 def seed_database():
-    """Create tables and seed initial data."""
-    # Create all tables
-    Base.metadata.create_all(bind=engine)
+    """Create initial admin user if not exists."""
 
     db = SessionLocal()
     try:

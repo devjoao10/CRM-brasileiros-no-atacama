@@ -1,4 +1,7 @@
 import logging
+import os
+import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -21,10 +24,41 @@ from app.models.task import Task  # noqa: F401
 from app.models.chat import ChatSession, ChatMessage  # noqa: F401
 from app.seed import seed_database
 
-# Create tables on startup
-Base.metadata.create_all(bind=engine)
-
 logger = logging.getLogger(__name__)
+
+# Diretório de uploads (arquivos gerados pela IA)
+UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
+
+
+def _cleanup_old_uploads(max_age_hours: int = 24):
+    """Remove arquivos de upload mais antigos que max_age_hours."""
+    if not os.path.isdir(UPLOAD_DIR):
+        return
+    now = time.time()
+    cutoff = now - (max_age_hours * 3600)
+    removed = 0
+    for fname in os.listdir(UPLOAD_DIR):
+        fpath = os.path.join(UPLOAD_DIR, fname)
+        if os.path.isfile(fpath) and os.path.getmtime(fpath) < cutoff:
+            try:
+                os.remove(fpath)
+                removed += 1
+            except OSError:
+                pass
+    if removed:
+        logger.info(f"🧹 Limpeza de uploads: {removed} arquivos removidos (>{max_age_hours}h)")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup and shutdown events."""
+    # Startup
+    Base.metadata.create_all(bind=engine)
+    seed_database()
+    _cleanup_old_uploads(max_age_hours=24)
+    yield
+    # Shutdown (nada por enquanto)
+
 
 app = FastAPI(
     title=PROJECT_NAME,
@@ -32,6 +66,7 @@ app = FastAPI(
     description=DESCRIPTION,
     docs_url="/docs" if ENVIRONMENT == "development" else None,
     redoc_url="/redoc" if ENVIRONMENT == "development" else None,
+    lifespan=lifespan,
 )
 
 # Rate Limiter
@@ -82,12 +117,6 @@ app.include_router(analytics.router)
 app.include_router(ai.router)
 # Include page routes (must be last to not conflict with API routes)
 app.include_router(pages.router)
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Seed database on first run."""
-    seed_database()
 
 
 # Health check endpoint (useful for N8N)

@@ -103,7 +103,7 @@ async def create_user(
         email=data.email,
         hashed_password=hash_password(data.password),
         role=data.role,
-        email_verified=False  # Bloqueia login até clique no email
+        email_verified=True  # Verificação por email desativada — ativar quando SMTP estiver configurado
     )
     db.add(user)
     db.commit()

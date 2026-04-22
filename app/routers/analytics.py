@@ -36,50 +36,59 @@ async def get_dashboard_analytics(
     start_dt = datetime.combine(start_date, time.min)
     end_dt = datetime.combine(end_date, time.max)
 
-    # 2. Query Base de Leads criados no período
-    leads_query = db.query(Lead).filter(Lead.created_at >= start_dt, Lead.created_at <= end_dt)
-    total_leads = leads_query.count()
+    # KPIs via SQL (sem carregar todos os leads em memória)
+    total_leads = db.query(func.count(Lead.id)).filter(
+        Lead.created_at >= start_dt, Lead.created_at <= end_dt
+    ).scalar()
 
-    # 3. Vendas Fechadas no período (Leads com status 'venda')
-    vendas_query = leads_query.filter(Lead.status_venda == "venda")
-    all_vendas_leads = vendas_query.all()
-    vendas_fechadas = len(all_vendas_leads)
+    vendas_fechadas = db.query(func.count(Lead.id)).filter(
+        Lead.created_at >= start_dt, Lead.created_at <= end_dt,
+        Lead.status_venda == "venda"
+    ).scalar()
 
-    # 4. Taxa de Conversão vs Total Leads do mesmo período
     conversao = 0
     if total_leads > 0:
         conversao = round((vendas_fechadas / total_leads) * 100, 1)
 
-    # 5. Tarefas de "Hoje" e Atrasadas (usando timezone do servidor)
+    # Tarefas pendentes/atrasadas
     hoje_end = datetime.combine(date.today(), time.max)
-    tarefas_query = db.query(Task).filter(
+    tarefas_query = db.query(func.count(Task.id)).filter(
         Task.status.in_(["pendente", "em_andamento"]),
         Task.data_vencimento <= hoje_end
     )
-    if current_user.role != "admin": # Puxa só as dele se não for admin
+    if current_user.role != "admin":
         tarefas_query = tarefas_query.filter(Task.user_id == current_user.id)
-    tarefas_pendentes = tarefas_query.count()
+    tarefas_pendentes = tarefas_query.scalar()
 
-    # 6. Agrupamento para Gráfico Diário
-    all_leads_period = leads_query.all()
-    
+    # Gráfico diário via SQL GROUP BY
+    daily_leads = db.query(
+        func.date(Lead.created_at).label("dia"),
+        func.count(Lead.id).label("total")
+    ).filter(
+        Lead.created_at >= start_dt, Lead.created_at <= end_dt
+    ).group_by(func.date(Lead.created_at)).all()
+
+    daily_vendas = db.query(
+        func.date(Lead.created_at).label("dia"),
+        func.count(Lead.id).label("total")
+    ).filter(
+        Lead.created_at >= start_dt, Lead.created_at <= end_dt,
+        Lead.status_venda == "venda"
+    ).group_by(func.date(Lead.created_at)).all()
+
+    # Montar dicionário do gráfico
+    leads_by_day = {str(row.dia): row.total for row in daily_leads}
+    vendas_by_day = {str(row.dia): row.total for row in daily_vendas}
+
     chart_dict = {}
     curr_date = start_date
     while curr_date <= end_date:
         d_str = curr_date.strftime("%Y-%m-%d")
-        chart_dict[d_str] = {"leads": 0, "vendas": 0}
+        chart_dict[d_str] = {
+            "leads": leads_by_day.get(d_str, 0),
+            "vendas": vendas_by_day.get(d_str, 0),
+        }
         curr_date += timedelta(days=1)
-        
-    for l in all_leads_period:
-        # Agrupa leads novos e vendas do dia pela data de criação
-        d_str = l.created_at.strftime("%Y-%m-%d")
-        if d_str in chart_dict:
-            chart_dict[d_str]["leads"] += 1
-            
-    for l in all_vendas_leads:
-        d_str = l.created_at.strftime("%Y-%m-%d")
-        if d_str in chart_dict:
-            chart_dict[d_str]["vendas"] += 1
 
     chart_labels = sorted(list(chart_dict.keys()))
     chart_leads = [chart_dict[lbl]["leads"] for lbl in chart_labels]

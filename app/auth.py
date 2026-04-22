@@ -1,3 +1,4 @@
+import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -43,9 +44,17 @@ def decode_token(token: str) -> Optional[dict]:
         return None
 
 
-def generate_api_key() -> str:
-    """Generate a secure API key for N8N integrations."""
-    return f"bna_{secrets.token_urlsafe(48)}"
+def generate_api_key() -> tuple[str, str]:
+    """Generate a secure API key for N8N integrations.
+    Returns (plain_key, hashed_key). The plain key is shown only once."""
+    plain_key = f"bna_{secrets.token_urlsafe(48)}"
+    hashed_key = hash_api_key(plain_key)
+    return plain_key, hashed_key
+
+
+def hash_api_key(api_key: str) -> str:
+    """Hash an API key with SHA-256 for secure storage."""
+    return hashlib.sha256(api_key.encode()).hexdigest()
 
 
 def _get_user_from_jwt(token: str, db: Session) -> Optional[User]:
@@ -63,8 +72,9 @@ def _get_user_from_jwt(token: str, db: Session) -> Optional[User]:
 
 
 def _get_user_from_api_key(api_key: str, db: Session) -> Optional[User]:
-    """Extract user from API Key (for N8N)."""
-    user = db.query(User).filter(User.api_key == api_key).first()
+    """Extract user from API Key (for N8N). Compares SHA-256 hash."""
+    hashed = hash_api_key(api_key)
+    user = db.query(User).filter(User.api_key == hashed).first()
     if user and user.is_active:
         return user
     return None

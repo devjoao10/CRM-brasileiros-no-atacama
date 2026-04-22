@@ -24,11 +24,13 @@ router = APIRouter(prefix="/api/tags", tags=["Tags"])
 @router.get("", response_model=TagListResponse, summary="Listar todas as tags")
 async def list_tags(
     search: Optional[str] = Query(None, description="Busca por nome"),
+    skip: int = Query(0, ge=0, description="Registros para pular"),
+    limit: int = Query(100, ge=1, le=500, description="Máximo de registros"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    Lista todas as tags disponíveis.
+    Lista todas as tags disponíveis com paginação.
     
     **N8N**: Use para obter a lista de tags antes de associar a um lead.
     """
@@ -36,9 +38,10 @@ async def list_tags(
     if search:
         query = query.filter(Tag.nome.ilike(f"%{search}%"))
     
-    tags = query.order_by(Tag.nome).all()
+    total = query.count()
+    tags = query.order_by(Tag.nome).offset(skip).limit(limit).all()
     return TagListResponse(
-        total=len(tags),
+        total=total,
         tags=[TagResponse.model_validate(t) for t in tags],
     )
 

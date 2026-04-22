@@ -75,11 +75,11 @@ async def generate_api_key_endpoint(
     Use a key no header `X-API-Key` em todas as requisições.
     A key anterior será substituída.
     """
-    new_key = generate_api_key()
-    current_user.api_key = new_key
+    new_key, hashed_key = generate_api_key()
+    current_user.api_key = hashed_key  # Armazena o hash, não a key
     db.commit()
 
-    return ApiKeyResponse(api_key=new_key)
+    return ApiKeyResponse(api_key=new_key)  # Mostra a key só uma vez
 
 
 @router.get("/me", response_model=UserResponse, summary="Dados do usuário logado")
@@ -102,5 +102,5 @@ async def revoke_api_key(
 @router.post("/logout", summary="Logout")
 async def logout(response: Response):
     """Remove o cookie de autenticação (frontend)."""
-    response.delete_cookie("access_token")
+    response.delete_cookie("access_token", path="/")
     return {"message": "Logout realizado"}
