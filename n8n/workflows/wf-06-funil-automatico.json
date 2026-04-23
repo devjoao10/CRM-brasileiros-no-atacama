@@ -1,0 +1,198 @@
+{
+  "name": "WF-06 Funil Automático",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 */2 * * *"
+            }
+          ]
+        }
+      },
+      "id": "wf06-trigger",
+      "name": "Cron a cada 2h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://crm:8000/api/pipeline/board/1",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.CRM_API_KEY }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "wf06-get-board",
+      "name": "Carregar Kanban",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─── WF-06: Análise do Funil ───\n// Processa o board e gera uma lista de ações a executar\n\nconst board = $input.first().json;\nconst agora = new Date();\nconst actions = [];\n\n// Configuração de thresholds (em horas)\nconst THRESHOLD_FOLLOWUP = 48;      // 48h sem interação → mover para follow_up\nconst THRESHOLD_PERDA = 168;         // 7 dias → mover para perda\nconst THRESHOLD_COBRANCA = 120;      // 5 dias sem resposta em proposta_enviada\n\nfunction horasDesde(dateStr) {\n  if (!dateStr) return 0;\n  const dt = new Date(dateStr);\n  return (agora - dt) / (1000 * 60 * 60);\n}\n\nif (!board.stages || board.stages.length === 0) {\n  return [{ json: { actions: [], resumo: 'Nenhuma etapa encontrada no funil.' } }];\n}\n\nfor (const stage of board.stages) {\n  const stageId = stage.id;\n  const leads = stage.leads || [];\n\n  for (const lead of leads) {\n    const horas = horasDesde(lead.data_chegada || lead.created_at);\n\n    // ─── Regra 1: nova_oportunidade > 48h → follow_up ───\n    if (stageId === 'nova_oportunidade' && horas >= THRESHOLD_FOLLOWUP && horas < THRESHOLD_PERDA) {\n      // Mover para follow_up\n      actions.push({\n        tipo: 'move',\n        descricao: `Mover ${lead.nome} para follow_up (${Math.round(horas)}h sem interação)`,\n        entry_id: lead.entry_id,\n        lead_id: lead.lead_id,\n        lead_nome: lead.nome,\n        endpoint: `/api/pipeline/entries/${lead.entry_id}/move`,\n        method: 'PUT',\n        body: { etapa_id: 'follow_up' }\n      });\n      // Criar tarefa de follow-up\n      actions.push({\n        tipo: 'task',\n        descricao: `Tarefa: Follow-up ${lead.nome}`,\n        lead_id: lead.lead_id,\n        lead_nome: lead.nome,\n        endpoint: '/api/tasks',\n        method: 'POST',\n        body: {\n          titulo: `Follow-up: ${lead.nome}`,\n          descricao: `Lead sem interação há ${Math.round(horas)} horas. Fazer contato.`,\n          lead_id: lead.lead_id,\n          tipo: 'automatica'\n        }\n      });\n      // Nota no histórico\n      actions.push({\n        tipo: 'note',\n        descricao: `Nota: ${lead.nome} movido automaticamente`,\n        lead_id: lead.lead_id,\n        lead_nome: lead.nome,\n        endpoint: `/api/pipeline/history/${lead.lead_id}/note?descricao=${encodeURIComponent('Movido automaticamente para follow-up (' + Math.round(horas) + 'h sem interação)')}`,\n        method: 'POST',\n        body: null\n      });\n    }\n\n    // ─── Regra 2: nova_oportunidade > 7 dias → perda ───\n    if (stageId === 'nova_oportunidade' && horas >= THRESHOLD_PERDA) {\n      actions.push({\n        tipo: 'move',\n        descricao: `Mover ${lead.nome} para perda (${Math.round(horas)}h)`,\n        entry_id: lead.entry_id,\n        lead_id: lead.lead_id,\n        lead_nome: lead.nome,\n        endpoint: `/api/pipeline/entries/${lead.entry_id}/move`,\n        method: 'PUT',\n        body: { etapa_id: 'perda' }\n      });\n      actions.push({\n        tipo: 'update_lead',\n        descricao: `Marcar ${lead.nome} como perda`,\n        lead_id: lead.lead_id,\n        lead_nome: lead.nome,\n        endpoint: `/api/leads/${lead.lead_id}`,\n        method: 'PUT',\n        body: { status_venda: 'perda' }\n      });\n    }\n\n    // ─── Regra 3: proposta_enviada > 5 dias → cobrar resposta ───\n    if (stageId === 'proposta_enviada' && horas >= THRESHOLD_COBRANCA) {\n      actions.push({\n        tipo: 'task',\n        descricao: `Tarefa: Cobrar resposta de ${lead.nome}`,\n        lead_id: lead.lead_id,\n        lead_nome: lead.nome,\n        endpoint: '/api/tasks',\n        method: 'POST',\n        body: {\n          titulo: `Cobrar resposta: ${lead.nome}`,\n          descricao: `Proposta enviada há ${Math.round(horas)} horas sem resposta.`,\n          lead_id: lead.lead_id,\n          tipo: 'automatica'\n        }\n      });\n      actions.push({\n        tipo: 'note',\n        descricao: `Nota: Cobrança criada para ${lead.nome}`,\n        lead_id: lead.lead_id,\n        lead_nome: lead.nome,\n        endpoint: `/api/pipeline/history/${lead.lead_id}/note?descricao=${encodeURIComponent('Tarefa de cobrança criada automaticamente (' + Math.round(horas) + 'h sem resposta)')}`,\n        method: 'POST',\n        body: null\n      });\n    }\n  }\n}\n\n// Se não há ações, retornar item vazio para parar o fluxo\nif (actions.length === 0) {\n  return [{ json: { skip: true, resumo: 'Funil processado: nenhuma ação necessária.' } }];\n}\n\n// Retornar cada ação como um item separado para o SplitInBatches\nreturn actions.map(a => ({ json: a }));"
+      },
+      "id": "wf06-analyze",
+      "name": "Analisar Leads do Funil",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "skip-check",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notTrue"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "wf06-filter",
+      "name": "Tem Ações?",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [940, 300]
+    },
+    {
+      "parameters": {
+        "method": "={{ $json.method }}",
+        "url": "=http://crm:8000{{ $json.endpoint }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.CRM_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.body ? JSON.stringify($json.body) : '{}' }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          },
+          "timeout": 10000
+        }
+      },
+      "id": "wf06-execute",
+      "name": "Executar Ação no CRM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1180, 300],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Resumo final das ações executadas\nconst items = $input.all();\nconst total = items.length;\n\nconst resumo = `Funil processado: ${total} ação(ões) executada(s).`;\n\nreturn [{ json: { resumo, total_acoes: total, timestamp: new Date().toISOString() } }];"
+      },
+      "id": "wf06-summary",
+      "name": "Resumo Final",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1420, 300]
+    }
+  ],
+  "connections": {
+    "Cron a cada 2h": {
+      "main": [
+        [
+          {
+            "node": "Carregar Kanban",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Carregar Kanban": {
+      "main": [
+        [
+          {
+            "node": "Analisar Leads do Funil",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analisar Leads do Funil": {
+      "main": [
+        [
+          {
+            "node": "Tem Ações?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tem Ações?": {
+      "main": [
+        [
+          {
+            "node": "Executar Ação no CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Executar Ação no CRM": {
+      "main": [
+        [
+          {
+            "node": "Resumo Final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "CRM Atacama"
+    },
+    {
+      "name": "Pipeline"
+    }
+  ],
+  "pinData": {}
+}

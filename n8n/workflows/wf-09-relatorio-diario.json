@@ -1,0 +1,200 @@
+{
+  "name": "WF-09 Relatório Diário",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 19 * * *"
+            }
+          ]
+        }
+      },
+      "id": "wf09-trigger",
+      "name": "Cron 19h00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://crm:8000/api/analytics/dashboard",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.CRM_API_KEY }}"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "start_date",
+              "value": "={{ $now.toFormat('yyyy-MM-dd') }}"
+            },
+            {
+              "name": "end_date",
+              "value": "={{ $now.toFormat('yyyy-MM-dd') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "wf09-dashboard",
+      "name": "Buscar Dashboard (KPIs do dia)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://crm:8000/api/analytics/reports",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.CRM_API_KEY }}"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "start_date",
+              "value": "={{ $now.startOf('month').toFormat('yyyy-MM-dd') }}"
+            },
+            {
+              "name": "end_date",
+              "value": "={{ $now.toFormat('yyyy-MM-dd') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "wf09-reports",
+      "name": "Buscar Relatório Mensal",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://crm:8000/api/pipeline/board/1",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.CRM_API_KEY }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "wf09-board",
+      "name": "Buscar Board do Funil",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [940, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Referenciando dados dos 3 nós anteriores\nconst dashData = $('Buscar Dashboard (KPIs do dia)').first().json;\nconst reportData = $('Buscar Relatório Mensal').first().json;\nconst boardData = $('Buscar Board do Funil').first().json;\n\nconst dataHoje = new Date().toLocaleDateString('pt-BR');\nconst kpis = dashData.kpis || {};\nconst kpisMes = reportData.kpis || {};\n\n// ─── Montar relatório ───\nlet msg = `📊 RELATÓRIO DO DIA — ${dataHoje}\\n`;\nmsg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\n\\n`;\n\n// KPIs do dia\nmsg += `📥 Novos leads hoje: ${kpis.total_leads || 0}\\n`;\nmsg += `💰 Vendas fechadas: ${kpis.vendas_fechadas || 0}\\n`;\nmsg += `📈 Taxa de conversão: ${kpis.taxa_conversao || '0%'}\\n`;\nmsg += `⏳ Tarefas pendentes: ${kpis.tarefas_pendentes || 0}\\n\\n`;\n\n// Estado do funil\nif (boardData.stages && boardData.stages.length > 0) {\n  msg += `📊 Funil (${boardData.total_leads || 0} leads):\\n`;\n  for (const stage of boardData.stages) {\n    const count = stage.leads ? stage.leads.length : 0;\n    const bar = '█'.repeat(Math.min(count, 20));\n    msg += `  ${stage.nome}: ${count} ${bar}\\n`;\n  }\n  msg += '\\n';\n}\n\n// Acumulado do mês\nmsg += `🏆 Acumulado do mês:\\n`;\nmsg += `  • Total de leads: ${kpisMes.total || 0}\\n`;\nmsg += `  • Vendas: ${kpisMes.vendas || 0}\\n`;\nmsg += `  • Em negociação: ${kpisMes.em_negociacao || 0}\\n`;\nmsg += `  • Perdas: ${kpisMes.perdas || 0}\\n\\n`;\n\n// Destinos mais procurados (do relatório mensal)\nconst destinos = reportData.breakdown?.destinos || {};\nconst topDestinos = Object.entries(destinos).slice(0, 5);\nif (topDestinos.length > 0) {\n  msg += `🗺️ Top destinos do mês:\\n`;\n  for (const [destino, count] of topDestinos) {\n    msg += `  • ${destino}: ${count} leads\\n`;\n  }\n}\n\nreturn [{\n  json: {\n    mensagem: msg,\n    kpis_dia: kpis,\n    kpis_mes: kpisMes,\n    total_funil: boardData.total_leads || 0,\n    data: dataHoje\n  }\n}];"
+      },
+      "id": "wf09-format",
+      "name": "Montar Relatório",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1180, 300]
+    },
+    {
+      "parameters": {},
+      "id": "wf09-output",
+      "name": "📬 Conecte aqui o envio (Email/WhatsApp)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1420, 300],
+      "notes": "Conecte este nó a um nó de envio:\n- Send Email (SMTP)\n- WhatsApp Cloud API (HTTP Request)\n- Telegram, Slack, etc.\n\nA mensagem formatada está em: {{ $json.mensagem }}"
+    }
+  ],
+  "connections": {
+    "Cron 19h00": {
+      "main": [
+        [
+          {
+            "node": "Buscar Dashboard (KPIs do dia)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Dashboard (KPIs do dia)": {
+      "main": [
+        [
+          {
+            "node": "Buscar Relatório Mensal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Relatório Mensal": {
+      "main": [
+        [
+          {
+            "node": "Buscar Board do Funil",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Board do Funil": {
+      "main": [
+        [
+          {
+            "node": "Montar Relatório",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar Relatório": {
+      "main": [
+        [
+          {
+            "node": "📬 Conecte aqui o envio (Email/WhatsApp)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "CRM Atacama"
+    },
+    {
+      "name": "Relatórios"
+    }
+  ],
+  "pinData": {}
+}

@@ -3,9 +3,20 @@
  */
 
 document.addEventListener('DOMContentLoaded', () => {
-    // If already logged in, go to dashboard
+    // If already logged in, validate token before redirecting
     if (Auth.isAuthenticated()) {
-        window.location.href = '/dashboard';
+        fetch('/api/auth/me', {
+            headers: { 'Authorization': `Bearer ${Auth.getToken()}` }
+        }).then(res => {
+            if (res.ok) {
+                window.location.href = '/dashboard';
+            } else {
+                // Token expirado ou inválido — limpa e fica no login
+                Auth.clearAuth();
+            }
+        }).catch(() => {
+            Auth.clearAuth();
+        });
         return;
     }
 

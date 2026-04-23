@@ -1,0 +1,180 @@
+{
+  "name": "WF-08 Notificações de Tarefas",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "wf08-trigger",
+      "name": "Cron 08h00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://crm:8000/api/tasks",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.CRM_API_KEY }}"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "overdue",
+              "value": "true"
+            },
+            {
+              "name": "limit",
+              "value": "500"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "wf08-get-overdue",
+      "name": "Buscar Tarefas Atrasadas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://crm:8000/api/tasks",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.CRM_API_KEY }}"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "due_date",
+              "value": "={{ $now.toFormat('yyyy-MM-dd') }}"
+            },
+            {
+              "name": "limit",
+              "value": "500"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "wf08-get-today",
+      "name": "Buscar Tarefas de Hoje",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Referenciando dados dos nós anteriores\nconst atrasadasRaw = $('Buscar Tarefas Atrasadas').all();\nconst hojeRaw = $('Buscar Tarefas de Hoje').all();\n\n// Extrair JSONs (a API retorna um array)\nconst atrasadas = atrasadasRaw.map(i => i.json);\nconst hoje = hojeRaw.map(i => i.json);\n\nconst dataHoje = new Date().toLocaleDateString('pt-BR');\n\nlet msg = `📋 BOM DIA! Resumo de tarefas — ${dataHoje}\\n\\n`;\nmsg += `⚠️ ${atrasadas.length} tarefa(s) ATRASADA(S)\\n`;\nmsg += `📅 ${hoje.length} tarefa(s) para HOJE\\n\\n`;\n\nif (atrasadas.length > 0) {\n  msg += `🔴 Atrasadas:\\n`;\n  for (const t of atrasadas) {\n    const vencimento = t.data_vencimento\n      ? new Date(t.data_vencimento).toLocaleDateString('pt-BR')\n      : '?';\n    msg += `  • ${t.titulo} (venceu ${vencimento})\\n`;\n  }\n  msg += '\\n';\n}\n\nif (hoje.length > 0) {\n  msg += `📅 Hoje:\\n`;\n  for (const t of hoje) {\n    msg += `  • ${t.titulo}${t.descricao ? ' — ' + t.descricao : ''}\\n`;\n  }\n  msg += '\\n';\n}\n\nif (atrasadas.length === 0 && hoje.length === 0) {\n  msg += '✅ Nenhuma tarefa pendente. Dia tranquilo!';\n}\n\nreturn [{\n  json: {\n    mensagem: msg,\n    total_atrasadas: atrasadas.length,\n    total_hoje: hoje.length,\n    data: dataHoje\n  }\n}];"
+      },
+      "id": "wf08-format",
+      "name": "Formatar Notificação",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [940, 300]
+    },
+    {
+      "parameters": {},
+      "id": "wf08-output",
+      "name": "📬 Conecte aqui o envio (Email/WhatsApp)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1180, 300],
+      "notes": "Conecte este nó a um nó de envio:\n- Send Email (SMTP)\n- WhatsApp Cloud API (HTTP Request)\n- Telegram, Slack, etc.\n\nA mensagem formatada está em: {{ $json.mensagem }}"
+    }
+  ],
+  "connections": {
+    "Cron 08h00": {
+      "main": [
+        [
+          {
+            "node": "Buscar Tarefas Atrasadas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Tarefas Atrasadas": {
+      "main": [
+        [
+          {
+            "node": "Buscar Tarefas de Hoje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Tarefas de Hoje": {
+      "main": [
+        [
+          {
+            "node": "Formatar Notificação",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatar Notificação": {
+      "main": [
+        [
+          {
+            "node": "📬 Conecte aqui o envio (Email/WhatsApp)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "CRM Atacama"
+    },
+    {
+      "name": "Automação"
+    }
+  ],
+  "pinData": {}
+}
