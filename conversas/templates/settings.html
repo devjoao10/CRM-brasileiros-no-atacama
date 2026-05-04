@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configuracoes — Conversas</title>
+    <link rel="stylesheet" href="/static/css/conversas.css">
+</head>
+<body>
+    <div class="page-layout">
+        <!-- Sidebar Nav -->
+        <aside class="page-sidebar">
+            <div class="page-sidebar-header">
+                <div class="logo-icon">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="#fff"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12z"/></svg>
+                </div>
+                <h1>Conversas</h1>
+            </div>
+            <nav class="page-nav">
+                <a href="/" class="page-nav-item">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12zM7 9h2v2H7zm4 0h2v2h-2zm4 0h2v2h-2z"/></svg>
+                    Conversas
+                </a>
+                <a href="/templates" class="page-nav-item">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 7h10v2H7zm0 4h10v2H7zm0 4h7v2H7z"/></svg>
+                    Templates
+                </a>
+                <a href="/settings" class="page-nav-item active">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+                    Configuracoes
+                </a>
+            </nav>
+            <div class="page-sidebar-footer">
+                <button id="btnLogout" class="page-nav-item" style="border:none;background:none;width:100%;text-align:left;cursor:pointer;">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
+                    Sair
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="page-content">
+            <div class="page-header">
+                <div>
+                    <h2>Configuracoes</h2>
+                    <p class="page-subtitle">API WhatsApp, frases automaticas, horario comercial e mensagens rapidas</p>
+                </div>
+            </div>
+
+            <!-- Tabs -->
+            <div class="settings-tabs">
+                <button class="settings-tab active" data-tab="api-config">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M17.6 11.48c-.19-.62-.41-1.08-.73-1.48H21v-2h-4.13c-.58-.67-1.26-1.28-2.07-1.68l1.48-2.57-1.73-1L13 5.64c-.4-.11-.82-.14-1.25-.14-.43 0-.85.03-1.25.14L8.95 2.75l-1.73 1 1.48 2.57c-.81.4-1.49 1.01-2.07 1.68H2.5v2h4.13c-.32.4-.54.86-.73 1.48H2.5v2h3.09c.18 1.17.67 2.33 1.46 3.27L5.57 19.5l1.73 1 1.48-2.57c.8.35 1.59.57 2.47.57.88 0 1.67-.22 2.47-.57l1.48 2.57 1.73-1-1.48-2.57c.79-.94 1.28-2.1 1.46-3.27H21v-2h-3.4zM12 16c-2.21 0-4-1.79-4-4s1.79-4 4-4 4 1.79 4 4-1.79 4-4 4z"/></svg>
+                    API WhatsApp
+                </button>
+                <button class="settings-tab" data-tab="auto-replies">Frases Automaticas</button>
+                <button class="settings-tab" data-tab="business-hours">Horario Comercial</button>
+                <button class="settings-tab" data-tab="quick-replies">Mensagens Rapidas</button>
+            </div>
+
+            <!-- Tab: API Config -->
+            <div class="settings-panel active" id="panel-api-config">
+                <div class="settings-card">
+                    <div class="settings-card-header">
+                        <h3>Configuracao da API WhatsApp Business</h3>
+                        <p>Insira as credenciais do Meta Business para conectar ao WhatsApp Cloud API oficial.</p>
+                    </div>
+
+                    <!-- Connection Status Banner -->
+                    <div class="api-status-banner" id="apiStatusBanner">
+                        <div class="api-status-indicator" id="apiStatusIndicator">
+                            <span class="api-status-dot disconnected" id="apiStatusDot"></span>
+                            <span id="apiStatusText">Verificando...</span>
+                        </div>
+                        <div class="api-status-details" id="apiStatusDetails"></div>
+                    </div>
+
+                    <div class="api-config-form">
+                        <div class="form-group">
+                            <label for="cfgAccessToken">Access Token (Permanente)</label>
+                            <div class="input-with-action">
+                                <input type="password" id="cfgAccessToken" placeholder="EAAxxxxxxx...">
+                                <button type="button" class="btn-icon" id="btnToggleToken" title="Mostrar/ocultar">
+                                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+                                </button>
+                            </div>
+                            <small class="form-hint">Token gerado no Meta Business > Configuracao do sistema > Tokens de acesso</small>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="cfgWabaId">WhatsApp Business Account ID (WABA ID)</label>
+                                <input type="text" id="cfgWabaId" placeholder="ex: 123456789012345">
+                                <small class="form-hint">ID da conta encontrado no Meta Business Suite</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="cfgPhoneId">Phone Number ID</label>
+                                <input type="text" id="cfgPhoneId" placeholder="ex: 123456789012345">
+                                <small class="form-hint">ID do numero cadastrado no Meta</small>
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="cfgVerifyToken">Verify Token (Webhook)</label>
+                                <input type="text" id="cfgVerifyToken" placeholder="Um token seguro definido por voce">
+                                <small class="form-hint">Mesmo token que voce configura no Meta ao cadastrar o webhook</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="cfgApiVersion">Versao da API</label>
+                                <input type="text" id="cfgApiVersion" placeholder="v21.0" value="v21.0">
+                                <small class="form-hint">Versao do Graph API (padrao: v21.0)</small>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="cfgWebhookUrl">URL do Webhook (referencia)</label>
+                            <input type="text" id="cfgWebhookUrl" placeholder="https://conversas.seudominio.com/webhook" readonly>
+                            <small class="form-hint">URL que deve ser configurada no Meta Business para receber mensagens</small>
+                        </div>
+
+                        <div class="api-config-actions">
+                            <button class="btn-primary" id="btnSaveApiConfig">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/></svg>
+                                Salvar Credenciais
+                            </button>
+                            <button class="btn-secondary" id="btnTestConnection">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
+                                Testar Conexao
+                            </button>
+                            <button class="btn-success" id="btnConnectApi" style="display:none;">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                                Conectar
+                            </button>
+                            <button class="btn-danger" id="btnDisconnectApi" style="display:none;">
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42C17.99 7.86 19 9.81 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.19 1.01-4.14 2.58-5.42L6.17 5.17C4.23 6.82 3 9.26 3 12c0 4.97 4.03 9 9 9s9-4.03 9-9c0-2.74-1.23-5.18-3.17-6.83z"/></svg>
+                                Desconectar
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: Auto Replies -->
+            <div class="settings-panel" id="panel-auto-replies">
+                <div class="settings-card">
+                    <div class="settings-card-header">
+                        <h3>Frases Automaticas</h3>
+                        <p>Configure mensagens que o sistema envia automaticamente em situacoes especificas.</p>
+                    </div>
+                    <div class="auto-replies-list" id="autoRepliesList">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: Business Hours -->
+            <div class="settings-panel" id="panel-business-hours">
+                <div class="settings-card">
+                    <div class="settings-card-header">
+                        <h3>Horario Comercial</h3>
+                        <p>Defina os dias e horarios de atendimento. Fora do horario, a mensagem automatica "Fora do expediente" sera enviada automaticamente via WhatsApp.</p>
+                    </div>
+                    <div class="business-hours-list" id="businessHoursList">
+                        <!-- Populated by JS -->
+                    </div>
+                    <div style="padding: 16px 20px; border-top: 1px solid var(--dark-100);">
+                        <button class="btn-primary" id="btnSaveHours">Salvar Horarios</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: Quick Replies -->
+            <div class="settings-panel" id="panel-quick-replies">
+                <div class="settings-card">
+                    <div class="settings-card-header" style="display:flex; align-items:center; justify-content:space-between;">
+                        <div>
+                            <h3>Mensagens Rapidas</h3>
+                            <p>Atalhos para respostas frequentes. Digite o atalho no chat para inserir a mensagem completa.</p>
+                        </div>
+                        <button class="btn-primary btn-sm" id="btnNewQuickReply">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                            Nova
+                        </button>
+                    </div>
+                    <div class="quick-replies-list" id="quickRepliesList">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal: Edit Quick Reply -->
+    <div class="modal-overlay" id="qrModalOverlay" style="display:none;">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="qrModalTitle">Nova Mensagem Rapida</h3>
+                <button class="modal-close" id="qrModalClose">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                </button>
+            </div>
+            <form id="qrForm">
+                <div class="modal-body">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="qrShortcut">Atalho</label>
+                            <input type="text" id="qrShortcut" required placeholder="/boasvindas">
+                        </div>
+                        <div class="form-group">
+                            <label for="qrCategory">Categoria</label>
+                            <input type="text" id="qrCategory" placeholder="Saudacao">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="qrTitle">Titulo</label>
+                        <input type="text" id="qrTitle" required placeholder="Boas-vindas ao Atacama">
+                    </div>
+                    <div class="form-group">
+                        <label for="qrContent">Conteudo da mensagem</label>
+                        <textarea id="qrContent" rows="5" required placeholder="Ola! Seja bem-vindo..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" id="btnCancelQR">Cancelar</button>
+                    <button type="submit" class="btn-primary" id="btnSaveQR">Salvar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="/static/js/auth.js"></script>
+    <script src="/static/js/settings.js"></script>
+</body>
+</html>

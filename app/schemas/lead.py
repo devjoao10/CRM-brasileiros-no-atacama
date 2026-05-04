@@ -25,6 +25,7 @@ class LeadBase(BaseModel):
     data_partida: Optional[date] = Field(None, description="Data de partida do destino (YYYY-MM-DD)")
     campos_personalizados: Optional[dict] = Field(default_factory=dict, description="Campos personalizados (JSON livre)")
     status_venda: str = Field("em_negociacao", description="Status geral: em_negociacao, venda, perda")
+    responsavel_id: Optional[int] = Field(None, description="ID do usuário responsável (null = Agente IA)")
 
     @field_validator("destinos", mode="before")
     @classmethod
@@ -54,6 +55,7 @@ class LeadUpdate(BaseModel):
     campos_personalizados: Optional[dict] = None
     status_venda: Optional[str] = None
     is_active: Optional[bool] = None
+    responsavel_id: Optional[int] = None
 
     @field_validator("destinos", mode="before")
     @classmethod
@@ -78,6 +80,8 @@ class LeadResponse(BaseModel):
     campos_personalizados: dict = {}
     status_venda: str = "em_negociacao"
     is_active: bool
+    responsavel_id: Optional[int] = None
+    responsavel_nome: Optional[str] = None
     tags: list[TagResponse] = []
     funis: list[LeadFunnelInfo] = []
     created_at: Optional[datetime] = None

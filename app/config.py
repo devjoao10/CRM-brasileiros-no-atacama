@@ -40,6 +40,7 @@ DATABASE_READONLY_URL = os.getenv("DATABASE_READONLY_URL", DATABASE_URL)
 
 # Application
 APP_DOMAIN = os.getenv("APP_DOMAIN", "http://127.0.0.1:8000")
+CONVERSAS_BASE_URL = os.getenv("CONVERSAS_BASE_URL", "http://127.0.0.1:8001")
 
 # Senha inicial do admin — OBRIGATÓRIA em produção, fallback inseguro apenas em dev
 _default_admin_pwd = "admin123" if ENVIRONMENT == "development" else None

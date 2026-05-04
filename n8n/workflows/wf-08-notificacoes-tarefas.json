@@ -1,5 +1,5 @@
 {
-  "name": "WF-08 Notificações de Tarefas",
+  "name": "WF-08 Notificações de Tarefas + WhatsApp",
   "nodes": [
     {
       "parameters": {
@@ -16,7 +16,8 @@
       "name": "Cron 08h00",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [220, 300]
+      "position": [220, 300],
+      "notes": "Dispara todo dia às 08:00 da manhã (horário de São Paulo). Inicia o ciclo de verificação de tarefas atrasadas e do dia."
     },
     {
       "parameters": {
@@ -56,7 +57,8 @@
       "name": "Buscar Tarefas Atrasadas",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [460, 300]
+      "position": [460, 300],
+      "notes": "Busca todas as tarefas com status 'pendente' que já passaram da data de vencimento. Parâmetro overdue=true faz a API filtrar automaticamente. Limite de 500 tarefas."
     },
     {
       "parameters": {
@@ -96,72 +98,99 @@
       "name": "Buscar Tarefas de Hoje",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [700, 300]
+      "position": [700, 300],
+      "notes": "Busca tarefas com vencimento exatamente na data de hoje. Usa $now.toFormat para gerar a data no formato yyyy-MM-dd. Complementa as atrasadas para formar o relatório completo."
     },
     {
       "parameters": {
-        "jsCode": "// Referenciando dados dos nós anteriores\nconst atrasadasRaw = $('Buscar Tarefas Atrasadas').all();\nconst hojeRaw = $('Buscar Tarefas de Hoje').all();\n\n// Extrair JSONs (a API retorna um array)\nconst atrasadas = atrasadasRaw.map(i => i.json);\nconst hoje = hojeRaw.map(i => i.json);\n\nconst dataHoje = new Date().toLocaleDateString('pt-BR');\n\nlet msg = `📋 BOM DIA! Resumo de tarefas — ${dataHoje}\\n\\n`;\nmsg += `⚠️ ${atrasadas.length} tarefa(s) ATRASADA(S)\\n`;\nmsg += `📅 ${hoje.length} tarefa(s) para HOJE\\n\\n`;\n\nif (atrasadas.length > 0) {\n  msg += `🔴 Atrasadas:\\n`;\n  for (const t of atrasadas) {\n    const vencimento = t.data_vencimento\n      ? new Date(t.data_vencimento).toLocaleDateString('pt-BR')\n      : '?';\n    msg += `  • ${t.titulo} (venceu ${vencimento})\\n`;\n  }\n  msg += '\\n';\n}\n\nif (hoje.length > 0) {\n  msg += `📅 Hoje:\\n`;\n  for (const t of hoje) {\n    msg += `  • ${t.titulo}${t.descricao ? ' — ' + t.descricao : ''}\\n`;\n  }\n  msg += '\\n';\n}\n\nif (atrasadas.length === 0 && hoje.length === 0) {\n  msg += '✅ Nenhuma tarefa pendente. Dia tranquilo!';\n}\n\nreturn [{\n  json: {\n    mensagem: msg,\n    total_atrasadas: atrasadas.length,\n    total_hoje: hoje.length,\n    data: dataHoje\n  }\n}];"
+        "method": "GET",
+        "url": "http://crm:8000/api/users",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.CRM_API_KEY }}"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "limit",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "wf08-get-users",
+      "name": "Buscar Usuários",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [940, 300],
+      "notes": "Busca a lista de usuários do sistema para associar tarefas ao responsável correto. Necessário para personalizar a mensagem por agente."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Referenciando dados dos nós anteriores\nconst atrasadasRaw = $('Buscar Tarefas Atrasadas').all();\nconst hojeRaw = $('Buscar Tarefas de Hoje').all();\nconst usersRaw = $('Buscar Usuários').first().json;\n\n// Extrair JSONs\nconst atrasadas = atrasadasRaw.map(i => i.json);\nconst hoje = hojeRaw.map(i => i.json);\nconst users = (usersRaw.users || []);\n\n// Mapa de usuários\nconst userMap = {};\nfor (const u of users) {\n  userMap[u.id] = u.nome;\n}\n\nconst dataHoje = new Date().toLocaleDateString('pt-BR');\n\nlet msg = `📋 BOM DIA! Resumo de tarefas — ${dataHoje}\\n\\n`;\nmsg += `⚠️ ${atrasadas.length} tarefa(s) ATRASADA(S)\\n`;\nmsg += `📅 ${hoje.length} tarefa(s) para HOJE\\n\\n`;\n\nif (atrasadas.length > 0) {\n  msg += `🔴 Atrasadas:\\n`;\n  for (const t of atrasadas) {\n    const vencimento = t.data_vencimento\n      ? new Date(t.data_vencimento).toLocaleDateString('pt-BR')\n      : '?';\n    const resp = t.responsavel_id ? (userMap[t.responsavel_id] || '?') : 'Sem responsável';\n    msg += `  • ${t.titulo} (venceu ${vencimento}) [${resp}]\\n`;\n  }\n  msg += '\\n';\n}\n\nif (hoje.length > 0) {\n  msg += `📅 Hoje:\\n`;\n  for (const t of hoje) {\n    const resp = t.responsavel_id ? (userMap[t.responsavel_id] || '?') : 'Sem responsável';\n    msg += `  • ${t.titulo} [${resp}]${t.descricao ? ' — ' + t.descricao : ''}\\n`;\n  }\n  msg += '\\n';\n}\n\nif (atrasadas.length === 0 && hoje.length === 0) {\n  msg += '✅ Nenhuma tarefa pendente. Dia tranquilo!';\n}\n\nreturn [{\n  json: {\n    mensagem: msg,\n    total_atrasadas: atrasadas.length,\n    total_hoje: hoje.length,\n    data: dataHoje\n  }\n}];"
       },
       "id": "wf08-format",
       "name": "Formatar Notificação",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [940, 300]
+      "position": [1180, 300],
+      "notes": "Monta a mensagem de notificação com emojis formatados.\n\nSeções:\n1. Cabeçalho com data e contagens\n2. Lista de tarefas atrasadas com data de vencimento e responsável\n3. Lista de tarefas de hoje com responsável\n4. Mensagem de 'dia tranquilo' se tudo estiver ok\n\nNOVO: Inclui nome do responsável em cada tarefa."
     },
     {
-      "parameters": {},
-      "id": "wf08-output",
-      "name": "📬 Conecte aqui o envio (Email/WhatsApp)",
-      "type": "n8n-nodes-base.noOp",
-      "typeVersion": 1,
-      "position": [1180, 300],
-      "notes": "Conecte este nó a um nó de envio:\n- Send Email (SMTP)\n- WhatsApp Cloud API (HTTP Request)\n- Telegram, Slack, etc.\n\nA mensagem formatada está em: {{ $json.mensagem }}"
+      "parameters": {
+        "method": "POST",
+        "url": "http://conversas:8001/api/conversations/send-notification",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.CRM_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"to\": \"{{ $env.ADMIN_WHATSAPP }}\",\n  \"message\": {{ JSON.stringify($json.mensagem) }}\n}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "wf08-send",
+      "name": "Enviar via WhatsApp (Conversas API)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1420, 300],
+      "onError": "continueRegularOutput",
+      "notes": "Envia a notificação formatada via WhatsApp usando a API do Conversas.\n\nRequer:\n- ADMIN_WHATSAPP: variável N8N com o número do admin (ex: 5511999999999)\n- A plataforma Conversas rodando e com a API do WhatsApp configurada\n\nSubstitui o antigo nó placeholder (noOp)."
     }
   ],
   "connections": {
     "Cron 08h00": {
-      "main": [
-        [
-          {
-            "node": "Buscar Tarefas Atrasadas",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[ { "node": "Buscar Tarefas Atrasadas", "type": "main", "index": 0 } ]]
     },
     "Buscar Tarefas Atrasadas": {
-      "main": [
-        [
-          {
-            "node": "Buscar Tarefas de Hoje",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[ { "node": "Buscar Tarefas de Hoje", "type": "main", "index": 0 } ]]
     },
     "Buscar Tarefas de Hoje": {
-      "main": [
-        [
-          {
-            "node": "Formatar Notificação",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[ { "node": "Buscar Usuários", "type": "main", "index": 0 } ]]
+    },
+    "Buscar Usuários": {
+      "main": [[ { "node": "Formatar Notificação", "type": "main", "index": 0 } ]]
     },
     "Formatar Notificação": {
-      "main": [
-        [
-          {
-            "node": "📬 Conecte aqui o envio (Email/WhatsApp)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[ { "node": "Enviar via WhatsApp (Conversas API)", "type": "main", "index": 0 } ]]
     }
   },
   "active": false,
@@ -169,12 +198,9 @@
     "executionOrder": "v1"
   },
   "tags": [
-    {
-      "name": "CRM Atacama"
-    },
-    {
-      "name": "Automação"
-    }
+    { "name": "CRM Atacama" },
+    { "name": "Automação" },
+    { "name": "Conversas" }
   ],
   "pinData": {}
 }

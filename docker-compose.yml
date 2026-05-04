@@ -50,6 +50,7 @@ services:
       - SECRET_KEY=${SECRET_KEY:?Defina SECRET_KEY no .env}
       - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD:?Defina ADMIN_INITIAL_PASSWORD no .env}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - CONVERSAS_BASE_URL=http://conversas:8001
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.crm.rule=Host(`crm.crmbrasileirosnoatacama.cloud`)"
@@ -79,6 +80,33 @@ services:
       - "traefik.http.routers.n8n.entrypoints=websecure"
       - "traefik.http.routers.n8n.tls.certresolver=letsencrypt"
       - "traefik.http.services.n8n.loadbalancer.server.port=5678"
+
+  conversas:
+    build: ./conversas
+    container_name: conversas_app
+    restart: always
+    expose:
+      - "8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-crm_user}:${POSTGRES_PASSWORD}@postgres:5432/crm_atacama
+      - SECRET_KEY=${SECRET_KEY}
+      - CRM_BASE_URL=http://crm:8000
+      - N8N_BASE_URL=http://n8n:5678
+      - N8N_AGENT_ENABLED=${N8N_AGENT_ENABLED:-false}
+      - META_VERIFY_TOKEN=${META_VERIFY_TOKEN:-}
+      - META_ACCESS_TOKEN=${META_ACCESS_TOKEN:-}
+      - META_PHONE_NUMBER_ID=${META_PHONE_NUMBER_ID:-}
+      - META_WABA_ID=${META_WABA_ID:-}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.conversas.rule=Host(`conversas.crmbrasileirosnoatacama.cloud`)"
+      - "traefik.http.routers.conversas.entrypoints=websecure"
+      - "traefik.http.routers.conversas.tls.certresolver=letsencrypt"
+      - "traefik.http.services.conversas.loadbalancer.server.port=8001"
 
 volumes:
   pgdata:

@@ -376,6 +376,13 @@
                         <input type="date" id="filterChegadaAte" onchange="loadLeads()">
                     </div>
                     <div class="filter-group">
+                        <label>Responsavel</label>
+                        <select id="filterResponsavel" onchange="loadLeads()">
+                            <option value="">Todos</option>
+                            <option value="0">Agente IA</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
                         <button class="btn btn-ghost btn-sm" onclick="clearFilters()">✕ Limpar</button>
                     </div>
                 </div>
@@ -393,6 +400,7 @@
                                 <th>WhatsApp</th>
                                 <th>Destino</th>
                                 <th>Tags</th>
+                                <th>Responsavel</th>
                                 <th>Funil</th>
                                 <th>Chegada</th>
                                 <th>Partida</th>
@@ -400,7 +408,7 @@
                             </tr>
                         </thead>
                         <tbody id="leadsTableBody">
-                            <tr><td colspan="9" class="empty-state">
+                            <tr><td colspan="10" class="empty-state">
                                 <div class="empty-icon">📭</div>
                                 <p>Carregando leads...</p>
                             </td></tr>
@@ -583,8 +591,23 @@
         });
 
         loadAllTags();
+        loadUsersForFilter();
         loadLeads();
     });
+
+    // Load users for responsavel filter
+    async function loadUsersForFilter() {
+        const resp = await Auth.apiRequest('/api/users?limit=100');
+        if (!resp || !resp.ok) return;
+        const data = await resp.json();
+        const select = document.getElementById('filterResponsavel');
+        (data.users || []).forEach(u => {
+            const opt = document.createElement('option');
+            opt.value = u.id;
+            opt.textContent = u.nome;
+            select.appendChild(opt);
+        });
+    }
 
     // ─── API ────────────────────────────────────────
 
@@ -596,11 +619,13 @@
         const destino = document.getElementById('filterDestino').value;
         const chegadaDe = document.getElementById('filterChegadaDe').value;
         const chegadaAte = document.getElementById('filterChegadaAte').value;
+        const responsavel = document.getElementById('filterResponsavel').value;
 
         if (search) params.set('search', search);
         if (destino) params.set('destino', destino);
         if (chegadaDe) params.set('data_chegada_de', chegadaDe);
         if (chegadaAte) params.set('data_chegada_ate', chegadaAte);
+        if (responsavel !== '') params.set('responsavel_id', responsavel);
 
         const resp = await Auth.apiRequest(`/api/leads?${params}`);
         if (!resp) return;
@@ -620,6 +645,7 @@
         document.getElementById('filterDestino').value = '';
         document.getElementById('filterChegadaDe').value = '';
         document.getElementById('filterChegadaAte').value = '';
+        document.getElementById('filterResponsavel').value = '';
         currentPage = 0;
         loadLeads();
     }
@@ -658,12 +684,14 @@
         document.getElementById('tableCount').textContent = `${data.total} lead${data.total !== 1 ? 's' : ''} encontrado${data.total !== 1 ? 's' : ''}`;
 
         if (data.leads.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="9"><div class="empty-state">
+            tbody.innerHTML = `<tr><td colspan="10"><div class="empty-state">
                 <div class="empty-icon">📭</div>
                 <p>Nenhum lead encontrado</p>
             </div></td></tr>`;
             return;
         }
+
+        const conversasBase = window.location.hostname === 'localhost' ? 'http://localhost:8001' : 'https://conversas.crmbrasileirosnoatacama.cloud';
 
         tbody.innerHTML = data.leads.map(l => `
             <tr>
@@ -672,10 +700,12 @@
                 <td>${l.whatsapp ? esc(l.whatsapp) : '<span class="text-muted">—</span>'}</td>
                 <td>${getDestinoTags(l.destinos)}</td>
                 <td class="tags-cell">${renderLeadTags(l.tags)}</td>
+                <td style="font-size:11px; white-space:nowrap;">${esc(l.responsavel_nome || 'Agente IA')}</td>
                 <td class="tags-cell">${renderFunis(l.funis)}</td>
                 <td>${formatDate(l.data_chegada)}</td>
                 <td>${formatDate(l.data_partida)}</td>
                 <td class="actions-cell">
+                    <a href="${conversasBase}/?lead_id=${l.id}" target="_blank" title="Conversas" style="text-decoration:none; cursor:pointer; padding:2px 6px; font-size:14px;">💬</a>
                     <button title="Editar" onclick="editLead(${l.id})">✏️</button>
                     <button title="Excluir" onclick="deleteLead(${l.id}, '${esc(l.nome)}')">🗑️</button>
                 </td>

@@ -23,9 +23,9 @@ def seed_database():
             )
             db.add(admin)
             db.commit()
-            print("✅ Usuário admin criado: admin@brasileirosnoatacama.com (senha definida via ADMIN_INITIAL_PASSWORD)")
+            print("[OK] Usuario admin criado: admin@brasileirosnoatacama.com (senha definida via ADMIN_INITIAL_PASSWORD)")
         else:
-            print("ℹ️  Usuário admin já existe")
+            print("[INFO] Usuario admin ja existe")
     finally:
         db.close()
 

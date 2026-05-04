@@ -98,6 +98,7 @@
         .lead-card-destino.uyuni { background: rgba(43,108,176,0.1); color: var(--color-primary); }
         .lead-card-destino.santiago { background: rgba(56,161,105,0.1); color: var(--color-success); }
         .lead-card-destino.outro { background: rgba(113,128,150,0.1); color: var(--color-dark-500); }
+        .lead-card-resp { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; color: var(--color-dark-400); margin-top: 4px; }
         .lead-card-days { display: inline-flex; align-items: center; gap: 3px; padding: 1px 7px; border-radius: var(--radius-full); font-size: 10px; font-weight: var(--font-weight-bold); margin-top: 6px; }
         .lead-card-days.future { background: rgba(56,161,105,0.1); color: var(--color-success); }
         .lead-card-days.today { background: rgba(214,158,46,0.1); color: #B7791F; border: 1px solid rgba(214,158,46,0.3); }
@@ -280,6 +281,13 @@
                         <label>Chegada até</label>
                         <input type="date" id="pipeFilterDateTo" style="width:130px" onchange="applyFilters()">
                     </div>
+                    <div class="filter-group">
+                        <label>Responsavel</label>
+                        <select class="filter-destino" id="pipeFilterResponsavel" onchange="applyFilters()">
+                            <option value="">Todos</option>
+                            <option value="0">Agente IA</option>
+                        </select>
+                    </div>
                     <button class="filter-clear" onclick="clearPipeFilters()">✕ Limpar</button>
                     <span class="filter-count" id="filterCount"></span>
                 </div>
@@ -308,6 +316,13 @@
                 <div id="detailInfo"></div>
             </div>
             <div class="detail-section">
+                <h4>📋 Responsavel</h4>
+                <select id="detailResponsavel" class="form-input" style="width:100%; padding:var(--space-2) var(--space-3); font-size:var(--font-size-sm);" onchange="updateLeadResponsavel(this.value)">
+                    <option value="0">Agente IA</option>
+                </select>
+                <div style="font-size:11px; color:var(--color-dark-400); margin-top:4px;">Sincronizado com a plataforma Conversas.</div>
+            </div>
+            <div class="detail-section">
                 <h4>🏷️ Tags</h4>
                 <div class="detail-tags" id="detailTags"><span style="color:var(--color-dark-300);font-size:var(--font-size-sm)">Nenhuma tag</span></div>
             </div>
@@ -323,6 +338,7 @@
                 <option value="perda">❌ Perdido</option>
             </select>
             <div style="display: flex; gap: var(--space-2);">
+                <a class="btn btn-outline btn-sm" id="detailConversaLink" href="#" target="_blank" title="Ver conversa no WhatsApp" style="text-decoration:none; display:flex; align-items:center; gap:4px;">💬</a>
                 <button class="btn btn-outline btn-sm" onclick="removeFromFunnel()" id="detailRemoveBtn" title="Remover deste funil">🗑️</button>
                 <button class="btn btn-outline btn-sm" onclick="openTransferModal()" id="detailTransferBtn">↗️ Transferir</button>
                 <a class="btn btn-primary btn-sm" id="detailEditLink" href="/leads">✏️ Editar Lead</a>
@@ -408,6 +424,7 @@
     let allFilterTags = [];
     let selectedFilterTags = new Set();
     let leadDetailsCache = {}; // cache lead details for date filtering
+    let usersCache = []; // cache users for responsavel selectors
 
     document.addEventListener('DOMContentLoaded', () => {
         if (!Auth.requireAuth()) return;
@@ -438,8 +455,35 @@
         });
 
         loadFilterTags();
+        loadUsers();
         loadFunnels();
     });
+
+    // ─── Load Users for Responsavel ──────────────
+    async function loadUsers() {
+        const resp = await Auth.apiRequest('/api/users?limit=100');
+        if (!resp || !resp.ok) return;
+        const data = await resp.json();
+        usersCache = data.users || [];
+
+        // Populate filter dropdown
+        const filterSelect = document.getElementById('pipeFilterResponsavel');
+        usersCache.forEach(u => {
+            const opt = document.createElement('option');
+            opt.value = u.id;
+            opt.textContent = u.nome;
+            filterSelect.appendChild(opt);
+        });
+
+        // Populate detail dropdown
+        const detailSelect = document.getElementById('detailResponsavel');
+        usersCache.forEach(u => {
+            const opt = document.createElement('option');
+            opt.value = u.id;
+            opt.textContent = u.nome;
+            detailSelect.appendChild(opt);
+        });
+    }
 
     // ─── Funnels ─────────────────────────────────
 
@@ -621,7 +665,8 @@
                selectedFilterTags.size > 0 ||
                document.getElementById('pipeFilterDays').value ||
                document.getElementById('pipeFilterDateFrom').value ||
-               document.getElementById('pipeFilterDateTo').value;
+               document.getElementById('pipeFilterDateTo').value ||
+               document.getElementById('pipeFilterResponsavel').value;
     }
 
     function applyFilters() {
@@ -632,6 +677,7 @@
         const daysStr = document.getElementById('pipeFilterDays').value;
         const dateFrom = document.getElementById('pipeFilterDateFrom').value;
         const dateTo = document.getElementById('pipeFilterDateTo').value;
+        const respFilter = document.getElementById('pipeFilterResponsavel').value;
 
         const today = new Date();
         today.setHours(0, 0, 0, 0);
@@ -687,6 +733,16 @@
                         if (!chegada || chegada > to) return false;
                     }
 
+                    // Responsavel filter
+                    if (respFilter !== '') {
+                        const respId = parseInt(respFilter);
+                        if (respId === 0) {
+                            if (lead.responsavel_id != null) return false;
+                        } else {
+                            if (lead.responsavel_id !== respId) return false;
+                        }
+                    }
+
                     return true;
                 })
             }))
@@ -701,6 +757,7 @@
         document.getElementById('pipeFilterDays').value = '';
         document.getElementById('pipeFilterDateFrom').value = '';
         document.getElementById('pipeFilterDateTo').value = '';
+        document.getElementById('pipeFilterResponsavel').value = '';
         selectedFilterTags.clear();
         updateTagBtnLabel();
         renderFilterTagsDropdown();
@@ -733,6 +790,8 @@
             }
         }
 
+        const respLabel = lead.responsavel_nome || 'Agente IA';
+
         return `
             <div class="lead-card" draggable="true" data-entry="${lead.entry_id}" data-lead="${lead.lead_id}"
                  ondragstart="onDragStart(event)" ondragend="onDragEnd(event)"
@@ -742,6 +801,7 @@
                 ${destinoBadges}
                 ${daysBadge}
                 ${tags ? `<div class="lead-card-tags">${tags}</div>` : ''}
+                <div class="lead-card-resp">👤 ${esc(respLabel)}</div>
             </div>`;
     }
 
@@ -804,6 +864,8 @@
         document.getElementById('detailOverlay').classList.add('show');
         document.getElementById('detailPanel').classList.add('open');
         document.getElementById('detailEditLink').href = '/leads';
+        const conversasBase = window.location.hostname === 'localhost' ? 'http://localhost:8001' : 'https://conversas.crmbrasileirosnoatacama.cloud';
+        document.getElementById('detailConversaLink').href = `${conversasBase}/?lead_id=${leadId}`;
 
         // Load lead details
         const leadResp = await Auth.apiRequest(`/api/leads/${leadId}`);
@@ -812,6 +874,7 @@
 
         document.getElementById('detailName').textContent = lead.nome;
         document.getElementById('quickStatusSelect').value = lead.status_venda || 'em_negociacao';
+        document.getElementById('detailResponsavel').value = lead.responsavel_id || '0';
 
         let info = '';
         info += `<div class="detail-field"><span class="detail-field-label">Email</span><span class="detail-field-value">${lead.email ? esc(lead.email) : '—'}</span></div>`;
@@ -866,6 +929,22 @@
             loadBoard();
         } else {
             alert("❌ ERRO ao atualizar Status do Lead! Erro interno de conexão.");
+        }
+    }
+
+    async function updateLeadResponsavel(value) {
+        if (!currentDetailLeadId) return;
+        const respId = parseInt(value) || 0;
+        const params = respId === 0 ? '' : `?responsavel_id=${respId}`;
+        const resp = await Auth.apiRequest(`/api/leads/${currentDetailLeadId}/responsavel${params}`, {
+            method: 'PUT',
+        });
+        if (resp && resp.ok) {
+            const data = await resp.json();
+            alert(`✅ Responsavel alterado para ${data.responsavel_nome || 'Agente IA'}`);
+            loadBoard();
+        } else {
+            alert('❌ Erro ao alterar responsável');
         }
     }
 

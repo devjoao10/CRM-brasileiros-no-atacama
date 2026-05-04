@@ -1,0 +1,168 @@
+{
+  "name": "WF-11 Envio de Notificações WhatsApp",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "send-notification",
+        "options": {
+          "responseMode": "responseNode"
+        }
+      },
+      "id": "wf11-trigger",
+      "name": "Webhook /send-notification",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "notes": "Webhook reutilizável que outros workflows podem chamar para enviar notificações via WhatsApp.\n\nPayload esperado:\n{\n  \"to\": \"5511999999999\",\n  \"message\": \"Texto da mensagem\",\n  \"template_name\": \"opcional — nome do template Meta\",\n  \"template_params\": [\"param1\", \"param2\"]\n}\n\nSe template_name for fornecido, usa template HSM. Caso contrário, envia texto livre (requer janela de 24h aberta)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-template",
+              "leftValue": "={{ $json.body.template_name }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "wf11-route",
+      "name": "Tem Template?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [460, 300],
+      "notes": "Verifica se o payload inclui template_name.\n\n- SIM (output 0): Envia mensagem usando template HSM aprovado pelo Meta (funciona fora da janela de 24h)\n- NÃO (output 1): Envia mensagem de texto livre (só funciona dentro da janela de 24h)"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $env.META_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.META_ACCESS_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"messaging_product\": \"whatsapp\",\n  \"to\": \"{{ $('Webhook /send-notification').item.json.body.to }}\",\n  \"type\": \"template\",\n  \"template\": {\n    \"name\": \"{{ $('Webhook /send-notification').item.json.body.template_name }}\",\n    \"language\": { \"code\": \"pt_BR\" },\n    \"components\": [\n      {\n        \"type\": \"body\",\n        \"parameters\": {{ JSON.stringify(($('Webhook /send-notification').item.json.body.template_params || []).map(p => ({ \"type\": \"text\", \"text\": p }))) }}\n      }\n    ]\n  }\n}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "wf11-send-template",
+      "name": "Enviar Template WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [700, 200],
+      "onError": "continueRegularOutput",
+      "notes": "Envia mensagem usando template HSM aprovado pelo Meta.\n\nVantagens:\n- Funciona fora da janela de 24h\n- Formato pré-aprovado pelo Meta\n- Suporta parâmetros dinâmicos\n\nRequer:\n- META_PHONE_NUMBER_ID: ID do número WhatsApp Business\n- META_ACCESS_TOKEN: Token de acesso do Meta"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $env.META_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.META_ACCESS_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"messaging_product\": \"whatsapp\",\n  \"to\": \"{{ $('Webhook /send-notification').item.json.body.to }}\",\n  \"type\": \"text\",\n  \"text\": {\n    \"body\": {{ JSON.stringify($('Webhook /send-notification').item.json.body.message) }}\n  }\n}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "wf11-send-text",
+      "name": "Enviar Texto Livre WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [700, 420],
+      "onError": "continueRegularOutput",
+      "notes": "Envia mensagem de texto livre via WhatsApp.\n\n⚠️ Só funciona se o destinatário respondeu nos últimos 24 horas (regra Meta).\n\nPara envios fora da janela de 24h, use a rota de template."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Determina qual caminho foi executado e monta a resposta\nlet resultado;\ntry {\n  resultado = $('Enviar Template WhatsApp').first().json;\n} catch(e) {\n  try {\n    resultado = $('Enviar Texto Livre WhatsApp').first().json;\n  } catch(e2) {\n    resultado = { error: 'Nenhum envio executado' };\n  }\n}\n\nconst sucesso = resultado && resultado.messages && resultado.messages.length > 0;\n\nreturn [{\n  json: {\n    success: sucesso,\n    message_id: sucesso ? resultado.messages[0].id : null,\n    error: sucesso ? null : (resultado.error || resultado),\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "wf11-result",
+      "name": "Processar Resultado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [940, 300],
+      "notes": "Processa o resultado do envio (template ou texto livre) e gera a resposta padronizada.\n\nRetorna:\n- success: true/false\n- message_id: ID da mensagem no Meta (se sucesso)\n- error: detalhes do erro (se falha)\n- timestamp: horário do processamento"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "wf11-respond",
+      "name": "Retornar Resultado",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1180, 300],
+      "notes": "Retorna o resultado do envio ao chamador (outro workflow ou sistema externo)."
+    }
+  ],
+  "connections": {
+    "Webhook /send-notification": {
+      "main": [[ { "node": "Tem Template?", "type": "main", "index": 0 } ]]
+    },
+    "Tem Template?": {
+      "main": [
+        [ { "node": "Enviar Template WhatsApp", "type": "main", "index": 0 } ],
+        [ { "node": "Enviar Texto Livre WhatsApp", "type": "main", "index": 0 } ]
+      ]
+    },
+    "Enviar Template WhatsApp": {
+      "main": [[ { "node": "Processar Resultado", "type": "main", "index": 0 } ]]
+    },
+    "Enviar Texto Livre WhatsApp": {
+      "main": [[ { "node": "Processar Resultado", "type": "main", "index": 0 } ]]
+    },
+    "Processar Resultado": {
+      "main": [[ { "node": "Retornar Resultado", "type": "main", "index": 0 } ]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "CRM Atacama" },
+    { "name": "WhatsApp" },
+    { "name": "Utilitário" }
+  ],
+  "pinData": {}
+}

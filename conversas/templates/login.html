@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login — Conversas</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+        :root {
+            --primary: #366B85;
+            --primary-dark: #22516A;
+            --whatsapp: #25D366;
+            --dark: #1F1915;
+            --dark-500: #6B5B53;
+            --dark-200: #DFD7D1;
+            --light: #F9F8F7;
+            --white: #FFFFFF;
+            --error: #B54545;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, var(--primary-dark) 0%, var(--primary) 50%, #2D7D6F 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .login-card {
+            background: var(--white);
+            border-radius: 20px;
+            padding: 48px 40px;
+            width: 100%;
+            max-width: 420px;
+            box-shadow: 0 24px 48px rgba(0,0,0,0.2);
+        }
+        .login-logo {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+        .login-logo-icon {
+            width: 64px;
+            height: 64px;
+            background: linear-gradient(135deg, var(--whatsapp), #128C7E);
+            border-radius: 16px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 16px;
+        }
+        .login-logo-icon svg { width: 32px; height: 32px; fill: #fff; }
+        .login-logo h1 {
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--dark);
+        }
+        .login-logo p {
+            font-size: 14px;
+            color: var(--dark-500);
+            margin-top: 6px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--dark-500);
+            margin-bottom: 6px;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid var(--dark-200);
+            border-radius: 10px;
+            font-size: 14px;
+            font-family: inherit;
+            outline: none;
+            transition: all 0.2s;
+            color: var(--dark);
+        }
+        .form-group input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(54,107,133,0.12);
+        }
+        .btn-login {
+            width: 100%;
+            padding: 13px;
+            border: none;
+            border-radius: 10px;
+            background: var(--primary);
+            color: var(--white);
+            font-size: 15px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-login:hover {
+            background: var(--primary-dark);
+            transform: translateY(-1px);
+        }
+        .btn-login:active {
+            transform: translateY(0);
+        }
+        .error-msg {
+            background: rgba(181,69,69,0.08);
+            color: var(--error);
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-size: 13px;
+            margin-bottom: 16px;
+            display: none;
+        }
+        .crm-link {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 13px;
+            color: var(--dark-500);
+        }
+        .crm-link a {
+            color: var(--primary);
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .crm-link a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="login-logo">
+            <div class="login-logo-icon">
+                <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12zM7 9h2v2H7zm4 0h2v2h-2zm4 0h2v2h-2z"/></svg>
+            </div>
+            <h1>Conversas</h1>
+            <p>Brasileiros no Atacama</p>
+        </div>
+
+        <div class="error-msg" id="errorMsg"></div>
+
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="email">E-mail</label>
+                <input type="email" id="email" placeholder="seu@email.com" required autocomplete="email">
+            </div>
+            <div class="form-group">
+                <label for="password">Senha</label>
+                <input type="password" id="password" placeholder="••••••••" required autocomplete="current-password">
+            </div>
+            <button type="submit" class="btn-login" id="btnLogin">Entrar</button>
+        </form>
+
+        <div class="crm-link">
+            <a href="javascript:void(0)" id="crmLink">Voltar ao CRM</a>
+        </div>
+    </div>
+
+    <script src="/static/js/auth.js"></script>
+    <script>
+        if (Auth.isAuthenticated()) {
+            fetch('/api/auth/verify', {
+                headers: { 'Authorization': `Bearer ${Auth.getToken()}` }
+            }).then(res => {
+                if (res.ok) {
+                    if (!document.cookie.includes('access_token')) {
+                        document.cookie = `access_token=Bearer ${Auth.getToken()}; path=/; max-age=28800; SameSite=Lax`;
+                    }
+                    window.location.href = '/';
+                } else {
+                    Auth.clearAuth();
+                    document.cookie = 'access_token=; path=/; max-age=0';
+                }
+            }).catch(() => {
+                Auth.clearAuth();
+                document.cookie = 'access_token=; path=/; max-age=0';
+            });
+        }
+
+        document.getElementById('crmLink').href =
+            typeof CRM_BASE_URL !== 'undefined' ? CRM_BASE_URL : '#';
+
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = document.getElementById('btnLogin');
+            const errorEl = document.getElementById('errorMsg');
+            errorEl.style.display = 'none';
+
+            btn.textContent = 'Entrando...';
+            btn.disabled = true;
+
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        email: document.getElementById('email').value,
+                        password: document.getElementById('password').value,
+                    }),
+                });
+
+                if (!response.ok) {
+                    const detail = await response.json().catch(() => null);
+                    throw new Error(detail?.detail || 'Credenciais invalidas');
+                }
+
+                const data = await response.json();
+                Auth.setAuth(data.access_token, data.user);
+                document.cookie = `access_token=Bearer ${data.access_token}; path=/; max-age=28800; SameSite=Lax`;
+                window.location.href = '/';
+            } catch (err) {
+                errorEl.textContent = err.message || 'Erro ao fazer login';
+                errorEl.style.display = 'block';
+            } finally {
+                btn.textContent = 'Entrar';
+                btn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>

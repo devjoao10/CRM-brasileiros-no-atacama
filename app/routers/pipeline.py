@@ -174,6 +174,7 @@ async def delete_funnel(
 @router.get("/board/{funnel_id}", response_model=KanbanBoardResponse, summary="Kanban board de um funil")
 async def get_kanban_board(
     funnel_id: int,
+    responsavel_id: Optional[int] = Query(None, description="Filtrar por responsável (0 = Agente IA)"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -187,13 +188,17 @@ async def get_kanban_board(
         if not funnel:
             raise HTTPException(status_code=404, detail="Funil não encontrado")
 
-        entries = (
+        query = (
             db.query(FunnelEntry)
             .filter(FunnelEntry.funnel_id == funnel_id)
             .options(joinedload(FunnelEntry.lead))
             .order_by(FunnelEntry.posicao)
-            .all()
         )
+
+        entries = query.all()
+
+        # Build user cache for responsavel names
+        user_cache = {}
 
         # Group entries by stage
         stage_entries = {}
@@ -202,6 +207,24 @@ async def get_kanban_board(
                 stage_entries[entry.etapa_id] = []
             lead = entry.lead
             if lead and lead.is_active:
+                # Apply responsavel filter
+                if responsavel_id is not None:
+                    if responsavel_id == 0 and lead.responsavel_id is not None:
+                        continue
+                    elif responsavel_id != 0 and lead.responsavel_id != responsavel_id:
+                        continue
+
+                # Get responsavel name
+                resp_nome = None
+                if lead.responsavel_id is None:
+                    resp_nome = "Agente IA"
+                elif lead.responsavel_id in user_cache:
+                    resp_nome = user_cache[lead.responsavel_id]
+                else:
+                    user = db.query(User).filter(User.id == lead.responsavel_id).first()
+                    resp_nome = user.nome if user else None
+                    user_cache[lead.responsavel_id] = resp_nome
+
                 stage_entries[entry.etapa_id].append(
                     LeadCardResponse(
                         entry_id=entry.id,
@@ -215,6 +238,8 @@ async def get_kanban_board(
                         etapa_id=entry.etapa_id,
                         posicao=entry.posicao,
                         tags=[TagResponse.model_validate(t) for t in lead.tags],
+                        responsavel_id=lead.responsavel_id,
+                        responsavel_nome=resp_nome,
                         entry_created_at=entry.created_at,
                     )
                 )

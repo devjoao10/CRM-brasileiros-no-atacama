@@ -1,5 +1,6 @@
 import io
 import csv
+import os
 from typing import Optional, List
 from datetime import datetime, date
 
@@ -65,8 +66,16 @@ def _build_lead_response(lead: Lead, db: Session) -> LeadResponse:
                 entry_id=entry.id,
             ))
 
+    # Get responsavel name
+    responsavel_nome = None
+    if lead.responsavel_id:
+        responsavel = db.query(User).filter(User.id == lead.responsavel_id).first()
+        if responsavel:
+            responsavel_nome = responsavel.nome
+
     resp = LeadResponse.model_validate(lead)
     resp.funis = funis
+    resp.responsavel_nome = responsavel_nome or ("Agente IA" if lead.responsavel_id is None else None)
     return resp
 
 
@@ -80,6 +89,7 @@ async def list_leads(
     destino: Optional[str] = Query(None, description="Filtrar por destino (leads que incluem este destino)"),
     status_venda: Optional[str] = Query(None, description="Filtrar por status da venda (em_negociacao, venda, perda)"),
     is_active: Optional[bool] = Query(None, description="Filtrar por status ativo"),
+    responsavel_id: Optional[int] = Query(None, description="Filtrar por responsável (0 ou null = Agente IA)"),
     data_chegada_de: Optional[date] = Query(None, description="Data de chegada a partir de (YYYY-MM-DD)"),
     data_chegada_ate: Optional[date] = Query(None, description="Data de chegada até (YYYY-MM-DD)"),
     data_partida_de: Optional[date] = Query(None, description="Data de partida a partir de (YYYY-MM-DD)"),
@@ -110,6 +120,12 @@ async def list_leads(
         query = query.filter(Lead.status_venda == status_venda)
     if is_active is not None:
         query = query.filter(Lead.is_active == is_active)
+    if responsavel_id is not None:
+        if responsavel_id == 0:
+            # 0 = Agente IA (responsavel_id is NULL)
+            query = query.filter(Lead.responsavel_id.is_(None))
+        else:
+            query = query.filter(Lead.responsavel_id == responsavel_id)
     if data_chegada_de:
         query = query.filter(Lead.data_chegada >= data_chegada_de)
     if data_chegada_ate:
@@ -159,6 +175,7 @@ async def segment_leads(
     destino: Optional[str] = Query(None, description="Filtrar leads que incluem este destino"),
     status_venda: Optional[str] = Query(None),
     is_active: Optional[bool] = Query(None),
+    responsavel_id: Optional[int] = Query(None, description="Filtrar por responsável (0 = Agente IA)"),
     # Viagem — datas exatas
     data_chegada_de: Optional[date] = Query(None),
     data_chegada_ate: Optional[date] = Query(None),
@@ -210,6 +227,13 @@ async def segment_leads(
         query = query.filter(Lead.status_venda == status_venda)
     if is_active is not None:
         query = query.filter(Lead.is_active == is_active)
+
+    # Responsável
+    if responsavel_id is not None:
+        if responsavel_id == 0:
+            query = query.filter(Lead.responsavel_id.is_(None))
+        else:
+            query = query.filter(Lead.responsavel_id == responsavel_id)
 
     # Datas exatas de chegada
     if data_chegada_de:
@@ -341,6 +365,7 @@ async def create_lead(
         data_partida=data.data_partida,
         campos_personalizados=data.campos_personalizados or {},
         status_venda=data.status_venda,
+        responsavel_id=data.responsavel_id,
     )
     db.add(lead)
     db.commit()
@@ -608,3 +633,75 @@ async def import_leads(
         erros=len(errors),
         detalhes_erros=errors[:50],  # Limit error details
     )
+
+
+# ─── INTEGRATION: Conversas ←→ CRM ──────────────────────────────────
+
+@router.get("/by-whatsapp/{whatsapp}", response_model=LeadResponse,
+            summary="Buscar lead pelo WhatsApp")
+async def get_lead_by_whatsapp(
+    whatsapp: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Busca um lead pelo número de WhatsApp.
+    Usado pela plataforma Conversas para vincular conversas a leads automaticamente.
+    """
+    # Normalize: remove +, spaces, dashes
+    normalized = whatsapp.replace("+", "").replace(" ", "").replace("-", "").strip()
+
+    lead = db.query(Lead).filter(
+        Lead.whatsapp.ilike(f"%{normalized[-10:]}%")
+    ).first()
+
+    if not lead:
+        raise HTTPException(status_code=404, detail="Nenhum lead encontrado com este WhatsApp")
+
+    return _build_lead_response(lead, db)
+
+
+@router.put("/{lead_id}/responsavel", response_model=LeadResponse,
+            summary="Alterar responsável do lead")
+async def update_lead_responsavel(
+    lead_id: int,
+    responsavel_id: Optional[int] = Query(None, description="ID do novo responsável (null = Agente IA)"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Altera o responsável de um lead.
+    Envie `responsavel_id=null` para atribuir ao Agente IA.
+    """
+    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead não encontrado")
+
+    # Validate user exists if provided
+    if responsavel_id is not None:
+        user = db.query(User).filter(User.id == responsavel_id, User.is_active == True).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="Usuário não encontrado ou inativo")
+
+    old_responsavel = lead.responsavel_id
+    lead.responsavel_id = responsavel_id
+    db.commit()
+    db.refresh(lead)
+
+    # Log the change
+    from app.models.pipeline import LeadHistory
+    old_name = "Agente IA" if old_responsavel is None else str(old_responsavel)
+    new_name = "Agente IA" if responsavel_id is None else str(responsavel_id)
+
+    if old_responsavel != responsavel_id:
+        event = LeadHistory(
+            lead_id=lead_id,
+            evento="responsavel_changed",
+            descricao=f"Responsável alterado de '{old_name}' para '{new_name}'",
+            dados={"old_responsavel_id": old_responsavel, "new_responsavel_id": responsavel_id},
+        )
+        db.add(event)
+        db.commit()
+
+    return _build_lead_response(lead, db)
+

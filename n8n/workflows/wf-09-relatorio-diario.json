@@ -1,5 +1,5 @@
 {
-  "name": "WF-09 Relatório Diário",
+  "name": "WF-09 Relatório Diário + Conversas",
   "nodes": [
     {
       "parameters": {
@@ -16,7 +16,8 @@
       "name": "Cron 19h00",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [220, 300]
+      "position": [220, 300],
+      "notes": "Dispara todo dia às 19:00 (horário de São Paulo). Final do expediente — ideal para consolidar o dia."
     },
     {
       "parameters": {
@@ -50,7 +51,8 @@
       "name": "Buscar Dashboard (KPIs do dia)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [460, 300]
+      "position": [460, 300],
+      "notes": "Busca os KPIs do dia atual na API de analytics do CRM. Retorna: total_leads, vendas_fechadas, taxa_conversao, tarefas_pendentes. Filtra start_date e end_date para o dia de hoje."
     },
     {
       "parameters": {
@@ -84,7 +86,8 @@
       "name": "Buscar Relatório Mensal",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [700, 300]
+      "position": [700, 300],
+      "notes": "Busca o relatório acumulado do mês (do dia 1 até hoje). Retorna: KPIs mensais, breakdown por destino, vendas vs perdas. Usa $now.startOf('month') para calcular o primeiro dia."
     },
     {
       "parameters": {
@@ -105,83 +108,103 @@
       "name": "Buscar Board do Funil",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [940, 300]
+      "position": [940, 300],
+      "notes": "Busca o estado atual do Kanban (funil ID=1). Retorna a contagem de leads por etapa para gerar o gráfico de barras textual no relatório."
     },
     {
       "parameters": {
-        "jsCode": "// Referenciando dados dos 3 nós anteriores\nconst dashData = $('Buscar Dashboard (KPIs do dia)').first().json;\nconst reportData = $('Buscar Relatório Mensal').first().json;\nconst boardData = $('Buscar Board do Funil').first().json;\n\nconst dataHoje = new Date().toLocaleDateString('pt-BR');\nconst kpis = dashData.kpis || {};\nconst kpisMes = reportData.kpis || {};\n\n// ─── Montar relatório ───\nlet msg = `📊 RELATÓRIO DO DIA — ${dataHoje}\\n`;\nmsg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\n\\n`;\n\n// KPIs do dia\nmsg += `📥 Novos leads hoje: ${kpis.total_leads || 0}\\n`;\nmsg += `💰 Vendas fechadas: ${kpis.vendas_fechadas || 0}\\n`;\nmsg += `📈 Taxa de conversão: ${kpis.taxa_conversao || '0%'}\\n`;\nmsg += `⏳ Tarefas pendentes: ${kpis.tarefas_pendentes || 0}\\n\\n`;\n\n// Estado do funil\nif (boardData.stages && boardData.stages.length > 0) {\n  msg += `📊 Funil (${boardData.total_leads || 0} leads):\\n`;\n  for (const stage of boardData.stages) {\n    const count = stage.leads ? stage.leads.length : 0;\n    const bar = '█'.repeat(Math.min(count, 20));\n    msg += `  ${stage.nome}: ${count} ${bar}\\n`;\n  }\n  msg += '\\n';\n}\n\n// Acumulado do mês\nmsg += `🏆 Acumulado do mês:\\n`;\nmsg += `  • Total de leads: ${kpisMes.total || 0}\\n`;\nmsg += `  • Vendas: ${kpisMes.vendas || 0}\\n`;\nmsg += `  • Em negociação: ${kpisMes.em_negociacao || 0}\\n`;\nmsg += `  • Perdas: ${kpisMes.perdas || 0}\\n\\n`;\n\n// Destinos mais procurados (do relatório mensal)\nconst destinos = reportData.breakdown?.destinos || {};\nconst topDestinos = Object.entries(destinos).slice(0, 5);\nif (topDestinos.length > 0) {\n  msg += `🗺️ Top destinos do mês:\\n`;\n  for (const [destino, count] of topDestinos) {\n    msg += `  • ${destino}: ${count} leads\\n`;\n  }\n}\n\nreturn [{\n  json: {\n    mensagem: msg,\n    kpis_dia: kpis,\n    kpis_mes: kpisMes,\n    total_funil: boardData.total_leads || 0,\n    data: dataHoje\n  }\n}];"
+        "method": "GET",
+        "url": "http://conversas:8001/api/conversations",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.CRM_API_KEY }}"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "limit",
+              "value": "200"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "wf09-conversas",
+      "name": "Buscar Conversas do Dia",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1180, 300],
+      "onError": "continueRegularOutput",
+      "notes": "NOVO: Busca as conversas da plataforma Conversas para incluir métricas de atendimento no relatório. Conta total de conversas, abertas, encerradas e distribuição por responsável."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Referenciando dados dos 4 nós anteriores\nconst dashData = $('Buscar Dashboard (KPIs do dia)').first().json;\nconst reportData = $('Buscar Relatório Mensal').first().json;\nconst boardData = $('Buscar Board do Funil').first().json;\n\n// Conversas data (pode falhar se Conversas não estiver rodando)\nlet conversasData = null;\ntry {\n  conversasData = $('Buscar Conversas do Dia').first().json;\n} catch(e) {\n  conversasData = null;\n}\n\nconst dataHoje = new Date().toLocaleDateString('pt-BR');\nconst kpis = dashData.kpis || {};\nconst kpisMes = reportData.kpis || {};\n\n// ─── Montar relatório ───\nlet msg = `📊 RELATÓRIO DO DIA — ${dataHoje}\\n`;\nmsg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\n\\n`;\n\n// KPIs do dia\nmsg += `📥 Novos leads hoje: ${kpis.total_leads || 0}\\n`;\nmsg += `💰 Vendas fechadas: ${kpis.vendas_fechadas || 0}\\n`;\nmsg += `📈 Taxa de conversão: ${kpis.taxa_conversao || '0%'}\\n`;\nmsg += `⏳ Tarefas pendentes: ${kpis.tarefas_pendentes || 0}\\n\\n`;\n\n// Métricas Conversas (NOVO)\nif (conversasData && conversasData.conversations) {\n  const convs = conversasData.conversations || [];\n  const abertas = convs.filter(c => c.status === 'aberta').length;\n  const encerradas = convs.filter(c => c.status === 'encerrada').length;\n  const aguardando = convs.filter(c => c.status === 'aguardando').length;\n  \n  // Distribuição por responsável\n  const respDist = {};\n  convs.forEach(c => {\n    const nome = c.responsavel_nome || 'Agente IA';\n    respDist[nome] = (respDist[nome] || 0) + 1;\n  });\n\n  msg += `💬 Conversas WhatsApp:\\n`;\n  msg += `  📱 Total: ${convs.length}\\n`;\n  msg += `  🟢 Abertas: ${abertas}\\n`;\n  msg += `  ⏳ Aguardando: ${aguardando}\\n`;\n  msg += `  ✅ Encerradas: ${encerradas}\\n`;\n  \n  if (Object.keys(respDist).length > 0) {\n    msg += `  👥 Por responsável:\\n`;\n    for (const [nome, count] of Object.entries(respDist)) {\n      msg += `    • ${nome}: ${count}\\n`;\n    }\n  }\n  msg += '\\n';\n}\n\n// Estado do funil\nif (boardData.stages && boardData.stages.length > 0) {\n  msg += `📊 Funil (${boardData.total_leads || 0} leads):\\n`;\n  for (const stage of boardData.stages) {\n    const count = stage.leads ? stage.leads.length : 0;\n    const bar = '█'.repeat(Math.min(count, 20));\n    msg += `  ${stage.nome}: ${count} ${bar}\\n`;\n  }\n  msg += '\\n';\n}\n\n// Acumulado do mês\nmsg += `🏆 Acumulado do mês:\\n`;\nmsg += `  • Total de leads: ${kpisMes.total || 0}\\n`;\nmsg += `  • Vendas: ${kpisMes.vendas || 0}\\n`;\nmsg += `  • Em negociação: ${kpisMes.em_negociacao || 0}\\n`;\nmsg += `  • Perdas: ${kpisMes.perdas || 0}\\n\\n`;\n\n// Destinos mais procurados\nconst destinos = reportData.breakdown?.destinos || {};\nconst topDestinos = Object.entries(destinos).slice(0, 5);\nif (topDestinos.length > 0) {\n  msg += `🗺️ Top destinos do mês:\\n`;\n  for (const [destino, count] of topDestinos) {\n    msg += `  • ${destino}: ${count} leads\\n`;\n  }\n}\n\nreturn [{\n  json: {\n    mensagem: msg,\n    kpis_dia: kpis,\n    kpis_mes: kpisMes,\n    total_funil: boardData.total_leads || 0,\n    data: dataHoje\n  }\n}];"
       },
       "id": "wf09-format",
       "name": "Montar Relatório",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1180, 300]
+      "position": [1420, 300],
+      "notes": "Monta o relatório completo com 5 seções:\n\n1. KPIs do dia (leads, vendas, conversão, tarefas)\n2. NOVO: Métricas do Conversas (conversas abertas/encerradas, distribuição por responsável)\n3. Estado do Funil (gráfico de barras textual)\n4. Acumulado do Mês (vendas, perdas, em negociação)\n5. Top destinos do mês\n\nOs dados do Conversas são opcionais — se a plataforma não estiver disponível, o relatório continua funcionando sem essa seção."
     },
     {
-      "parameters": {},
-      "id": "wf09-output",
-      "name": "📬 Conecte aqui o envio (Email/WhatsApp)",
-      "type": "n8n-nodes-base.noOp",
-      "typeVersion": 1,
-      "position": [1420, 300],
-      "notes": "Conecte este nó a um nó de envio:\n- Send Email (SMTP)\n- WhatsApp Cloud API (HTTP Request)\n- Telegram, Slack, etc.\n\nA mensagem formatada está em: {{ $json.mensagem }}"
+      "parameters": {
+        "method": "POST",
+        "url": "http://conversas:8001/api/conversations/send-notification",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.CRM_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"to\": \"{{ $env.ADMIN_WHATSAPP }}\",\n  \"message\": {{ JSON.stringify($json.mensagem) }}\n}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "wf09-send",
+      "name": "Enviar Relatório via WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1660, 300],
+      "onError": "continueRegularOutput",
+      "notes": "Envia o relatório completo via WhatsApp para o admin usando a API do Conversas.\n\nSubstitui o antigo nó placeholder (noOp).\n\nRequer variável ADMIN_WHATSAPP configurada no N8N."
     }
   ],
   "connections": {
     "Cron 19h00": {
-      "main": [
-        [
-          {
-            "node": "Buscar Dashboard (KPIs do dia)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[ { "node": "Buscar Dashboard (KPIs do dia)", "type": "main", "index": 0 } ]]
     },
     "Buscar Dashboard (KPIs do dia)": {
-      "main": [
-        [
-          {
-            "node": "Buscar Relatório Mensal",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[ { "node": "Buscar Relatório Mensal", "type": "main", "index": 0 } ]]
     },
     "Buscar Relatório Mensal": {
-      "main": [
-        [
-          {
-            "node": "Buscar Board do Funil",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[ { "node": "Buscar Board do Funil", "type": "main", "index": 0 } ]]
     },
     "Buscar Board do Funil": {
-      "main": [
-        [
-          {
-            "node": "Montar Relatório",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[ { "node": "Buscar Conversas do Dia", "type": "main", "index": 0 } ]]
+    },
+    "Buscar Conversas do Dia": {
+      "main": [[ { "node": "Montar Relatório", "type": "main", "index": 0 } ]]
     },
     "Montar Relatório": {
-      "main": [
-        [
-          {
-            "node": "📬 Conecte aqui o envio (Email/WhatsApp)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[ { "node": "Enviar Relatório via WhatsApp", "type": "main", "index": 0 } ]]
     }
   },
   "active": false,
@@ -189,12 +212,9 @@
     "executionOrder": "v1"
   },
   "tags": [
-    {
-      "name": "CRM Atacama"
-    },
-    {
-      "name": "Relatórios"
-    }
+    { "name": "CRM Atacama" },
+    { "name": "Relatórios" },
+    { "name": "Conversas" }
   ],
   "pinData": {}
 }

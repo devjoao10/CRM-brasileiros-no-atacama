@@ -92,6 +92,8 @@ class LeadCardResponse(BaseModel):
     etapa_id: str
     posicao: Optional[int] = 0
     tags: list[TagResponse] = []
+    responsavel_id: Optional[int] = None
+    responsavel_nome: Optional[str] = None
     entry_created_at: Optional[datetime] = None  # Quando o lead entrou nesta etapa do funil
 
 
