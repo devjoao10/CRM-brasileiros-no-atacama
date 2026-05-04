@@ -58,39 +58,38 @@ def _create_token(email: str) -> str:
     return jwt.encode({"sub": email, "exp": expire}, SECRET_KEY, algorithm=ALGORITHM)
 
 
-@router.post("/login", response_model=TokenResponse)
-async def login(data: LoginRequest, db: Session = Depends(get_db)):
+import httpx
+import os
+
+CRM_BASE_URL = os.getenv("CRM_BASE_URL", "http://crm:8000")
+
+@router.post("/login")
+async def login(data: LoginRequest):
     """
-    Login local (dev only).
-    Autentica contra a tabela users do SQLite local.
+    Login em produção: Repassa a requisição para a API do CRM,
+    que possui o passlib (bcrypt) para validar a senha real.
     """
-    user = db.query(User).filter(User.email == data.email).first()
-
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Email ou senha incorretos",
-        )
-
-    # Tenta verificar com SHA-256 (nosso hash dev)
-    if not _verify_password(data.password, user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Email ou senha incorretos",
-        )
-
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Conta desativada",
-        )
-
-    token = _create_token(user.email)
-
-    return TokenResponse(
-        access_token=token,
-        user=UserResponse.model_validate(user),
-    )
+    async with httpx.AsyncClient() as client:
+        try:
+            # Envia para a rota de login do CRM
+            response = await client.post(
+                f"{CRM_BASE_URL}/api/auth/login",
+                json={"email": data.email, "password": data.password},
+                timeout=10.0
+            )
+            
+            if response.status_code != 200:
+                # Repassa o erro do CRM
+                detail = response.json().get("detail", "Email ou senha incorretos")
+                raise HTTPException(status_code=response.status_code, detail=detail)
+                
+            return response.json()
+            
+        except httpx.RequestError:
+            raise HTTPException(
+                status_code=503,
+                detail="Serviço de autenticação temporariamente indisponível."
+            )
 
 
 @router.get("/me", response_model=UserResponse)
