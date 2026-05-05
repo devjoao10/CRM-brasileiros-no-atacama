@@ -8,6 +8,7 @@ class MessageCreate(BaseModel):
     content: str = Field(..., min_length=1, max_length=5000)
     msg_type: str = Field(default="text")
     media_url: Optional[str] = None
+    template_name: Optional[str] = None
 
 
 class MessageResponse(BaseModel):

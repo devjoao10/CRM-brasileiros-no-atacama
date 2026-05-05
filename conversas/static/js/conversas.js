@@ -110,6 +110,86 @@
             }
         });
 
+        // --- TEMPLATE LOGIC ---
+        const btnShowTemplates = document.getElementById('btnShowTemplates');
+        const btnCloseTemplates = document.getElementById('btnCloseTemplates');
+        const templatesDropdown = document.getElementById('templatesDropdown');
+        const templatesList = document.getElementById('templatesList');
+
+        if (btnShowTemplates) {
+            btnShowTemplates.addEventListener('click', async () => {
+                templatesDropdown.style.display = 'block';
+                templatesList.innerHTML = '<div style="padding: 10px; text-align: center; font-size: 12px; color: var(--dark-400);">Carregando...</div>';
+                
+                try {
+                    const res = await Auth.apiRequest('/api/templates?status=APPROVED');
+                    if (!res.ok) throw new Error();
+                    const data = await res.json();
+                    
+                    if (!data.templates || data.templates.length === 0) {
+                        templatesList.innerHTML = '<div style="padding: 10px; text-align: center; font-size: 12px; color: var(--dark-400);">Nenhum template APROVADO encontrado.</div>';
+                        return;
+                    }
+                    
+                    templatesList.innerHTML = '';
+                    data.templates.forEach(t => {
+                        const el = document.createElement('div');
+                        el.style.cssText = 'padding: 10px; border-radius: 6px; cursor: pointer; transition: background 0.2s; margin-bottom: 4px;';
+                        el.onmouseover = () => el.style.background = 'var(--dark-100)';
+                        el.onmouseout = () => el.style.background = 'transparent';
+                        
+                        const name = document.createElement('div');
+                        name.style.cssText = 'font-weight: 600; font-size: 12px; color: var(--primary); margin-bottom: 2px;';
+                        name.textContent = t.name;
+                        
+                        const body = document.createElement('div');
+                        body.style.cssText = 'font-size: 11px; color: var(--dark-500); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+                        body.textContent = t.body_text;
+                        
+                        el.appendChild(name);
+                        el.appendChild(body);
+                        
+                        el.addEventListener('click', async () => {
+                            templatesDropdown.style.display = 'none';
+                            if (!activeConversation) return;
+                            
+                            // Send template
+                            try {
+                                const sendRes = await Auth.apiRequest(`/api/conversations/${activeConversation.id}/messages`, {
+                                    method: 'POST',
+                                    body: JSON.stringify({
+                                        content: t.body_text, // Just for visual in DB
+                                        msg_type: 'template',
+                                        template_name: t.name
+                                    })
+                                });
+                                
+                                if (sendRes.ok) {
+                                    showToast('Template enviado!');
+                                    loadChat(activeConversation.id);
+                                    loadConversations();
+                                } else {
+                                    const err = await sendRes.json();
+                                    showToast(err.detail || 'Erro ao enviar template');
+                                }
+                            } catch (e) {
+                                showToast('Erro de conexão');
+                            }
+                        });
+                        
+                        templatesList.appendChild(el);
+                    });
+                } catch (e) {
+                    templatesList.innerHTML = '<div style="padding: 10px; text-align: center; font-size: 12px; color: var(--error);">Erro ao carregar templates.</div>';
+                }
+            });
+            
+            btnCloseTemplates.addEventListener('click', () => {
+                templatesDropdown.style.display = 'none';
+            });
+        }
+        // --- END TEMPLATE LOGIC ---
+
         // Send message
         document.getElementById('btnSend').addEventListener('click', sendMessage);
 

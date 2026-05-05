@@ -88,7 +88,21 @@
                     <!-- Messages populated by JS -->
                 </div>
 
-                <div class="chat-input">
+                <div class="chat-input" style="position: relative;">
+                    <button class="btn-action" id="btnShowTemplates" title="Enviar Template" style="width: 42px; height: 42px; border: none; background: transparent; color: var(--dark-400); border-radius: var(--radius-full); cursor: pointer; transition: all var(--transition); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
+                    </button>
+                    
+                    <div id="templatesDropdown" style="display: none; position: absolute; bottom: 65px; left: 20px; width: 300px; max-height: 300px; overflow-y: auto; background: var(--white); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); border: 1px solid var(--dark-200); z-index: 100;">
+                        <div style="padding: 12px; border-bottom: 1px solid var(--dark-200); font-weight: 600; font-size: 13px; color: var(--dark-500); display: flex; justify-content: space-between; align-items: center;">
+                            Modelos (Templates)
+                            <button id="btnCloseTemplates" style="background: none; border: none; cursor: pointer; color: var(--dark-400); font-size: 16px;">&times;</button>
+                        </div>
+                        <div id="templatesList" style="padding: 8px;">
+                            <!-- Templates populated by JS -->
+                        </div>
+                    </div>
+
                     <textarea id="msgInput" placeholder="Digite uma mensagem..." rows="1"></textarea>
                     <button class="btn-send" id="btnSend" title="Enviar">
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="#fff"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>

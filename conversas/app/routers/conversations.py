@@ -315,6 +315,18 @@ async def send_message(
 
     if data.msg_type == "text":
         wa_response = await whatsapp.send_text_message(conversation.whatsapp, data.content, db)
+    elif data.msg_type == "template" and data.template_name:
+        # Puxa o template do banco para checar o idioma (default pt_BR)
+        from app.models.template import MessageTemplate
+        t = db.query(MessageTemplate).filter(MessageTemplate.name == data.template_name).first()
+        lang = t.language if t else "pt_BR"
+        wa_response = await whatsapp.send_template_message(
+            to=conversation.whatsapp,
+            template_name=data.template_name,
+            language=lang,
+            components=[],  # TODO: extract variables from content if needed
+            db=db
+        )
     elif data.media_url:
         wa_response = await whatsapp.send_media_message(
             conversation.whatsapp, data.msg_type, data.media_url, data.content, db
