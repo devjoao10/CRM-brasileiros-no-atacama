@@ -122,12 +122,13 @@
                 templatesList.innerHTML = '<div style="padding: 10px; text-align: center; font-size: 12px; color: var(--dark-400);">Carregando...</div>';
                 
                 try {
-                    const res = await Auth.apiRequest('/api/templates?status=APPROVED');
+                    // Fetch ALL templates — not filtered by status
+                    const res = await Auth.apiRequest('/api/templates');
                     if (!res.ok) throw new Error();
                     const data = await res.json();
                     
                     if (!data.templates || data.templates.length === 0) {
-                        templatesList.innerHTML = '<div style="padding: 10px; text-align: center; font-size: 12px; color: var(--dark-400);">Nenhum template APROVADO encontrado.</div>';
+                        templatesList.innerHTML = '<div style="padding: 10px; text-align: center; font-size: 12px; color: var(--dark-400);">Nenhum template cadastrado.<br><a href="/templates" style="color:var(--primary);">Criar template</a></div>';
                         return;
                     }
                     
@@ -138,39 +139,68 @@
                         el.onmouseover = () => el.style.background = 'var(--dark-100)';
                         el.onmouseout = () => el.style.background = 'transparent';
                         
-                        const name = document.createElement('div');
-                        name.style.cssText = 'font-weight: 600; font-size: 12px; color: var(--primary); margin-bottom: 2px;';
+                        // Name row with status badge
+                        const nameRow = document.createElement('div');
+                        nameRow.style.cssText = 'display: flex; align-items: center; gap: 6px; margin-bottom: 2px;';
+                        
+                        const name = document.createElement('span');
+                        name.style.cssText = 'font-weight: 600; font-size: 12px; color: var(--primary);';
                         name.textContent = t.name;
+                        
+                        const badge = document.createElement('span');
+                        const badgeColors = {
+                            'APPROVED': { bg: '#e6f4ea', color: '#1e7e34' },
+                            'PENDING': { bg: '#fff8e1', color: '#f57f17' },
+                            'REJECTED': { bg: '#fde8e8', color: '#c62828' },
+                        };
+                        const bc = badgeColors[t.status] || { bg: '#eee', color: '#666' };
+                        badge.style.cssText = `font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 4px; background: ${bc.bg}; color: ${bc.color}; text-transform: uppercase;`;
+                        badge.textContent = t.status === 'APPROVED' ? 'Aprovado' : t.status === 'PENDING' ? 'Em Análise' : t.status;
+                        
+                        nameRow.appendChild(name);
+                        nameRow.appendChild(badge);
                         
                         const body = document.createElement('div');
                         body.style.cssText = 'font-size: 11px; color: var(--dark-500); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
                         body.textContent = t.body_text;
                         
-                        el.appendChild(name);
+                        el.appendChild(nameRow);
                         el.appendChild(body);
                         
                         el.addEventListener('click', async () => {
                             templatesDropdown.style.display = 'none';
                             if (!activeConversation) return;
                             
-                            // Send template
                             try {
-                                const sendRes = await Auth.apiRequest(`/api/conversations/${activeConversation.id}/messages`, {
-                                    method: 'POST',
-                                    body: JSON.stringify({
-                                        content: t.body_text, // Just for visual in DB
-                                        msg_type: 'template',
-                                        template_name: t.name
-                                    })
-                                });
+                                let sendRes;
+                                if (t.status === 'APPROVED') {
+                                    // Send as official WhatsApp template (works outside 24h window)
+                                    sendRes = await Auth.apiRequest(`/api/conversations/${activeConversation.id}/messages`, {
+                                        method: 'POST',
+                                        body: JSON.stringify({
+                                            content: t.body_text,
+                                            msg_type: 'template',
+                                            template_name: t.name
+                                        })
+                                    });
+                                } else {
+                                    // Send as plain text (only works within 24h window)
+                                    sendRes = await Auth.apiRequest(`/api/conversations/${activeConversation.id}/messages`, {
+                                        method: 'POST',
+                                        body: JSON.stringify({
+                                            content: t.body_text,
+                                            msg_type: 'text'
+                                        })
+                                    });
+                                }
                                 
                                 if (sendRes.ok) {
-                                    showToast('Template enviado!');
+                                    showToast(t.status === 'APPROVED' ? 'Template oficial enviado!' : 'Mensagem enviada como texto!');
                                     loadChat(activeConversation.id);
                                     loadConversations();
                                 } else {
                                     const err = await sendRes.json();
-                                    showToast(err.detail || 'Erro ao enviar template');
+                                    showToast(err.detail || 'Erro ao enviar');
                                 }
                             } catch (e) {
                                 showToast('Erro de conexão');
@@ -186,6 +216,13 @@
             
             btnCloseTemplates.addEventListener('click', () => {
                 templatesDropdown.style.display = 'none';
+            });
+            
+            // Close dropdown when clicking outside
+            document.addEventListener('click', (e) => {
+                if (!templatesDropdown.contains(e.target) && e.target !== btnShowTemplates && !btnShowTemplates.contains(e.target)) {
+                    templatesDropdown.style.display = 'none';
+                }
             });
         }
         // --- END TEMPLATE LOGIC ---
@@ -482,6 +519,8 @@
 
         if (msg.msg_type === 'image' && msg.media_url) {
             content = `<img src="${msg.media_url}" style="max-width:100%; border-radius:8px; margin-bottom:4px;"><br>${content}`;
+        } else if (msg.msg_type === 'template') {
+            content = `<div style="font-size:10px; color:var(--primary); font-weight:600; margin-bottom:4px; display:flex; align-items:center; gap:4px;"><svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>Template</div>${content}`;
         } else if (msg.msg_type === 'audio') {
             content = '<em>Audio</em>';
         } else if (msg.msg_type === 'document') {
