@@ -72,6 +72,7 @@ services:
       - WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://localhost:5678/}
       - GENERIC_TIMEZONE=America/Sao_Paulo
       - N8N_SECURE_COOKIE=true
+      - N8N_RESTRICT_ENVIRONMENT_VARIABLES_ACCESS=false
       # Meta Cloud API — usado pelos workflows de WhatsApp
       - META_ACCESS_TOKEN=${META_ACCESS_TOKEN:-}
       - META_PHONE_NUMBER_ID=${META_PHONE_NUMBER_ID:-}
