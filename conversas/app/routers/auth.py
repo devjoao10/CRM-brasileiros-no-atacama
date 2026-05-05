@@ -66,6 +66,8 @@ CRM_BASE_URL = os.getenv("CRM_BASE_URL", "http://crm:8000")
 @router.post("/login")
 async def login(data: LoginRequest):
     """
+    Login em produção: Repassa a requisição para a API do CRM.
+    """
     async with httpx.AsyncClient() as client:
         try:
             # Envia para a rota de login do CRM
