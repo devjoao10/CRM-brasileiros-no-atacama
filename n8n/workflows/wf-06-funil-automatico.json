@@ -1,176 +1,96 @@
 {
-  "name": "WF-06 Funil Automático + Conversas",
+  "name": "WF-06 Relatório Matinal — Leads Estagnados",
   "nodes": [
     {
       "parameters": {
         "rule": {
           "interval": [
             {
-              "field": "cronExpression",
-              "expression": "0 */2 * * *"
+              "triggerAtHour": 8,
+              "triggerAtMinute": 0
             }
           ]
         }
       },
       "id": "wf06-trigger",
-      "name": "Cron a cada 2h",
+      "name": "Schedule 8h",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [220, 300],
-      "notes": "Dispara automaticamente a cada 2 horas (minuto 0 de cada hora par). Horário de São Paulo (GENERIC_TIMEZONE do N8N)."
+      "notes": "Dispara todos os dias às 08:00 (horário do servidor)."
     },
     {
       "parameters": {
         "method": "GET",
-        "url": "http://crm:8000/api/pipeline/board/1",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "X-API-Key",
-              "value": "={{ $env.CRM_API_KEY }}"
-            }
-          ]
-        },
+        "url": "http://crm:8000/api/pipeline/funnels",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "wf06-list-funnels",
+      "name": "Listar Todos os Funis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CRM_HEADER_AUTH_CREDENTIAL_ID",
+          "name": "CRM Brasileiros API"
+        }
+      },
+      "notes": "Busca todos os funis ativos do CRM."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extrai lista de funis ativos com id e nome\nconst data = $input.first().json;\nconst funnels = (data.funnels || []).filter(f => f.is_active);\n\nif (funnels.length === 0) return [];\n\nreturn funnels.map(f => ({\n  json: { funnel_id: f.id, funnel_nome: f.nome }\n}));"
+      },
+      "id": "wf06-extract",
+      "name": "Extrair Funis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300],
+      "notes": "Extrai os funis ativos e gera um item por funil."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://crm:8000/api/pipeline/board/{{ $json.funnel_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "options": {}
       },
       "id": "wf06-get-board",
-      "name": "Carregar Kanban",
+      "name": "Buscar Board de Cada Funil",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [460, 300],
-      "notes": "Busca o board Kanban completo do funil ID=1 via API do CRM. Retorna todas as etapas com os leads dentro de cada uma, incluindo responsavel_id, responsavel_nome, datas e entry_id."
-    },
-    {
-      "parameters": {
-        "jsCode": "// ─── WF-06: Análise do Funil com integração Conversas ───\n// Processa o board e gera uma lista de ações a executar\n// Inclui ações de sync com a plataforma Conversas\n\nconst board = $input.first().json;\nconst agora = new Date();\nconst actions = [];\n\n// Configuração de thresholds (em horas)\nconst THRESHOLD_FOLLOWUP = 48;      // 48h sem interação → mover para follow_up\nconst THRESHOLD_PERDA = 168;         // 7 dias → mover para perda\nconst THRESHOLD_COBRANCA = 120;      // 5 dias sem resposta em proposta_enviada\nconst THRESHOLD_SEM_RESPONSAVEL = 24; // 24h sem responsável → alerta\n\nfunction horasDesde(dateStr) {\n  if (!dateStr) return 0;\n  const dt = new Date(dateStr);\n  return (agora - dt) / (1000 * 60 * 60);\n}\n\nif (!board.stages || board.stages.length === 0) {\n  return [{ json: { actions: [], resumo: 'Nenhuma etapa encontrada no funil.' } }];\n}\n\nfor (const stage of board.stages) {\n  const stageId = stage.id;\n  const leads = stage.leads || [];\n\n  for (const lead of leads) {\n    const horas = horasDesde(lead.data_chegada || lead.created_at);\n\n    // ─── Regra 1: nova_oportunidade > 48h → follow_up ───\n    if (stageId === 'nova_oportunidade' && horas >= THRESHOLD_FOLLOWUP && horas < THRESHOLD_PERDA) {\n      // Mover para follow_up no CRM\n      actions.push({\n        tipo: 'move',\n        descricao: `Mover ${lead.nome} para follow_up (${Math.round(horas)}h sem interação)`,\n        entry_id: lead.entry_id,\n        lead_id: lead.lead_id,\n        lead_nome: lead.nome,\n        endpoint: `/api/pipeline/entries/${lead.entry_id}/move`,\n        method: 'PUT',\n        body: { etapa_id: 'follow_up' },\n        target: 'crm'\n      });\n      // Criar tarefa de follow-up\n      actions.push({\n        tipo: 'task',\n        descricao: `Tarefa: Follow-up ${lead.nome}`,\n        lead_id: lead.lead_id,\n        lead_nome: lead.nome,\n        endpoint: '/api/tasks',\n        method: 'POST',\n        body: {\n          titulo: `Follow-up: ${lead.nome}`,\n          descricao: `Lead sem interação há ${Math.round(horas)} horas. Fazer contato.`,\n          lead_id: lead.lead_id,\n          tipo: 'automatica'\n        },\n        target: 'crm'\n      });\n      // Nota no histórico\n      actions.push({\n        tipo: 'note',\n        descricao: `Nota: ${lead.nome} movido automaticamente`,\n        lead_id: lead.lead_id,\n        lead_nome: lead.nome,\n        endpoint: `/api/pipeline/history/${lead.lead_id}/note?descricao=${encodeURIComponent('Movido automaticamente para follow-up (' + Math.round(horas) + 'h sem interação)')}`,\n        method: 'POST',\n        body: null,\n        target: 'crm'\n      });\n    }\n\n    // ─── Regra 2: nova_oportunidade > 7 dias → perda ───\n    if (stageId === 'nova_oportunidade' && horas >= THRESHOLD_PERDA) {\n      actions.push({\n        tipo: 'move',\n        descricao: `Mover ${lead.nome} para perda (${Math.round(horas)}h)`,\n        entry_id: lead.entry_id,\n        lead_id: lead.lead_id,\n        lead_nome: lead.nome,\n        endpoint: `/api/pipeline/entries/${lead.entry_id}/move`,\n        method: 'PUT',\n        body: { etapa_id: 'perda' },\n        target: 'crm'\n      });\n      actions.push({\n        tipo: 'update_lead',\n        descricao: `Marcar ${lead.nome} como perda`,\n        lead_id: lead.lead_id,\n        lead_nome: lead.nome,\n        endpoint: `/api/leads/${lead.lead_id}`,\n        method: 'PUT',\n        body: { status_venda: 'perda' },\n        target: 'crm'\n      });\n    }\n\n    // ─── Regra 3: proposta_enviada > 5 dias → cobrar resposta ───\n    if (stageId === 'proposta_enviada' && horas >= THRESHOLD_COBRANCA) {\n      actions.push({\n        tipo: 'task',\n        descricao: `Tarefa: Cobrar resposta de ${lead.nome}`,\n        lead_id: lead.lead_id,\n        lead_nome: lead.nome,\n        endpoint: '/api/tasks',\n        method: 'POST',\n        body: {\n          titulo: `Cobrar resposta: ${lead.nome}`,\n          descricao: `Proposta enviada há ${Math.round(horas)} horas sem resposta.`,\n          lead_id: lead.lead_id,\n          tipo: 'automatica'\n        },\n        target: 'crm'\n      });\n      actions.push({\n        tipo: 'note',\n        descricao: `Nota: Cobrança criada para ${lead.nome}`,\n        lead_id: lead.lead_id,\n        lead_nome: lead.nome,\n        endpoint: `/api/pipeline/history/${lead.lead_id}/note?descricao=${encodeURIComponent('Tarefa de cobrança criada automaticamente (' + Math.round(horas) + 'h sem resposta)')}`,\n        method: 'POST',\n        body: null,\n        target: 'crm'\n      });\n    }\n\n    // ─── Regra 4 (NOVA): Lead sem responsável > 24h → alertar ───\n    if (!lead.responsavel_id && horas >= THRESHOLD_SEM_RESPONSAVEL && stageId !== 'perda') {\n      actions.push({\n        tipo: 'alerta',\n        descricao: `⚠️ ALERTA: ${lead.nome} sem responsável há ${Math.round(horas)}h (etapa: ${stageId})`,\n        lead_id: lead.lead_id,\n        lead_nome: lead.nome,\n        endpoint: null,\n        method: null,\n        body: null,\n        target: 'alerta'\n      });\n    }\n  }\n}\n\n// Se não há ações, retornar item vazio para parar o fluxo\nif (actions.length === 0) {\n  return [{ json: { skip: true, resumo: 'Funil processado: nenhuma ação necessária.' } }];\n}\n\n// Retornar cada ação como um item separado\nreturn actions.map(a => ({ json: a }));"
-      },
-      "id": "wf06-analyze",
-      "name": "Analisar Leads do Funil",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [700, 300],
-      "notes": "Lógica central que analisa cada lead em cada etapa do funil e gera ações.\n\nRegras:\n1. nova_oportunidade > 48h → move para follow_up + cria tarefa\n2. nova_oportunidade > 7 dias → move para perda + atualiza status\n3. proposta_enviada > 5 dias → cria tarefa de cobrança\n4. (NOVA) Lead sem responsável > 24h → gera alerta\n\nCada ação é um item separado com target='crm' ou target='alerta'."
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict"
-          },
-          "conditions": [
-            {
-              "id": "skip-check",
-              "leftValue": "={{ $json.skip }}",
-              "rightValue": true,
-              "operator": {
-                "type": "boolean",
-                "operation": "notTrue"
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      },
-      "id": "wf06-filter",
-      "name": "Tem Ações?",
-      "type": "n8n-nodes-base.filter",
-      "typeVersion": 2,
-      "position": [940, 300],
-      "notes": "Filtra items onde skip !== true. Se o funil não gerou ações (skip=true), o fluxo para aqui. Caso contrário, cada ação segue para execução."
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict"
-          },
-          "conditions": [
-            {
-              "id": "is-crm-action",
-              "leftValue": "={{ $json.target }}",
-              "rightValue": "crm",
-              "operator": {
-                "type": "string",
-                "operation": "equals"
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      },
-      "id": "wf06-route",
-      "name": "É Ação CRM ou Alerta?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [1140, 300],
-      "notes": "Roteador: separa ações do CRM (move, task, note) de alertas (leads sem responsável). Ações CRM vão para a API. Alertas vão para notificação."
-    },
-    {
-      "parameters": {
-        "method": "={{ $json.method }}",
-        "url": "=http://crm:8000{{ $json.endpoint }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "X-API-Key",
-              "value": "={{ $env.CRM_API_KEY }}"
-            },
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ $json.body ? JSON.stringify($json.body) : '{}' }}",
-        "options": {
-          "response": {
-            "response": {
-              "fullResponse": false
-            }
-          },
-          "timeout": 10000
+      "position": [880, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CRM_HEADER_AUTH_CREDENTIAL_ID",
+          "name": "CRM Brasileiros API"
         }
       },
-      "id": "wf06-execute",
-      "name": "Executar Ação no CRM",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [1380, 200],
       "onError": "continueRegularOutput",
-      "notes": "Executa a ação HTTP dinâmica no CRM. O method, URL e body vêm do nó de análise. Inclui header X-API-Key para autenticação. Em caso de erro, continua o fluxo (onError=continueRegularOutput)."
+      "notes": "Busca o board kanban de cada funil. O board agora inclui dias_limite por etapa."
     },
     {
       "parameters": {
-        "jsCode": "// Coleta todas as ações de alerta (leads sem responsável)\nconst items = $input.all();\nconst alertas = items.map(i => i.json.descricao).filter(Boolean);\n\nif (alertas.length === 0) {\n  return [{ json: { skip: true } }];\n}\n\nlet msg = `⚠️ ALERTAS DO FUNIL AUTOMÁTICO\\n\\n`;\nmsg += `${alertas.length} lead(s) precisam de atenção:\\n\\n`;\nalertas.forEach(a => { msg += `${a}\\n`; });\nmsg += `\\n🔗 Acesse o CRM para atribuir responsáveis.`;\n\nreturn [{ json: { mensagem: msg, total_alertas: alertas.length } }];"
+        "jsCode": "// Analisa TODOS os boards e encontra leads estagnados\n// Usa dias_limite de cada etapa (dinâmico, configurado no funil)\n\nconst allBoards = $input.all();\nconst estagnados = [];\n\nfor (const boardItem of allBoards) {\n  const board = boardItem.json;\n  const funilNome = board.funnel?.nome || 'Desconhecido';\n  \n  for (const stage of (board.stages || [])) {\n    const limiteDias = stage.dias_limite || 7;\n    \n    for (const lead of (stage.leads || [])) {\n      // Usa entry_updated_at (última movimentação de etapa)\n      const dataRef = lead.entry_updated_at || lead.entry_created_at;\n      if (!dataRef) continue;\n      \n      const dias = Math.floor(\n        (Date.now() - new Date(dataRef).getTime()) / (1000*60*60*24)\n      );\n      \n      if (dias >= limiteDias) {\n        estagnados.push({\n          nome: lead.nome,\n          funil: funilNome,\n          etapa: stage.nome,\n          dias: dias,\n          limite: limiteDias,\n          responsavel: lead.responsavel_nome || 'Sem responsável'\n        });\n      }\n    }\n  }\n}\n\nif (estagnados.length === 0) return [];\n\n// Agrupa por funil > etapa para o relatório\nconst grupos = {};\nfor (const l of estagnados) {\n  const chave = `${l.funil} > ${l.etapa}`;\n  if (!grupos[chave]) grupos[chave] = [];\n  grupos[chave].push(l);\n}\n\n// Monta mensagem formatada\nlet msg = '';\nfor (const [grupo, leads] of Object.entries(grupos)) {\n  msg += `\\n📍 ${grupo}:\\n`;\n  for (const l of leads) {\n    msg += `  • ${l.nome} — ${l.dias} dias — ${l.responsavel}\\n`;\n  }\n}\nmsg += `\\nTotal: ${estagnados.length} lead(s)`;\n\nreturn [{\n  json: {\n    total: estagnados.length,\n    mensagem: msg,\n    detalhes: estagnados\n  }\n}];"
       },
-      "id": "wf06-alertas",
-      "name": "Formatar Alertas",
+      "id": "wf06-analise",
+      "name": "Analisar Leads Estagnados",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1380, 420],
-      "notes": "Formata os alertas de leads sem responsável em uma mensagem legível. Se não há alertas, retorna skip=true."
+      "position": [1100, 300],
+      "notes": "Analisa todos os boards, filtra leads estagnados com base no dias_limite de cada etapa, agrupa por funil/etapa e monta a mensagem formatada."
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "=http://conversas:8001/api/conversations/send-notification",
+        "url": "http://n8n:5678/webhook/send-notification",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {
-              "name": "X-API-Key",
-              "value": "={{ $env.CRM_API_KEY }}"
-            },
             {
               "name": "Content-Type",
               "value": "application/json"
@@ -179,58 +99,60 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"to\": \"{{ $env.ADMIN_WHATSAPP }}\",\n  \"message\": {{ JSON.stringify($json.mensagem) }}\n}",
-        "options": {
-          "timeout": 15000
-        }
+        "jsonBody": "={\n  \"to\": \"5551990119605\",\n  \"template_name\": \"alerta_matinal_leads\",\n  \"template_params\": [\"{{ $json.total }}\"]\n}",
+        "options": {}
       },
-      "id": "wf06-notify",
-      "name": "Enviar Alerta via WhatsApp",
+      "id": "wf06-template",
+      "name": "Enviar Template (Abrir Janela)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1620, 420],
-      "onError": "continueRegularOutput",
-      "notes": "Envia os alertas de leads sem responsável via WhatsApp para o admin usando a API do Conversas. Requer variável ADMIN_WHATSAPP no N8N."
+      "position": [1320, 300],
+      "notes": "Envia o template aprovado 'alerta_matinal_leads' para abrir a janela de conversa de 24h. Após isso, podemos enviar texto livre."
     },
     {
       "parameters": {
-        "jsCode": "// Resumo final das ações executadas\nconst crmItems = $('Executar Ação no CRM').all();\nconst alertItems = $('Formatar Alertas').all();\n\nconst totalCrm = crmItems.length;\nconst totalAlertas = alertItems.filter(i => !i.json.skip).length;\n\nconst resumo = `Funil processado: ${totalCrm} ação(ões) CRM + ${totalAlertas} alerta(s).`;\n\nreturn [{ json: { resumo, total_acoes_crm: totalCrm, total_alertas: totalAlertas, timestamp: new Date().toISOString() } }];"
+        "method": "POST",
+        "url": "http://n8n:5678/webhook/send-notification",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"to\": \"5551990119605\",\n  \"message\": {{ JSON.stringify($('Analisar Leads Estagnados').first().json.mensagem) }}\n}",
+        "options": {}
       },
-      "id": "wf06-summary",
-      "name": "Resumo Final",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [1860, 300],
-      "notes": "Gera o resumo final com contagem de ações CRM executadas e alertas enviados."
+      "id": "wf06-detalhes",
+      "name": "Enviar Lista Completa",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 300],
+      "notes": "Envia a lista completa formatada com quebras de linha via texto livre. Funciona porque o template anterior abriu a janela de conversa."
     }
   ],
   "connections": {
-    "Cron a cada 2h": {
-      "main": [[ { "node": "Carregar Kanban", "type": "main", "index": 0 } ]]
+    "Schedule 8h": {
+      "main": [[ { "node": "Listar Todos os Funis", "type": "main", "index": 0 } ]]
     },
-    "Carregar Kanban": {
-      "main": [[ { "node": "Analisar Leads do Funil", "type": "main", "index": 0 } ]]
+    "Listar Todos os Funis": {
+      "main": [[ { "node": "Extrair Funis", "type": "main", "index": 0 } ]]
     },
-    "Analisar Leads do Funil": {
-      "main": [[ { "node": "Tem Ações?", "type": "main", "index": 0 } ]]
+    "Extrair Funis": {
+      "main": [[ { "node": "Buscar Board de Cada Funil", "type": "main", "index": 0 } ]]
     },
-    "Tem Ações?": {
-      "main": [[ { "node": "É Ação CRM ou Alerta?", "type": "main", "index": 0 } ]]
+    "Buscar Board de Cada Funil": {
+      "main": [[ { "node": "Analisar Leads Estagnados", "type": "main", "index": 0 } ]]
     },
-    "É Ação CRM ou Alerta?": {
-      "main": [
-        [ { "node": "Executar Ação no CRM", "type": "main", "index": 0 } ],
-        [ { "node": "Formatar Alertas", "type": "main", "index": 0 } ]
-      ]
+    "Analisar Leads Estagnados": {
+      "main": [[ { "node": "Enviar Template (Abrir Janela)", "type": "main", "index": 0 } ]]
     },
-    "Executar Ação no CRM": {
-      "main": [[ { "node": "Resumo Final", "type": "main", "index": 0 } ]]
-    },
-    "Formatar Alertas": {
-      "main": [[ { "node": "Enviar Alerta via WhatsApp", "type": "main", "index": 0 } ]]
-    },
-    "Enviar Alerta via WhatsApp": {
-      "main": [[ { "node": "Resumo Final", "type": "main", "index": 0 } ]]
+    "Enviar Template (Abrir Janela)": {
+      "main": [[ { "node": "Enviar Lista Completa", "type": "main", "index": 0 } ]]
     }
   },
   "active": false,
@@ -239,8 +161,8 @@
   },
   "tags": [
     { "name": "CRM Atacama" },
-    { "name": "Pipeline" },
-    { "name": "Conversas" }
+    { "name": "WhatsApp" },
+    { "name": "Pipeline" }
   ],
   "pinData": {}
 }

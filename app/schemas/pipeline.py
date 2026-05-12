@@ -11,6 +11,7 @@ from app.schemas.tag import TagResponse
 class StageSchema(BaseModel):
     id: str = Field(..., description="ID único da etapa (ex: 'novo', 'contato', 'negociacao')")
     nome: str = Field(..., description="Nome exibido da etapa (ex: 'Novo Lead')")
+    dias_limite: int = Field(7, ge=1, description="Dias máximos antes de considerar o lead estagnado nesta etapa")
 
 
 # ─── Funnel ──────────────────────────────────────
@@ -94,13 +95,15 @@ class LeadCardResponse(BaseModel):
     tags: list[TagResponse] = []
     responsavel_id: Optional[int] = None
     responsavel_nome: Optional[str] = None
-    entry_created_at: Optional[datetime] = None  # Quando o lead entrou nesta etapa do funil
+    entry_created_at: Optional[datetime] = None  # Quando o lead entrou neste funil
+    entry_updated_at: Optional[datetime] = None  # Última movimentação (mover etapa atualiza)
 
 
 class KanbanStageResponse(BaseModel):
     """A single Kanban column with its leads."""
     id: str
     nome: str
+    dias_limite: int = 7  # Dias máximos antes de considerar estagnado
     leads: list[LeadCardResponse] = []
 
 

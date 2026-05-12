@@ -156,6 +156,7 @@
         .stage-row { display: flex; gap: var(--space-2); margin-bottom: var(--space-2); align-items: center; }
         .stage-row input { flex: 1; padding: var(--space-2) var(--space-3); font-family: var(--font-family); font-size: var(--font-size-sm); border: 1.5px solid var(--color-dark-200); border-radius: var(--radius-md); outline: none; }
         .stage-row input:focus { border-color: var(--color-primary); }
+        .stage-row input.stage-dias { flex: 0 0 60px; text-align: center; }
         .stage-row .drag-handle { cursor: grab; color: var(--color-dark-300); font-size: var(--font-size-lg); padding: 0 var(--space-1); }
         .stage-row .remove-stage { background: none; border: none; cursor: pointer; color: var(--color-error); font-size: var(--font-size-lg); padding: var(--space-1); }
         .add-stage-btn { font-size: var(--font-size-sm); color: var(--color-primary); background: none; border: 1.5px dashed var(--color-primary); border-radius: var(--radius-md); padding: var(--space-2) var(--space-4); cursor: pointer; width: 100%; margin-top: var(--space-2); }
@@ -371,6 +372,12 @@
                     </div>
                     <div class="form-group">
                         <label class="form-label">Etapas (arraste para reordenar)</label>
+                        <div style="display:flex;gap:var(--space-2);padding:0 0 var(--space-1) 24px;font-size:10px;font-weight:var(--font-weight-bold);text-transform:uppercase;letter-spacing:0.05em;color:var(--color-dark-400);">
+                            <span style="flex:1">ID</span>
+                            <span style="flex:1">Nome</span>
+                            <span style="flex:0 0 60px;text-align:center" title="Dias máximos na etapa antes de alertar como estagnado">⏰ Dias</span>
+                            <span style="width:28px"></span>
+                        </div>
                         <div class="stage-list" id="stageList"></div>
                         <button type="button" class="add-stage-btn" onclick="addStageRow()">+ Adicionar Etapa</button>
                     </div>
@@ -1119,17 +1126,17 @@
         stageList.innerHTML = '';
 
         if (funnel && funnel.etapas.length) {
-            funnel.etapas.forEach(s => addStageRow(s.id, s.nome));
+            funnel.etapas.forEach(s => addStageRow(s.id, s.nome, s.dias_limite || 7));
         } else {
             // Default stages for new funnel
-            addStageRow('novo', 'Novo Lead');
-            addStageRow('contato', 'Em Contato');
-            addStageRow('negociacao', 'Negociação');
-            addStageRow('fechado', 'Fechado');
+            addStageRow('novo', 'Novo Lead', 2);
+            addStageRow('contato', 'Em Contato', 3);
+            addStageRow('negociacao', 'Negociação', 5);
+            addStageRow('fechado', 'Fechado', 7);
         }
     }
 
-    function addStageRow(id = '', nome = '') {
+    function addStageRow(id = '', nome = '', diasLimite = 7) {
         const list = document.getElementById('stageList');
         const row = document.createElement('div');
         row.className = 'stage-row';
@@ -1137,6 +1144,7 @@
             <span class="drag-handle">⠿</span>
             <input type="text" class="stage-id" placeholder="ID (ex: novo)" value="${esc(id)}">
             <input type="text" class="stage-nome" placeholder="Nome (ex: Novo Lead)" value="${esc(nome)}">
+            <input type="number" class="stage-dias" min="1" max="365" value="${diasLimite}" title="Dias limite antes de alertar como estagnado">
             <button type="button" class="remove-stage" onclick="this.parentElement.remove()">✕</button>
         `;
         list.appendChild(row);
@@ -1158,7 +1166,8 @@
         document.querySelectorAll('.stage-row').forEach(row => {
             const sid = row.querySelector('.stage-id').value.trim();
             const sname = row.querySelector('.stage-nome').value.trim();
-            if (sid && sname) stages.push({ id: sid, nome: sname });
+            const sdias = parseInt(row.querySelector('.stage-dias')?.value) || 7;
+            if (sid && sname) stages.push({ id: sid, nome: sname, dias_limite: sdias });
         });
 
         if (stages.length === 0) { showFunnelAlert('Adicione pelo menos uma etapa'); return; }

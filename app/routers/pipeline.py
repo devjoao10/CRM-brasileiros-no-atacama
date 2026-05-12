@@ -241,6 +241,7 @@ async def get_kanban_board(
                         responsavel_id=lead.responsavel_id,
                         responsavel_nome=resp_nome,
                         entry_created_at=entry.created_at,
+                        entry_updated_at=entry.updated_at,
                     )
                 )
 
@@ -252,6 +253,7 @@ async def get_kanban_board(
             stages.append(KanbanStageResponse(
                 id=stage["id"],
                 nome=stage["nome"],
+                dias_limite=stage.get("dias_limite", 7),
                 leads=leads_in_stage,
             ))
 
