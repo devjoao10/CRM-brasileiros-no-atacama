@@ -366,8 +366,14 @@ async def _forward_to_agent(conversation: Conversation, message_text: str, db: S
                 resposta = data.get("resposta", "")
 
                 if resposta:
-                    # Split response by ||| for multiple messages (natural WhatsApp feel)
-                    partes = [p.strip() for p in resposta.split("|||") if p.strip()]
+                    # Split by ||| first, then by double newlines for natural WhatsApp feel
+                    import re
+                    partes_raw = resposta.split("|||")
+                    partes = []
+                    for raw in partes_raw:
+                        # Also split on double newlines (paragraph breaks)
+                        sub = re.split(r'\n\s*\n', raw)
+                        partes.extend([p.strip() for p in sub if p.strip()])
 
                     for i, parte in enumerate(partes):
                         # Send each part as a separate WhatsApp message
