@@ -175,9 +175,145 @@ async def sync_responsavel_to_crm(
         return False
 
 
+async def auto_create_lead_in_crm(
+    whatsapp: str, nome: str, db: Session
+) -> Optional[dict]:
+    """
+    Create a new lead in the CRM, add to the first active funnel
+    (stage 'nova_oportunidade'), and apply the 'WhatsApp' tag.
+    Returns the created lead data dict, or None on failure.
+    """
+    try:
+        # 1. Create the lead
+        result = db.execute(
+            text(
+                "INSERT INTO leads (nome, whatsapp, status_venda, is_active, "
+                "campos_personalizados, created_at, updated_at) "
+                "VALUES (:nome, :whatsapp, 'em_negociacao', true, "
+                "'{\"origem\": \"WhatsApp\"}'::jsonb, NOW(), NOW()) "
+                "RETURNING id"
+            ),
+            {"nome": nome, "whatsapp": whatsapp},
+        )
+        lead_id = result.fetchone()[0]
+        logger.info(f"Lead criado automaticamente: #{lead_id} — {nome} ({whatsapp})")
+
+        # 2. Find the first active funnel with 'whatsapp' in the name (case-insensitive)
+        #    Falls back to ANY first active funnel if none matches
+        funnel_row = db.execute(
+            text(
+                "SELECT id, etapas FROM funnels "
+                "WHERE is_active = true "
+                "ORDER BY (LOWER(nome) LIKE '%whatsapp%') DESC, id ASC "
+                "LIMIT 1"
+            )
+        ).fetchone()
+
+        if funnel_row:
+            funnel_id = funnel_row.id
+            etapas = funnel_row.etapas
+
+            # Determine the first stage ID
+            import json
+            stages = etapas if isinstance(etapas, list) else json.loads(etapas)
+            first_stage_id = "nova_oportunidade"  # default
+            if stages and isinstance(stages[0], dict):
+                first_stage_id = stages[0].get("id", "nova_oportunidade")
+
+            # Check if lead is already in this funnel (avoid duplicates)
+            existing_entry = db.execute(
+                text(
+                    "SELECT id FROM funnel_entries "
+                    "WHERE lead_id = :lid AND funnel_id = :fid "
+                    "LIMIT 1"
+                ),
+                {"lid": lead_id, "fid": funnel_id},
+            ).fetchone()
+
+            if not existing_entry:
+                db.execute(
+                    text(
+                        "INSERT INTO funnel_entries "
+                        "(lead_id, funnel_id, etapa_id, posicao, created_at, updated_at) "
+                        "VALUES (:lid, :fid, :etapa, 0, NOW(), NOW())"
+                    ),
+                    {"lid": lead_id, "fid": funnel_id, "etapa": first_stage_id},
+                )
+                logger.info(
+                    f"Lead #{lead_id} adicionado ao funil #{funnel_id} "
+                    f"(etapa: {first_stage_id})"
+                )
+
+            # Log in lead_history
+            db.execute(
+                text(
+                    "INSERT INTO lead_history "
+                    "(lead_id, evento, descricao, created_at) "
+                    "VALUES (:lid, 'created', :desc, NOW())"
+                ),
+                {
+                    "lid": lead_id,
+                    "desc": f"Lead criado automaticamente via WhatsApp. "
+                            f"Adicionado ao funil (etapa: {first_stage_id})",
+                },
+            )
+
+        # 3. Apply 'WhatsApp' tag (create if it doesn't exist)
+        tag_row = db.execute(
+            text("SELECT id FROM tags WHERE LOWER(nome) = 'whatsapp' LIMIT 1")
+        ).fetchone()
+
+        if tag_row:
+            tag_id = tag_row.id
+        else:
+            tag_result = db.execute(
+                text(
+                    "INSERT INTO tags (nome, cor, created_at) "
+                    "VALUES ('WhatsApp', '#25D366', NOW()) "
+                    "RETURNING id"
+                )
+            )
+            tag_id = tag_result.fetchone()[0]
+            logger.info(f"Tag 'WhatsApp' criada: #{tag_id}")
+
+        # Link tag to lead (avoid duplicate)
+        existing_tag_link = db.execute(
+            text(
+                "SELECT 1 FROM lead_tags "
+                "WHERE lead_id = :lid AND tag_id = :tid"
+            ),
+            {"lid": lead_id, "tid": tag_id},
+        ).fetchone()
+
+        if not existing_tag_link:
+            db.execute(
+                text(
+                    "INSERT INTO lead_tags (lead_id, tag_id) "
+                    "VALUES (:lid, :tid)"
+                ),
+                {"lid": lead_id, "tid": tag_id},
+            )
+
+        db.commit()
+
+        return {
+            "id": lead_id,
+            "nome": nome,
+            "whatsapp": whatsapp,
+            "responsavel_id": None,
+            "responsavel_nome": "Agente IA",
+        }
+
+    except Exception as e:
+        logger.error(f"Erro ao criar lead automático: {e}", exc_info=True)
+        db.rollback()
+        return None
+
+
 async def auto_link_conversation(conversation: Conversation, db: Session) -> bool:
     """
     Automatically link a conversation to a CRM lead by WhatsApp number.
+    If no lead exists, creates one automatically in the CRM.
     Updates conversation.lead_id, responsavel_id, and responsavel_nome.
     Returns True if linked.
     """
@@ -185,8 +321,16 @@ async def auto_link_conversation(conversation: Conversation, db: Session) -> boo
         return False
 
     lead_data = await lookup_lead_by_whatsapp(conversation.whatsapp, db)
+
+    # Lead not found — create automatically
     if not lead_data:
-        return False
+        nome = conversation.nome or conversation.whatsapp
+        lead_data = await auto_create_lead_in_crm(conversation.whatsapp, nome, db)
+        if not lead_data:
+            logger.warning(
+                f"Falha ao criar lead automático para {conversation.whatsapp}"
+            )
+            return False
 
     conversation.lead_id = lead_data.get("id", 0)
     conversation.responsavel_id = lead_data.get("responsavel_id")
