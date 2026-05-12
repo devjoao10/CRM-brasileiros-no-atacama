@@ -366,25 +366,34 @@ async def _forward_to_agent(conversation: Conversation, message_text: str, db: S
                 resposta = data.get("resposta", "")
 
                 if resposta:
-                    # Send the agent's response via WhatsApp
-                    await whatsapp.send_text_message(conversation.whatsapp, resposta, db)
+                    # Split response by ||| for multiple messages (natural WhatsApp feel)
+                    partes = [p.strip() for p in resposta.split("|||") if p.strip()]
 
-                    # Save outbound message
-                    agent_msg = Message(
-                        conversation_id=conversation.id,
-                        direction="outbound",
-                        content=resposta,
-                        msg_type="text",
-                        status="sent",
-                    )
-                    db.add(agent_msg)
+                    for i, parte in enumerate(partes):
+                        # Send each part as a separate WhatsApp message
+                        await whatsapp.send_text_message(conversation.whatsapp, parte, db)
 
-                    # Update conversation preview
-                    conversation.ultimo_msg = resposta[:200]
+                        # Small delay between messages for natural feel
+                        if i < len(partes) - 1:
+                            import asyncio
+                            await asyncio.sleep(1.2)
+
+                        # Save each part as outbound message
+                        agent_msg = Message(
+                            conversation_id=conversation.id,
+                            direction="outbound",
+                            content=parte,
+                            msg_type="text",
+                            status="sent",
+                        )
+                        db.add(agent_msg)
+
+                    # Update conversation preview with last part
+                    conversation.ultimo_msg = partes[-1][:200]
                     conversation.unread_count = 0
                     db.commit()
 
-                    logger.info(f"Resposta da Bia enviada para {conversation.whatsapp}: {resposta[:50]}")
+                    logger.info(f"Resposta da Bia ({len(partes)} msgs) para {conversation.whatsapp}")
             else:
                 logger.warning(f"Agente IA retornou status {resp.status_code}: {resp.text[:200]}")
     except httpx.TimeoutException:
