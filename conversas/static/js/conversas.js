@@ -15,10 +15,20 @@
     let pollInterval = null;
     let usersCache = [];
 
-    // CRM base URL — will be derived from window location
-    const CRM_BASE_URL = window.location.port === '8001'
-        ? window.location.protocol + '//' + window.location.hostname + ':8000'
-        : window.location.origin.replace(':8001', ':8000');
+    // CRM base URL — works in dev (port-based) and production (subdomain-based)
+    const CRM_BASE_URL = (() => {
+        const loc = window.location;
+        // Development: port 8001 → 8000
+        if (loc.port === '8001') {
+            return loc.protocol + '//' + loc.hostname + ':8000';
+        }
+        // Production: conversas.domain → crm.domain
+        if (loc.hostname.startsWith('conversas.')) {
+            return loc.protocol + '//' + loc.hostname.replace('conversas.', 'crm.');
+        }
+        // Fallback
+        return loc.origin.replace('conversas.', 'crm.');
+    })();
 
     // ─── Init ───────────────────────────────────
     document.addEventListener('DOMContentLoaded', () => {
