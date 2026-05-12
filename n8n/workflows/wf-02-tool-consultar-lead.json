@@ -1,0 +1,36 @@
+{
+  "name": "WF-02 Tool Consultar Lead",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "wf02-trigger",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://crm:8000/api/leads/{{ $json.lead_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "wf02-request",
+      "name": "GET Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "notes": "Busca dados completos do lead no CRM incluindo tags, funis e campos personalizados."
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [{ "node": "GET Lead", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

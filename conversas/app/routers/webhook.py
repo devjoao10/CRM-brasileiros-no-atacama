@@ -336,14 +336,14 @@ async def _forward_to_agent(conversation: Conversation, message_text: str, db: S
     """
     import httpx
 
-    # Build the last few messages as context for the agent
+    # Build ALL messages as context for the agent (full conversation history)
     recent_msgs = db.query(Message).filter(
         Message.conversation_id == conversation.id,
-    ).order_by(Message.created_at.desc()).limit(10).all()
+    ).order_by(Message.created_at.asc()).all()
 
     historico = [
         {"direction": m.direction, "content": m.content, "type": m.msg_type}
-        for m in reversed(recent_msgs)
+        for m in recent_msgs
     ]
 
     payload = {

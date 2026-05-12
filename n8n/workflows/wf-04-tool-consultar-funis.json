@@ -1,0 +1,36 @@
+{
+  "name": "WF-04 Tool Consultar Funis",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "wf04-trigger",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://crm:8000/api/pipeline/funnels",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "wf04-request",
+      "name": "GET Funis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "notes": "Lista todos os funis ativos com suas etapas."
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [{ "node": "GET Funis", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

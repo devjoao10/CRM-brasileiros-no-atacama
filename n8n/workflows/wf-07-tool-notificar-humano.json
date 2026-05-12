@@ -1,0 +1,39 @@
+{
+  "name": "WF-07 Tool Notificar Humano",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "wf07-trigger",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{$env.META_PHONE_NUMBER_ID}}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messaging_product: 'whatsapp', to: 'NUMERO_VENDEDORA_AQUI', type: 'text', text: { body: $json.mensagem } }) }}",
+        "options": {}
+      },
+      "id": "wf07-send",
+      "name": "Enviar WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "notes": "Envia resumo do lead para a vendedora humana via WhatsApp. CONFIGURE: substitua NUMERO_VENDEDORA_AQUI pelo número real."
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [{ "node": "Enviar WhatsApp", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

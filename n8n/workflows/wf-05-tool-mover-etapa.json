@@ -1,0 +1,75 @@
+{
+  "name": "WF-05 Tool Mover Etapa",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "wf05-trigger",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://crm:8000/api/leads/{{ $json.lead_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "wf05-get-lead",
+      "name": "Buscar Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "notes": "Busca o lead para encontrar o entry_id do funil."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Encontra o entry_id do lead no funil\nconst lead = $input.first().json;\nconst etapa_id = $('Trigger').first().json.etapa_id;\nconst funis = lead.funis || [];\n\nif (funis.length === 0) {\n  return [{ json: { error: 'Lead não está em nenhum funil', lead_id: lead.id } }];\n}\n\n// Usa o primeiro funil encontrado\nconst entry_id = funis[0].entry_id;\n\nreturn [{ json: { entry_id, etapa_id } }];"
+      },
+      "id": "wf05-extract",
+      "name": "Extrair Entry ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300],
+      "notes": "Extrai o entry_id do lead no funil para fazer o move."
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=http://crm:8000/api/pipeline/entries/{{ $json.entry_id }}/move",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ etapa_id: $json.etapa_id }) }}",
+        "options": {}
+      },
+      "id": "wf05-move",
+      "name": "Mover Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 300],
+      "notes": "Move o lead para a etapa especificada."
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [{ "node": "Buscar Lead", "type": "main", "index": 0 }]
+      ]
+    },
+    "Buscar Lead": {
+      "main": [
+        [{ "node": "Extrair Entry ID", "type": "main", "index": 0 }]
+      ]
+    },
+    "Extrair Entry ID": {
+      "main": [
+        [{ "node": "Mover Lead", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

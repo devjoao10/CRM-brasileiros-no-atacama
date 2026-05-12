@@ -1,0 +1,39 @@
+{
+  "name": "WF-06 Tool Criar Tarefa",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "wf06-trigger",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://crm:8000/api/tasks",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ titulo: $json.titulo, descricao: $json.descricao || '', lead_id: $json.lead_id || null, tipo: 'automatica', status: 'pendente' }) }}",
+        "options": {}
+      },
+      "id": "wf06-request",
+      "name": "POST Tarefa",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "notes": "Cria tarefa automática no CRM vinculada ao lead."
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [{ "node": "POST Tarefa", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

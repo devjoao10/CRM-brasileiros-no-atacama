@@ -1,0 +1,55 @@
+{
+  "name": "WF-03 Tool Atualizar Lead",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "wf03-trigger",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Monta o body do PUT com apenas os campos preenchidos\nconst input = $input.first().json;\nconst lead_id = input.lead_id;\nconst body = {};\n\nif (input.nome) body.nome = input.nome;\nif (input.email) body.email = input.email;\nif (input.destinos) body.destinos = input.destinos;\nif (input.data_chegada) body.data_chegada = input.data_chegada;\nif (input.data_partida) body.data_partida = input.data_partida;\nif (input.num_viajantes) {\n  body.campos_personalizados = { ...(body.campos_personalizados || {}), num_viajantes: String(input.num_viajantes) };\n}\n\nreturn [{ json: { lead_id, body } }];"
+      },
+      "id": "wf03-prepare",
+      "name": "Preparar Dados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "notes": "Filtra apenas os campos preenchidos para enviar no PUT. num_viajantes vai como campo personalizado."
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=http://crm:8000/api/leads/{{ $json.lead_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      },
+      "id": "wf03-request",
+      "name": "PUT Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 300],
+      "notes": "Atualiza o lead no CRM com os dados captados pela IA."
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [{ "node": "Preparar Dados", "type": "main", "index": 0 }]
+      ]
+    },
+    "Preparar Dados": {
+      "main": [
+        [{ "node": "PUT Lead", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}
