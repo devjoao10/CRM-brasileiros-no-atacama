@@ -563,7 +563,7 @@
 
         // CRM link buttons
         if (conv.lead_id > 0) {
-            document.getElementById('btnViewCRM').href = `${CRM_BASE_URL}/leads?search=${encodeURIComponent(conv.whatsapp)}`;
+            document.getElementById('btnViewCRM').href = `${CRM_BASE_URL}/leads?open=${conv.lead_id}`;
             document.getElementById('btnViewCRM').style.display = 'flex';
             document.getElementById('btnViewPipeline').href = `${CRM_BASE_URL}/pipeline?lead_id=${conv.lead_id}`;
             document.getElementById('btnViewPipeline').style.display = 'flex';

@@ -592,7 +592,11 @@
 
         loadAllTags();
         loadUsersForFilter();
-        loadLeads();
+        loadLeads().then(() => {
+            // Auto-open lead if ?open=ID is in URL
+            const openId = new URLSearchParams(window.location.search).get('open');
+            if (openId) editLead(parseInt(openId));
+        });
     });
 
     // Load users for responsavel filter

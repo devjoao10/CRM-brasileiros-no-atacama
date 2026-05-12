@@ -583,6 +583,21 @@
         // No longer needed: data_chegada is natively included in LeadCardResponse
 
         applyFilters();
+
+        // Auto-open lead detail if ?lead_id= is in URL
+        const urlLeadId = new URLSearchParams(window.location.search).get('lead_id');
+        if (urlLeadId) {
+            const lid = parseInt(urlLeadId);
+            for (const stage of boardDataFull.stages) {
+                const found = stage.leads.find(l => l.lead_id === lid);
+                if (found) {
+                    openDetailPanel(found.entry_id, found.lead_id);
+                    // Clear the param so it doesn't re-open on tab switch
+                    window.history.replaceState({}, '', window.location.pathname);
+                    break;
+                }
+            }
+        }
     }
 
     // Function cacheleadDates removed because LeadCardResponse natively includes lead.data_chegada.
