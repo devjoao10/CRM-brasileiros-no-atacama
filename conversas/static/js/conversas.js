@@ -15,20 +15,10 @@
     let pollInterval = null;
     let usersCache = [];
 
-    // CRM base URL — works in dev (port-based) and production (subdomain-based)
-    const CRM_BASE_URL = (() => {
-        const loc = window.location;
-        // Development: port 8001 → 8000
-        if (loc.port === '8001') {
-            return loc.protocol + '//' + loc.hostname + ':8000';
-        }
-        // Production: conversas.domain → crm.domain
-        if (loc.hostname.startsWith('conversas.')) {
-            return loc.protocol + '//' + loc.hostname.replace('conversas.', 'crm.');
-        }
-        // Fallback
-        return loc.origin.replace('conversas.', 'crm.');
-    })();
+    // CRM base URL
+    const CRM_BASE_URL = window.location.hostname === 'localhost'
+        ? 'http://localhost:8000'
+        : 'https://crm.crmbrasileirosnoatacama.cloud';
 
     // ─── Init ───────────────────────────────────
     document.addEventListener('DOMContentLoaded', () => {
