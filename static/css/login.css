@@ -3,13 +3,24 @@
    ============================================ */
 @import url('https://fonts.googleapis.com/css2?family=Caveat+Brush&display=swap');
 
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+.hidden { display: none !important; }
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* ── Layout ──────────────────────────────── */
+
 .login-container {
     display: flex;
     min-height: 100vh;
     overflow: hidden;
 }
 
-/* --- Branding Panel (Left) --- */
+/* ── Left: Brand Panel ───────────────────── */
 
 .login-brand {
     flex: 1;
@@ -17,10 +28,11 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    background: linear-gradient(135deg, var(--color-dark) 0%, var(--color-primary-dark) 50%, var(--color-secondary-dark) 100%);
+    /* Hardcoded — 3 variáveis CSS não existem no design system atual */
+    background: linear-gradient(135deg, #111827 0%, #22516A 50%, #1A3A4A 100%);
     position: relative;
     overflow: hidden;
-    padding: var(--space-8);
+    padding: 2rem;
 }
 
 .login-brand::before {
@@ -30,13 +42,14 @@
     left: -50%;
     width: 200%;
     height: 200%;
-    background: radial-gradient(circle at 30% 70%, rgba(163, 117, 84, 0.15) 0%, transparent 50%),
-                radial-gradient(circle at 70% 30%, rgba(54, 107, 133, 0.2) 0%, transparent 50%);
+    background:
+        radial-gradient(circle at 30% 70%, rgba(163, 117, 84, 0.15) 0%, transparent 50%),
+        radial-gradient(circle at 70% 30%, rgba(54, 107, 133, 0.20) 0%, transparent 50%);
     animation: brandGlow 8s ease-in-out infinite alternate;
 }
 
 @keyframes brandGlow {
-    0% { transform: translate(0, 0) rotate(0deg); }
+    0%   { transform: translate(0, 0) rotate(0deg); }
     100% { transform: translate(2%, 2%) rotate(2deg); }
 }
 
@@ -69,7 +82,7 @@
 }
 
 @keyframes logoFloat {
-    0% { transform: translateY(0); }
+    0%   { transform: translateY(0); }
     100% { transform: translateY(-8px); }
 }
 
@@ -83,28 +96,28 @@
     font-family: 'Caveat Brush', cursive;
     font-size: 3.5rem;
     font-weight: 400;
-    color: var(--color-white);
-    margin-bottom: var(--space-3);
+    color: #FFFFFF;
+    margin-bottom: 0.75rem;
     letter-spacing: 0.02em;
     text-transform: uppercase;
     line-height: 1;
 }
 
 .brand-title span {
-    background: linear-gradient(135deg, var(--color-accent-light), var(--color-secondary-light));
+    /* Hardcoded — accent/secondary-light não definidos no design system */
+    background: linear-gradient(135deg, #C89560, #7DAFCA);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
 }
 
 .brand-subtitle {
-    font-size: var(--font-size-lg);
+    font-size: 1.1rem;
     color: rgba(255, 255, 255, 0.7);
-    font-weight: var(--font-weight-normal);
+    font-weight: 400;
     line-height: 1.6;
 }
 
-/* Decorative mountain shapes */
 .mountain-decoration {
     position: absolute;
     bottom: 0;
@@ -119,154 +132,218 @@
     height: 100%;
 }
 
-/* --- Form Panel (Right) --- */
+/* ── Right: Form Panel ───────────────────── */
 
 .login-form-panel {
     flex: 1;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: var(--space-8);
-    background: var(--color-white);
-    position: relative;
+    padding: 3rem 2.5rem;
+    background: #ffffff;
 }
 
 .login-form-wrapper {
     width: 100%;
-    max-width: 420px;
-    animation: formFadeIn 0.6s ease;
+    max-width: 380px;
+    animation: fadeUp 0.45s ease both;
 }
 
-@keyframes formFadeIn {
-    from {
-        opacity: 0;
-        transform: translateY(20px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
+@keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
+
+/* ── Form Header ─────────────────────────── */
 
 .login-form-header {
-    margin-bottom: var(--space-8);
+    margin-bottom: 2.5rem;
+}
+
+.login-eyebrow {
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #64748B;
+    margin-bottom: 0.75rem;
 }
 
 .login-form-header h2 {
-    font-size: var(--font-size-2xl);
-    font-weight: var(--font-weight-bold);
-    color: var(--color-dark);
-    margin-bottom: var(--space-2);
-}
-
-.login-form-header p {
-    color: var(--color-dark-500);
-    font-size: var(--font-size-base);
-}
-
-/* Login Form */
-
-.login-form .form-group {
-    margin-bottom: var(--space-6);
-}
-
-.login-form .form-label {
-    color: var(--color-dark-700);
-    font-weight: var(--font-weight-semibold);
-    font-size: var(--font-size-sm);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-
-.login-form .form-input {
-    padding: var(--space-4) var(--space-4) var(--space-4) var(--space-12);
-    font-size: var(--font-size-base);
-    border-radius: var(--radius-xl);
-    border: 2px solid var(--color-dark-200);
-    background: var(--color-light);
-    height: 52px;
-}
-
-.login-form .form-input:focus {
-    background: var(--color-white);
-    border-color: var(--color-primary);
-    box-shadow: 0 0 0 4px rgba(54, 107, 133, 0.1);
-}
-
-.login-submit {
-    margin-top: var(--space-8);
-}
-
-.login-submit .btn {
-    height: 52px;
-    font-size: var(--font-size-base);
-    font-weight: var(--font-weight-semibold);
-    border-radius: var(--radius-xl);
-    letter-spacing: 0.02em;
-}
-
-/* Alert in login */
-.login-alert {
-    margin-bottom: var(--space-6);
-}
-
-/* Mobile Logo (shown only on mobile) */
-.mobile-logo {
-    display: none;
-    text-align: center;
-    margin-bottom: var(--space-6);
-}
-
-.mobile-logo img {
-    width: auto;
-    max-width: 140px;
-    height: auto;
-    margin: 0 auto;
-}
-
-.mobile-logo .mobile-brand-name {
-    margin-top: var(--space-3);
-    font-family: 'Caveat Brush', cursive;
     font-size: 2rem;
+    font-weight: 700;
+    color: #0F172A;
+    line-height: 1.1;
+    margin-bottom: 0.4rem;
+    letter-spacing: -0.02em;
+}
+
+.login-sub {
+    font-size: 0.875rem;
+    color: #94A3B8;
     font-weight: 400;
+}
+
+/* ── Alert ───────────────────────────────── */
+
+.login-alert {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: #FEF2F2;
+    border: 1px solid #FECACA;
+    color: #B91C1C;
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    font-size: 0.875rem;
+    margin-bottom: 1.5rem;
+}
+
+.login-alert-success {
+    background: #F0FDF4;
+    border-color: #BBF7D0;
+    color: #15803D;
+}
+
+.login-alert svg { flex-shrink: 0; }
+
+/* ── Fields ──────────────────────────────── */
+
+.field-group {
+    margin-bottom: 1.25rem;
+}
+
+.field-group label {
+    display: block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.07em;
     text-transform: uppercase;
-    color: var(--color-dark);
+    color: #475569;
+    margin-bottom: 0.45rem;
 }
 
-/* --- Footer --- */
+.field-group input {
+    display: block;
+    width: 100%;
+    height: 48px;
+    padding: 0 1rem;
+    font-size: 0.95rem;
+    font-family: inherit;
+    color: #0F172A;
+    background: #F8FAFC;
+    border: 1.5px solid #E2E8F0;
+    border-radius: 10px;
+    outline: none;
+    -webkit-appearance: none;
+    appearance: none;
+    transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+
+.field-group input::placeholder { color: #CBD5E1; }
+
+.field-group input:focus {
+    background: #ffffff;
+    border-color: #366B85;
+    box-shadow: 0 0 0 3px rgba(54, 107, 133, 0.12);
+}
+
+/* ── Password Toggle ─────────────────────── */
+
+.password-wrap { position: relative; }
+
+.password-wrap input { padding-right: 3rem; }
+
+.password-wrap button {
+    position: absolute;
+    right: 0;
+    top: 0;
+    height: 100%;
+    width: 3rem;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: #94A3B8;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.15s;
+    padding: 0;
+}
+
+.password-wrap button:hover { color: #475569; }
+
+/* ── Submit Button ───────────────────────── */
+
+.btn-submit {
+    width: 100%;
+    height: 48px;
+    margin-top: 1.75rem;
+    background: #111827;
+    color: #ffffff;
+    font-family: inherit;
+    font-size: 0.95rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    transition: background 0.18s, transform 0.1s;
+}
+
+.btn-submit:hover  { background: #22516A; }
+.btn-submit:active { transform: scale(0.99); }
+.btn-submit:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+
+/* ── Spinner ─────────────────────────────── */
+
+.spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: #ffffff;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Footer ──────────────────────────────── */
+
 .login-footer {
-    margin-top: var(--space-10);
+    margin-top: 2.5rem;
     text-align: center;
-    color: var(--color-dark-400);
-    font-size: var(--font-size-sm);
+    font-size: 0.78rem;
+    color: #CBD5E1;
 }
 
-/* --- Responsive --- */
+/* ── Mobile Logo ─────────────────────────── */
+
+.mobile-logo { display: none; text-align: center; margin-bottom: 2rem; }
+.mobile-logo img { width: auto; max-width: 80px; height: auto; margin: 0 auto; }
+.mobile-brand-name {
+    margin-top: 0.75rem;
+    font-family: 'Caveat Brush', cursive;
+    font-size: 1.8rem;
+    text-transform: uppercase;
+    color: #0F172A;
+}
+
+/* ── Responsive ──────────────────────────── */
 
 @media (max-width: 1024px) {
-    .login-brand {
-        display: none;
-    }
-
-    .login-form-panel {
-        padding: var(--space-6);
-    }
-
-    .mobile-logo {
-        display: block;
-    }
+    .login-brand { display: none; }
+    .login-form-panel { padding: 2rem 1.5rem; }
+    .mobile-logo { display: block; }
 }
 
 @media (max-width: 480px) {
-    .login-form-panel {
-        padding: var(--space-4);
-    }
-
-    .login-form-wrapper {
-        max-width: 100%;
-    }
-
-    .login-form-header h2 {
-        font-size: var(--font-size-xl);
-    }
+    .login-form-panel { padding: 1.5rem 1rem; }
+    .login-form-wrapper { max-width: 100%; }
+    .login-form-header h2 { font-size: 1.6rem; }
 }
