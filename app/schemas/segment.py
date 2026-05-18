@@ -6,8 +6,10 @@ from datetime import datetime
 class SegmentFilters(BaseModel):
     """All possible filter criteria for a segment."""
     search: Optional[str] = None
-    destino: Optional[str] = None
+    destino: Optional[str] = None          # legacy single — kept for backward compat
+    destinos: Optional[list[str]] = None    # new multi-destination (OR logic)
     is_active: Optional[bool] = None
+    status_venda: Optional[str] = None  # em_negociacao | venda | perda
     data_chegada_de: Optional[str] = None  # YYYY-MM-DD
     data_chegada_ate: Optional[str] = None
     data_partida_de: Optional[str] = None
@@ -24,6 +26,7 @@ class SegmentFilters(BaseModel):
     campo_valor: Optional[str] = None
     criado_de: Optional[str] = None  # YYYY-MM-DD
     criado_ate: Optional[str] = None
+    responsavel_id: Optional[int] = None  # 0 = Agente IA
 
 
 class SegmentCreate(BaseModel):

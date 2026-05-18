@@ -76,7 +76,9 @@ def _resolve_segment_query(filtros: dict, db: Session, for_count: bool = False):
 
     search = filtros.get("search")
     destino = filtros.get("destino")
+    destinos = filtros.get("destinos")  # list — new multi-destination
     is_active = filtros.get("is_active")
+    status_venda = filtros.get("status_venda")
     data_chegada_de = filtros.get("data_chegada_de")
     data_chegada_ate = filtros.get("data_chegada_ate")
     data_partida_de = filtros.get("data_partida_de")
@@ -93,6 +95,7 @@ def _resolve_segment_query(filtros: dict, db: Session, for_count: bool = False):
     campo_valor = filtros.get("campo_valor")
     criado_de = filtros.get("criado_de")
     criado_ate = filtros.get("criado_ate")
+    responsavel_id = filtros.get("responsavel_id")
 
     if search:
         f = f"%{search}%"
@@ -100,11 +103,18 @@ def _resolve_segment_query(filtros: dict, db: Session, for_count: bool = False):
             Lead.nome.ilike(f), Lead.email.ilike(f), Lead.whatsapp.ilike(f),
         ))
 
-    if destino:
+    # Multi-destination: OR across each selected destination
+    if destinos and len(destinos) > 0:
+        query = query.filter(or_(*[_json_list_contains(Lead.destinos, d) for d in destinos]))
+    elif destino:
+        # Legacy single-destination fallback
         query = query.filter(_json_list_contains(Lead.destinos, destino))
 
     if is_active is not None:
         query = query.filter(Lead.is_active == is_active)
+
+    if status_venda:
+        query = query.filter(Lead.status_venda == status_venda)
 
     if data_chegada_de:
         query = query.filter(Lead.data_chegada >= date.fromisoformat(data_chegada_de))
@@ -145,6 +155,13 @@ def _resolve_segment_query(filtros: dict, db: Session, for_count: bool = False):
     if criado_ate:
         query = query.filter(Lead.created_at <= datetime.combine(
             date.fromisoformat(criado_ate), datetime.max.time()))
+
+    if responsavel_id is not None:
+        if responsavel_id == 0:
+            # Agente IA — leads sem responsável humano
+            query = query.filter(Lead.responsavel_id == None)
+        else:
+            query = query.filter(Lead.responsavel_id == responsavel_id)
 
     # Custom field filtering (Python-side for SQLite compat)
     needs_python_filter = bool(campo_chave)

@@ -1,12 +1,12 @@
 from typing import Optional
 from datetime import datetime, date, time, timedelta
 from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 
 from app.database import get_db
 from app.models.lead import Lead
-from app.models.pipeline import Funnel, FunnelEntry
+from app.models.pipeline import Funnel, FunnelEntry, LeadHistory
 from app.models.task import Task
 from app.models.user import User
 from app.auth import get_current_user
@@ -126,7 +126,15 @@ async def get_detailed_reports(
     start_dt = datetime.combine(start_date, time.min)
     end_dt = datetime.combine(end_date, time.max)
     
-    all_leads = db.query(Lead).filter(Lead.created_at >= start_dt, Lead.created_at <= end_dt).all()
+    all_leads = (
+        db.query(Lead)
+        .options(
+            joinedload(Lead.tags),
+            joinedload(Lead.funnel_entries).joinedload(FunnelEntry.funnel)
+        )
+        .filter(Lead.created_at >= start_dt, Lead.created_at <= end_dt)
+        .all()
+    )
     
     total = len(all_leads)
     em_negociacao = sum(1 for l in all_leads if l.status_venda == 'em_negociacao')

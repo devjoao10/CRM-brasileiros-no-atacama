@@ -7,39 +7,42 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/variables.css">
-    <link rel="stylesheet" href="/static/css/base.css">
-    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/variables.css?v=2">
+    <link rel="stylesheet" href="/static/css/base.css?v=2">
+    <link rel="stylesheet" href="/static/css/components.css?v=2">
     <link rel="icon" href="/static/img/logo.png" type="image/png">
     <style>
-        .dashboard-layout{display:flex;min-height:100vh}
-        .sidebar{width:260px;background:linear-gradient(180deg,var(--color-dark) 0%,var(--color-dark-700) 100%);color:var(--color-white);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:var(--z-sidebar)}
-        .sidebar-header{padding:var(--space-6);display:flex;align-items:center;gap:var(--space-4);border-bottom:1px solid rgba(255,255,255,0.1)}
-        .sidebar-logo{width:44px;height:44px;border-radius:var(--radius-full);overflow:hidden;flex-shrink:0}
-        .sidebar-logo img{width:100%;height:100%;object-fit:cover}
-        .sidebar-brand{font-size:var(--font-size-sm);font-weight:var(--font-weight-bold);line-height:1.3}
-        .sidebar-brand span{color:var(--color-accent-light)}
-        .sidebar-nav{flex:1;padding:var(--space-4) 0;overflow-y:auto}
-        .nav-section{padding:var(--space-2) var(--space-6);margin-top:var(--space-4)}
-        .nav-section-title{font-size:var(--font-size-xs);font-weight:var(--font-weight-semibold);text-transform:uppercase;letter-spacing:0.08em;color:rgba(255,255,255,0.4);margin-bottom:var(--space-2)}
-        .nav-item{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3) var(--space-6);color:rgba(255,255,255,0.7);font-size:var(--font-size-sm);font-weight:var(--font-weight-medium);transition:all var(--transition-fast);cursor:pointer;text-decoration:none;border-left:3px solid transparent}
-        .nav-item:hover{background:rgba(255,255,255,0.05);color:var(--color-white)}
-        .nav-item.active{background:rgba(43,108,176,0.15);color:var(--color-white);border-left-color:var(--color-primary-light)}
-        .nav-item .nav-icon{font-size:var(--font-size-lg);width:24px;text-align:center}
-        .nav-item .nav-badge{margin-left:auto;background:var(--color-secondary);color:var(--color-white);font-size:var(--font-size-xs);padding:2px 8px;border-radius:var(--radius-full);font-weight:var(--font-weight-semibold)}
-        .sidebar-footer{padding:var(--space-4) var(--space-6);border-top:1px solid rgba(255,255,255,0.1)}
-        .main-content{flex:1;margin-left:260px;display:flex;flex-direction:column}
-        .top-header{height:64px;background:var(--color-white);border-bottom:1px solid var(--color-dark-200);display:flex;align-items:center;justify-content:space-between;padding:0 var(--space-8);position:sticky;top:0;z-index:100}
-        .header-left{display:flex;align-items:center;gap:var(--space-4)}
-        .menu-toggle{display:none;background:none;border:none;font-size:var(--font-size-xl);cursor:pointer;padding:var(--space-2);color:var(--color-dark-600)}
-        .page-title{font-size:var(--font-size-lg);font-weight:var(--font-weight-semibold);color:var(--color-dark)}
-        .header-right{display:flex;align-items:center;gap:var(--space-4)}
-        .user-info{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-4);border-radius:var(--radius-lg);cursor:pointer;transition:background var(--transition-fast)}
-        .user-info:hover{background:var(--color-dark-100)}
-        .user-avatar{width:36px;height:36px;border-radius:var(--radius-full);background:linear-gradient(135deg,var(--color-primary),var(--color-secondary));color:var(--color-white);display:flex;align-items:center;justify-content:center;font-weight:var(--font-weight-bold);font-size:var(--font-size-sm)}
-        .user-name{font-size:var(--font-size-sm);font-weight:var(--font-weight-medium);color:var(--color-dark)}
-        .user-role{font-size:var(--font-size-xs);color:var(--color-dark-500)}
-        .content-area{flex:1;padding:var(--space-8);background:var(--color-light)}
+        /* ===== Layout (shared) ===== */
+        .dashboard-layout { display: flex; min-height: 100vh; }
+                .sidebar { width: 240px; background: var(--sidebar-bg); border-right: 1px solid var(--sidebar-border); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: var(--z-sidebar); }
+        .sidebar-header { padding: var(--sp-5); display: flex; align-items: center; gap: var(--sp-3); border-bottom: 1px solid var(--sidebar-border); min-height: 56px; }
+        .sidebar-logo { width: 32px; height: 32px; border-radius: var(--radius-md); overflow: hidden; flex-shrink: 0; }
+        .sidebar-logo img { width: 100%; height: 100%; object-fit: cover; }
+        .sidebar-brand { font-size: var(--font-size-sm); font-weight: var(--fw-semibold); color: var(--color-text); line-height: 1.3; }
+        .sidebar-brand span { color: var(--color-primary); }
+        .sidebar-nav { flex: 1; padding: var(--sp-3) 0; overflow-y: auto; }
+        .nav-section { padding: var(--sp-1) var(--sp-4); margin-top: var(--sp-4); }
+        .nav-section-title { font-size: 10px; font-weight: var(--fw-semibold); text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-4); margin-bottom: var(--sp-1); }
+        .nav-item { display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--sidebar-text); font-size: var(--font-size-sm); font-weight: var(--fw-medium); transition: background var(--t-fast), color var(--t-fast); cursor: pointer; text-decoration: none; border-left: 2px solid transparent; margin: 1px var(--sp-2); border-radius: var(--radius-md); }
+        .nav-item:hover { background: var(--sidebar-hover-bg); color: var(--color-text); }
+        .nav-item.active { background: var(--sidebar-active-bg); color: var(--sidebar-active-text); font-weight: var(--fw-semibold); }
+        .nav-item .nav-icon { width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; opacity: 0.7; }
+        .nav-item.active .nav-icon { opacity: 1; }
+        .nav-item .nav-badge { margin-left: auto; background: var(--color-primary-light); color: var(--color-primary); font-size: var(--font-size-xs); padding: 1px 6px; border-radius: var(--radius-full); font-weight: var(--fw-semibold); }
+        .sidebar-footer { padding: var(--sp-3) var(--sp-2); border-top: 1px solid var(--sidebar-border); }
+        .main-content { flex: 1; margin-left: 240px; display: flex; flex-direction: column; }
+        .top-header { height: 56px; background: var(--color-surface); border-bottom: 1px solid var(--color-border); display: flex; align-items: center; justify-content: space-between; padding: 0 var(--sp-6); position: sticky; top: 0; z-index: 100; }
+        .header-left { display: flex; align-items: center; gap: var(--sp-3); }
+        .menu-toggle { display: none; background: none; border: none; cursor: pointer; padding: 6px; color: var(--color-text-3); border-radius: var(--radius-md); }
+        .menu-toggle:hover { background: var(--color-bg); }
+        .page-title { font-size: var(--font-size-base); font-weight: var(--fw-semibold); color: var(--color-text); }
+        .header-right { display: flex; align-items: center; gap: var(--sp-3); }
+        .user-info { display: flex; align-items: center; gap: var(--sp-2); padding: 5px var(--sp-3); border-radius: var(--radius-md); cursor: pointer; transition: background var(--t-fast); }
+        .user-info:hover { background: var(--color-bg); }
+        .user-avatar { width: 30px; height: 30px; border-radius: var(--radius-full); background: var(--color-primary); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: var(--fw-semibold); font-size: var(--font-size-xs); }
+        .user-name { font-size: var(--font-size-sm); font-weight: var(--fw-medium); color: var(--color-text); }
+        .user-role { font-size: var(--font-size-xs); color: var(--color-text-3); }
+        .content-area { flex: 1; padding: var(--sp-6) var(--sp-8); background: var(--color-bg); }
 
         /* ===== Segmentação ===== */
         .seg-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-6);flex-wrap:wrap;gap:var(--space-4)}
@@ -146,40 +149,38 @@
 <body>
 <div class="dashboard-layout">
     <div class="sidebar-overlay" id="sidebarOverlay"></div>
-    <aside class="sidebar" id="sidebar">
-        <div class="sidebar-header">
-            <div class="sidebar-logo"><img src="/static/img/logo.png" alt="Logo"></div>
-            <div class="sidebar-brand">Brasileiros <span>no Atacama</span></div>
-        </div>
-        <nav class="sidebar-nav">
-            <div class="nav-section"><div class="nav-section-title">Principal</div></div>
-            <a href="/dashboard" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
-            <div class="nav-section"><div class="nav-section-title">CRM</div></div>
-            <a href="/leads" class="nav-item"><span class="nav-icon">👥</span><span>Leads</span></a>
-            <a href="/tags" class="nav-item"><span class="nav-icon">🏷️</span><span>Tags</span></a>
-            <a href="/pipeline" class="nav-item"><span class="nav-icon">🎯</span><span>Pipeline</span></a>
-            <a href="/segmentacao" class="nav-item active"><span class="nav-icon">🔍</span><span>Segmentação</span></a>
-            <a href="/tarefas" class="nav-item"><span class="nav-icon">📋</span><span>Tarefas</span></a>
-            <div class="nav-section"><div class="nav-section-title">Conf. Admin</div></div>
-            <a href="/relatorios" class="nav-item"><span class="nav-icon">📈</span><span>Relatórios</span></a>
-            <a href="/ai" class="nav-item" style="color: #6B46C1; background: #FAF5FF; border-left: 2px solid #6B46C1;">
-                <span class="nav-icon">✨</span>
-                <span>Assistente IA</span>
-            </a>
-            <a href="/equipe" class="nav-item"><span class="nav-icon">👥</span><span>Equipe e Usuários</span></a>
-            <div class="nav-section"><div class="nav-section-title">Sistema</div></div>
-            <a href="/docs" class="nav-item" target="_blank"><span class="nav-icon">📖</span><span>API Docs</span></a>
-            <a href="http://localhost:5678" class="nav-item" target="_blank"><span class="nav-icon">⚡</span><span>Servidor n8n</span></a>
-        </nav>
-        <div class="sidebar-footer">
-            <a href="#" class="nav-item" id="logoutBtn" style="border:none;padding-left:0"><span class="nav-icon">🚪</span><span>Sair</span></a>
-        </div>
-    </aside>
+            <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo"><img src="/static/img/logo.png" alt="Logo"></div>
+                <div class="sidebar-brand">Brasileiros <span>no Atacama</span></div>
+            </div>
+            <nav class="sidebar-nav">
+                <div class="nav-section"><div class="nav-section-title">Principal</div></div>
+                <a href="/dashboard" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></span><span>Dashboard</span></a>
+                <div class="nav-section"><div class="nav-section-title">Inteligência</div></div>
+                <a href="/ai" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><circle cx="19" cy="5" r="3"/></svg></span><span>Assistente IA</span></a>
+                <div class="nav-section"><div class="nav-section-title">CRM</div></div>
+                <a href="/leads" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span><span>Leads</span></a>
+                <a href="/tags" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg></span><span>Tags</span></a>
+                <a href="/pipeline" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span><span>Pipeline</span></a>
+                <a href="/segmentacao" class="nav-item active"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span><span>Segmentação</span></a>
+                <a href="/tarefas" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><span>Tarefas</span></a>
+                <div class="nav-section"><div class="nav-section-title">Administração</div></div>
+                <a href="/relatorios" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span><span>Relatórios</span></a>
+                <a href="/equipe" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span><span>Equipe e Usuários</span></a>
+                <div class="nav-section"><div class="nav-section-title">Sistema</div></div>
+                <a href="/docs" class="nav-item" target="_blank"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span><span>API Docs</span></a>
+                <a href="http://localhost:5678" class="nav-item" target="_blank"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span><span>Servidor n8n</span></a>
+            </nav>
+            <div class="sidebar-footer">
+                <a href="#" class="nav-item" id="logoutBtn"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></span><span>Sair</span></a>
+            </div>
+        </aside>
 
     <main class="main-content">
         <header class="top-header">
             <div class="header-left">
-                <button class="menu-toggle" id="menuToggle">☰</button>
+                <button class="menu-toggle" id="menuToggle" aria-label="Menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
                 <h2 class="page-title">Segmentação</h2>
             </div>
             <div class="header-right">
@@ -192,11 +193,11 @@
 
         <div class="content-area">
             <div class="seg-header">
-                <h1>🔍 Listas de Segmentação</h1>
-                <button class="btn btn-primary btn-sm" onclick="openModal()">➕ Nova Lista</button>
+                <h1>Listas de Segmentação</h1>
+                <button class="btn btn-primary btn-sm" onclick="openModal()">+ Nova Lista</button>
             </div>
             <div class="segments-grid" id="segmentsGrid">
-                <div class="empty-state"><div class="empty-icon">⏳</div><p>Carregando...</p></div>
+                <div class="empty-state"><div class="empty-icon"></div><p>Carregando...</p></div>
             </div>
         </div>
     </main>
@@ -210,7 +211,7 @@
             <button class="modal-close" onclick="closeModal()">✕</button>
         </div>
         <div class="modal-body">
-            <div id="modalAlert" class="alert alert-error hidden" style="margin-bottom:var(--space-4)"><span>⚠️</span><span id="modalAlertMsg"></span></div>
+            <div id="modalAlert" class="alert alert-error hidden" style="margin-bottom:var(--space-4)"><span id="modalAlertMsg"></span></div>
             <input type="hidden" id="segId">
             <div class="form-row">
                 <div class="form-group">
@@ -229,18 +230,35 @@
 
             <!-- Filter Builder -->
             <div class="filter-builder">
-                <h4>🎛️ Critérios de Segmentação</h4>
+                <h4>Critérios de Segmentação</h4>
 
                 <div class="fb-section">
-                    <div class="fb-section-title">📍 Destino & Status</div>
-                    <div class="fb-row">
-                        <div><label class="fb-label">Destino</label><select id="fbDestino" class="fb-input" onchange="previewCount()"><option value="">Todos</option></select></div>
-                        <div><label class="fb-label">Status</label><select id="fbStatus" class="fb-input" onchange="previewCount()"><option value="">Todos</option><option value="true">✅ Ativos</option><option value="false">❌ Inativos</option></select></div>
+                    <div class="fb-section-title">Busca por Texto</div>
+                    <div>
+                        <label class="fb-label">Nome, e-mail ou WhatsApp contém</label>
+                        <input type="text" id="fbSearch" class="fb-input" placeholder="Ex: João, @gmail.com, 55119..." oninput="debouncePreview()">
                     </div>
                 </div>
 
                 <div class="fb-section">
-                    <div class="fb-section-title">✈️ Período de Viagem</div>
+                    <div class="fb-section-title">Destino &amp; Status</div>
+                    <div>
+                        <label class="fb-label">Destinos (selecione um ou mais — lógica OR)</label>
+                        <div class="fb-tag-chips" id="fbDestinos">Carregando...</div>
+                    </div>
+                    <div class="fb-row" style="margin-top:var(--space-3)">
+                        <div><label class="fb-label">Ativo?</label><select id="fbStatus" class="fb-input" onchange="previewCount()"><option value="">Todos</option><option value="true">Ativos</option><option value="false">Inativos</option></select></div>
+                        <div><label class="fb-label">Status da Venda</label><select id="fbStatusVenda" class="fb-input" onchange="previewCount()">
+                            <option value="">Todos</option>
+                            <option value="em_negociacao">Em Negociação</option>
+                            <option value="venda">Ganho (Venda)</option>
+                            <option value="perda">Perdido</option>
+                        </select></div>
+                    </div>
+                </div>
+
+                <div class="fb-section">
+                    <div class="fb-section-title">Período de Viagem</div>
                     <div class="fb-row">
                         <div><label class="fb-label">Ano chegada</label><select id="fbAnoCheg" class="fb-input" onchange="previewCount()"><option value="">Qualquer</option></select></div>
                         <div><label class="fb-label">Mês chegada</label><select id="fbMesCheg" class="fb-input" onchange="previewCount()"><option value="">Qualquer</option><option value="1">Jan</option><option value="2">Fev</option><option value="3">Mar</option><option value="4">Abr</option><option value="5">Mai</option><option value="6">Jun</option><option value="7">Jul</option><option value="8">Ago</option><option value="9">Set</option><option value="10">Out</option><option value="11">Nov</option><option value="12">Dez</option></select></div>
@@ -253,10 +271,14 @@
                         <div><label class="fb-label">Ano partida</label><select id="fbAnoPartida" class="fb-input" onchange="previewCount()"><option value="">Qualquer</option></select></div>
                         <div><label class="fb-label">Mês partida</label><select id="fbMesPartida" class="fb-input" onchange="previewCount()"><option value="">Qualquer</option><option value="1">Jan</option><option value="2">Fev</option><option value="3">Mar</option><option value="4">Abr</option><option value="5">Mai</option><option value="6">Jun</option><option value="7">Jul</option><option value="8">Ago</option><option value="9">Set</option><option value="10">Out</option><option value="11">Nov</option><option value="12">Dez</option></select></div>
                     </div>
+                    <div class="fb-row">
+                        <div><label class="fb-label">Partida de</label><input type="date" id="fbPartidaDe" class="fb-input" onchange="previewCount()"></div>
+                        <div><label class="fb-label">Partida até</label><input type="date" id="fbPartidaAte" class="fb-input" onchange="previewCount()"></div>
+                    </div>
                 </div>
 
                 <div class="fb-section">
-                    <div class="fb-section-title">🏷️ Tags</div>
+                    <div class="fb-section-title">Tags</div>
                     <div class="fb-tag-chips" id="fbTags">Carregando...</div>
                     <div class="fb-mode-row">
                         <button class="fb-mode-btn active" id="modeAny" onclick="setMode('any')">Qualquer (OR)</button>
@@ -265,7 +287,7 @@
                 </div>
 
                 <div class="fb-section">
-                    <div class="fb-section-title">🎯 Funil & Etapa</div>
+                    <div class="fb-section-title">Funil &amp; Etapa</div>
                     <div class="fb-row">
                         <div><label class="fb-label">Funil</label><select id="fbFunnel" class="fb-input" onchange="onFunnelChange()"><option value="">Todos</option></select></div>
                         <div id="fbEtapaWrap" style="display:none"><label class="fb-label">Etapa</label><select id="fbEtapa" class="fb-input" onchange="previewCount()"><option value="">Todas</option></select></div>
@@ -273,31 +295,41 @@
                 </div>
 
                 <div class="fb-section">
-                    <div class="fb-section-title">🔧 Campo Personalizado</div>
+                    <div class="fb-section-title">Campo Personalizado</div>
                     <div class="fb-row">
                         <div><label class="fb-label">Chave</label><select id="fbCampoChave" class="fb-input" onchange="onCampoChaveChange()"><option value="">Nenhum...</option></select></div>
                         <div><label class="fb-label">Valor contém</label><input type="text" id="fbCampoValor" class="fb-input" placeholder="Qualquer valor" oninput="debouncePreview()" disabled></div>
                     </div>
                 </div>
 
-                <div class="fb-section" style="border-bottom:none;padding-bottom:0;margin-bottom:0">
-                    <div class="fb-section-title">📅 Data de Cadastro</div>
+                <div class="fb-section">
+                    <div class="fb-section-title">Data de Cadastro</div>
                     <div class="fb-row">
                         <div><label class="fb-label">De</label><input type="date" id="fbCriadoDe" class="fb-input" onchange="previewCount()"></div>
                         <div><label class="fb-label">Até</label><input type="date" id="fbCriadoAte" class="fb-input" onchange="previewCount()"></div>
                     </div>
                 </div>
 
+                <div class="fb-section" style="border-bottom:none;padding-bottom:0;margin-bottom:0">
+                    <div class="fb-section-title">Responsável</div>
+                    <div>
+                        <label class="fb-label">Agente responsável pelo lead</label>
+                        <select id="fbResponsavel" class="fb-input" onchange="previewCount()">
+                            <option value="">Todos</option>
+                        </select>
+                    </div>
+                </div>
+
                 <!-- Preview -->
                 <div class="preview-bar">
                     <span class="preview-count"><span class="spinner-sm" id="previewSpinner"></span> <span id="previewText">—</span></span>
-                    <button class="btn btn-ghost btn-sm" onclick="previewCount()" style="padding:2px 10px;font-size:12px">🔄 Atualizar</button>
+                    <button class="btn btn-ghost btn-sm" onclick="previewCount()" style="padding:2px 10px;font-size:12px">Atualizar</button>
                 </div>
             </div><!-- /filter-builder -->
         </div>
         <div class="modal-footer">
             <button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
-            <button class="btn btn-primary" onclick="saveSegment()">💾 Salvar Lista</button>
+            <button class="btn btn-primary" onclick="saveSegment()">Salvar Lista</button>
         </div>
     </div>
 </div>
@@ -312,20 +344,21 @@
     <div class="detail-body">
         <table class="leads-table">
             <thead><tr><th>Nome</th><th>Email</th><th>WhatsApp</th><th>Destinos</th><th>Tags</th><th>Chegada</th></tr></thead>
-            <tbody id="detailBody"><tr><td colspan="6"><div class="empty-state"><div class="empty-icon">⏳</div><p>Carregando...</p></div></td></tr></tbody>
+            <tbody id="detailBody"><tr><td colspan="6"><div class="empty-state"><div class="empty-icon"></div><p>Carregando...</p></div></td></tr></tbody>
         </table>
     </div>
     <div class="detail-footer">
         <span id="detailCount">—</span>
-        <button class="btn btn-outline btn-sm" onclick="exportLeads()">⬇️ Exportar CSV</button>
+        <button class="btn btn-outline btn-sm" onclick="exportLeads()">Exportar CSV</button>
     </div>
 </div>
 
 <script src="/static/js/auth.js"></script>
 <script>
 // ─── State ────────────────────────────────────
-let allTags=[], allFunnels=[], customKeys=[];
+let allTags=[], allFunnels=[], allDestinos=[], customKeys=[], allUsersMap={};
 let selTagIds=[], tagMode='any', selColor='#2B6CB0';
+let selDestinos=[];
 let previewTimer=null, currentDetailSegId=null;
 const COLORS=['#2B6CB0','#3182CE','#C05621','#DD6B20','#38A169','#48BB78','#D69E2E','#E53E3E','#805AD5','#D53F8C','#4A5568','#718096'];
 
@@ -338,12 +371,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const sb=document.getElementById('sidebar'), ov=document.getElementById('sidebarOverlay');
     document.getElementById('menuToggle').addEventListener('click', () => { sb.classList.toggle('open'); ov.classList.toggle('show'); });
     ov.addEventListener('click', () => { sb.classList.remove('open'); ov.classList.remove('show'); });
-    document.querySelectorAll('[data-coming-soon]').forEach(el => el.addEventListener('click', e => { e.preventDefault(); alert('🚧 Em desenvolvimento!'); }));
+    document.querySelectorAll('[data-coming-soon]').forEach(el => el.addEventListener('click', e => { e.preventDefault(); alert('Em desenvolvimento!'); }));
     document.getElementById('detailOverlay').addEventListener('click', closeDetail);
 
     buildColorPicker();
     populateYears();
-    Promise.all([loadTags(), loadFunnels(), loadCustomKeys()]).then(loadSegments);
+    Promise.all([loadTags(), loadFunnels(), loadCustomKeys(), loadUsers()]).then(loadSegments);
 });
 
 function populateYears() {
@@ -362,6 +395,22 @@ function buildColorPicker() {
 
 function pickColor(c) { selColor=c; buildColorPicker(); }
 
+function renderDestinoChips() {
+    const container = document.getElementById('fbDestinos');
+    if (!allDestinos.length) { container.textContent = 'Nenhum destino encontrado'; return; }
+    container.innerHTML = allDestinos.map(d => {
+        const sel = selDestinos.includes(d);
+        return `<span class="fb-tag-chip${sel?' sel':''}" onclick="toggleDestino('${d}')">${esc(d)}</span>`;
+    }).join('');
+}
+
+function toggleDestino(d) {
+    const i = selDestinos.indexOf(d);
+    if (i === -1) selDestinos.push(d); else selDestinos.splice(i, 1);
+    renderDestinoChips();
+    previewCount();
+}
+
 // ─── Metadata ─────────────────────────────────
 async function loadTags() {
     const r = await Auth.apiRequest('/api/tags'); if (!r) return;
@@ -374,8 +423,8 @@ async function loadFunnels() {
     allFunnels.forEach(f => { const o=document.createElement('option'); o.value=f.id; o.textContent=f.nome; sel.appendChild(o); });
     const dr = await Auth.apiRequest('/api/leads/destinos'); if (!dr) return;
     const dd = await dr.json();
-    const ds=document.getElementById('fbDestino');
-    (dd.destinos||[]).forEach(d => { const o=document.createElement('option'); o.value=d; o.textContent=d; ds.appendChild(o); });
+    allDestinos = dd.destinos || [];
+    renderDestinoChips();
 }
 async function loadCustomKeys() {
     const r = await Auth.apiRequest('/api/leads/segment/campos-personalizados-chaves'); if (!r) return;
@@ -384,13 +433,26 @@ async function loadCustomKeys() {
     customKeys.forEach(k => { const o=document.createElement('option'); o.value=k; o.textContent=k; sel.appendChild(o); });
 }
 
+async function loadUsers() {
+    const r = await Auth.apiRequest('/api/users/for-select'); if (!r) return;
+    const d = await r.json();
+    const sel = document.getElementById('fbResponsavel');
+    (d.users || []).forEach(u => {
+        const o = document.createElement('option');
+        o.value = u.id;
+        o.textContent = u.nome;
+        sel.appendChild(o);
+        if (u.id !== 0) allUsersMap[u.id] = u.nome;
+    });
+}
+
 // ─── Segments CRUD ────────────────────────────
 async function loadSegments() {
     const r = await Auth.apiRequest('/api/segments'); if (!r) return;
     const d = await r.json();
     const grid = document.getElementById('segmentsGrid');
     if (!d.segments || d.segments.length === 0) {
-        grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon">📋</div><p>Nenhuma lista de segmentação criada ainda.<br>Crie sua primeira lista para organizar seus leads!</p><button class="btn btn-primary" onclick="openModal()">➕ Criar Primeira Lista</button></div>`;
+        grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon"></div><p>Nenhuma lista de segmentação criada ainda.<br>Crie sua primeira lista para organizar seus leads!</p><button class="btn btn-primary" onclick="openModal()">+ Criar Primeira Lista</button></div>`;
         return;
     }
     grid.innerHTML = d.segments.map(s => {
@@ -400,19 +462,23 @@ async function loadSegments() {
             <div class="segment-card-body">
                 <div class="segment-card-top">
                     <div class="segment-card-name">${esc(s.nome)}</div>
-                    <span class="segment-lead-count">👥 ${s.lead_count}</span>
+                    <span class="segment-lead-count">${s.lead_count} leads</span>
                 </div>
                 <div class="segment-card-desc">${s.descricao ? esc(s.descricao) : '<span style="color:var(--color-dark-300)">Sem descrição</span>'}</div>
                 ${pills ? `<div class="segment-filters-pills">${pills}</div>` : ''}
                 <div class="segment-card-meta" style="margin-top:var(--space-3)">
-                    <span class="segment-meta-item">📅 Criado em <strong>${s.created_at ? new Date(s.created_at).toLocaleDateString('pt-BR') : '—'}</strong></span>
+                    <span class="segment-meta-item">Criado em <strong>${s.created_at ? new Date(s.created_at).toLocaleDateString('pt-BR') : '—'}</strong></span>
                 </div>
             </div>
             <div class="segment-card-footer">
                 <span style="font-size:var(--font-size-xs);color:var(--color-dark-400)">Clique para ver leads</span>
                 <div class="segment-card-actions" onclick="event.stopPropagation()">
-                    <button title="Editar" onclick="editSegment(${s.id})">✏️</button>
-                    <button title="Excluir" onclick="deleteSegment(${s.id},'${esc(s.nome)}')">🗑️</button>
+                    <button title="Editar" onclick="editSegment(${s.id})" style="color:var(--color-text-3)">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    </button>
+                    <button title="Excluir" onclick="deleteSegment(${s.id},'${esc(s.nome)}')" style="color:var(--color-error)">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+                    </button>
                 </div>
             </div>
         </div>`;
@@ -422,15 +488,24 @@ async function loadSegments() {
 function renderFilterPills(f) {
     if (!f || Object.keys(f).length === 0) return '';
     const pills = [];
-    if (f.destino) pills.push(`📍 ${f.destino}`);
-    if (f.is_active === true) pills.push('✅ Ativos');
-    if (f.is_active === false) pills.push('❌ Inativos');
-    if (f.ano_chegada) pills.push(`📅 ${f.ano_chegada}`);
-    if (f.mes_chegada) pills.push(`🗓️ Mês ${f.mes_chegada}`);
-    if (f.tag_ids && f.tag_ids.length) { const names=f.tag_ids.map(id=>{const t=allTags.find(x=>x.id===id);return t?t.nome:id;}).join(', '); pills.push(`🏷️ ${names} (${f.tag_mode==='all'?'AND':'OR'})`); }
-    if (f.funnel_id) { const fn=allFunnels.find(x=>x.id===f.funnel_id); pills.push(`🎯 ${fn?fn.nome:f.funnel_id}`); }
-    if (f.campo_chave) pills.push(`🔧 ${f.campo_chave}${f.campo_valor?' = '+f.campo_valor:''}`);
-    if (f.search) pills.push(`🔎 "${f.search}"`);
+    if (f.search) pills.push(`Texto: "${f.search}"`);
+    if (f.destinos && f.destinos.length) pills.push(`Destino: ${f.destinos.join(' ou ')}`);
+    else if (f.destino) pills.push(`Destino: ${f.destino}`);
+    if (f.is_active === true) pills.push('Ativos');
+    if (f.is_active === false) pills.push('Inativos');
+    if (f.status_venda) {
+        const sv = { em_negociacao: 'Em Negociação', venda: 'Ganho (Venda)', perda: 'Perdido' };
+        pills.push(`Status: ${sv[f.status_venda] || f.status_venda}`);
+    }
+    if (f.ano_chegada) pills.push(`Chegada: ${f.ano_chegada}`);
+    if (f.mes_chegada) pills.push(`Mês ${f.mes_chegada}`);
+    if (f.tag_ids && f.tag_ids.length) { const names=f.tag_ids.map(id=>{const t=allTags.find(x=>x.id===id);return t?t.nome:id;}).join(', '); pills.push(`Tags: ${names} (${f.tag_mode==='all'?'AND':'OR'})`); }
+    if (f.funnel_id) { const fn=allFunnels.find(x=>x.id===f.funnel_id); pills.push(`Funil: ${fn?fn.nome:f.funnel_id}`); }
+    if (f.campo_chave) pills.push(`Campo: ${f.campo_chave}${f.campo_valor?' = '+f.campo_valor:''}`);
+    if (f.responsavel_id !== undefined && f.responsavel_id !== null) {
+        const nome = f.responsavel_id === 0 ? 'Agente IA' : (allUsersMap[f.responsavel_id] || `ID ${f.responsavel_id}`);
+        pills.push(`Responsável: ${nome}`);
+    }
     return pills.map(p => `<span class="filter-pill">${esc(p)}</span>`).join('');
 }
 
@@ -447,14 +522,19 @@ function openModal(seg = null) {
 
     // Reset filters
     const f = seg ? (seg.filtros || {}) : {};
-    document.getElementById('fbDestino').value = f.destino || '';
+    document.getElementById('fbSearch').value = f.search || '';
+    selDestinos = f.destinos ? [...f.destinos] : (f.destino ? [f.destino] : []);
+    renderDestinoChips();
     document.getElementById('fbStatus').value = f.is_active !== undefined && f.is_active !== null ? String(f.is_active) : '';
+    document.getElementById('fbStatusVenda').value = f.status_venda || '';
     document.getElementById('fbAnoCheg').value = f.ano_chegada || '';
     document.getElementById('fbMesCheg').value = f.mes_chegada || '';
     document.getElementById('fbChegDe').value = f.data_chegada_de || '';
     document.getElementById('fbChegAte').value = f.data_chegada_ate || '';
     document.getElementById('fbAnoPartida').value = f.ano_partida || '';
     document.getElementById('fbMesPartida').value = f.mes_partida || '';
+    document.getElementById('fbPartidaDe').value = f.data_partida_de || '';
+    document.getElementById('fbPartidaAte').value = f.data_partida_ate || '';
     document.getElementById('fbFunnel').value = f.funnel_id || '';
     onFunnelChange(f.etapa_id || '');
     document.getElementById('fbCampoChave').value = f.campo_chave || '';
@@ -462,6 +542,7 @@ function openModal(seg = null) {
     document.getElementById('fbCampoValor').disabled = !f.campo_chave;
     document.getElementById('fbCriadoDe').value = f.criado_de || '';
     document.getElementById('fbCriadoAte').value = f.criado_ate || '';
+    document.getElementById('fbResponsavel').value = f.responsavel_id !== undefined && f.responsavel_id !== null ? String(f.responsavel_id) : '';
     selTagIds = f.tag_ids ? [...f.tag_ids] : [];
     tagMode = f.tag_mode || 'any';
     document.getElementById('modeAny').classList.toggle('active', tagMode==='any');
@@ -481,19 +562,24 @@ async function editSegment(id) {
 function collectFilters() {
     const f = {};
     const v = id => document.getElementById(id).value;
-    if (v('fbDestino')) f.destino = v('fbDestino');
+    if (v('fbSearch').trim()) f.search = v('fbSearch').trim();
+    if (selDestinos.length > 0) f.destinos = [...selDestinos];
     if (v('fbStatus')) f.is_active = v('fbStatus') === 'true';
+    if (v('fbStatusVenda')) f.status_venda = v('fbStatusVenda');
     if (v('fbAnoCheg')) f.ano_chegada = parseInt(v('fbAnoCheg'));
     if (v('fbMesCheg')) f.mes_chegada = parseInt(v('fbMesCheg'));
     if (v('fbChegDe')) f.data_chegada_de = v('fbChegDe');
     if (v('fbChegAte')) f.data_chegada_ate = v('fbChegAte');
     if (v('fbAnoPartida')) f.ano_partida = parseInt(v('fbAnoPartida'));
     if (v('fbMesPartida')) f.mes_partida = parseInt(v('fbMesPartida'));
+    if (v('fbPartidaDe')) f.data_partida_de = v('fbPartidaDe');
+    if (v('fbPartidaAte')) f.data_partida_ate = v('fbPartidaAte');
     if (selTagIds.length>0) { f.tag_ids=selTagIds; f.tag_mode=tagMode; }
     if (v('fbFunnel')) { f.funnel_id=parseInt(v('fbFunnel')); if(v('fbEtapa')) f.etapa_id=v('fbEtapa'); }
     if (v('fbCampoChave')) { f.campo_chave=v('fbCampoChave'); if(v('fbCampoValor')) f.campo_valor=v('fbCampoValor'); }
     if (v('fbCriadoDe')) f.criado_de = v('fbCriadoDe');
     if (v('fbCriadoAte')) f.criado_ate = v('fbCriadoAte');
+    if (v('fbResponsavel') !== '') f.responsavel_id = parseInt(v('fbResponsavel'));
     return f;
 }
 
@@ -578,11 +664,11 @@ async function viewSegment(id) {
     currentDetailSegId = id;
     document.getElementById('detailOverlay').classList.add('show');
     document.getElementById('detailPanel').classList.add('open');
-    document.getElementById('detailBody').innerHTML = '<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">⏳</div><p>Carregando...</p></div></td></tr>';
+    document.getElementById('detailBody').innerHTML = '<tr><td colspan="6"><div class="empty-state"><p>Carregando...</p></div></td></tr>';
 
     const sr = await Auth.apiRequest(`/api/segments/${id}`); if (!sr) return;
     const seg = await sr.json();
-    document.getElementById('detailTitle').textContent = `📋 ${seg.nome}`;
+    document.getElementById('detailTitle').textContent = seg.nome;
 
     const r = await Auth.apiRequest(`/api/segments/${id}/leads?limit=500`); if (!r) return;
     const d = await r.json();
@@ -592,7 +678,7 @@ async function viewSegment(id) {
 
 function renderDetailTable(leads) {
     const tbody = document.getElementById('detailBody');
-    if (!leads.length) { tbody.innerHTML='<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">🔍</div><p>Nenhum lead nesta lista</p></div></td></tr>'; return; }
+    if (!leads.length) { tbody.innerHTML='<tr><td colspan="6"><div class="empty-state"><p>Nenhum lead nesta lista</p></div></td></tr>'; return; }
     tbody.innerHTML = leads.map(l => {
         const tags = (l.tags||[]).map(t=>`<span class="lead-tag" style="background:${esc(t.cor)}">${esc(t.nome)}</span>`).join('');
         return `<tr>
@@ -630,8 +716,7 @@ function getDestinosHtml(destinos) {
     if (!destinos || destinos.length === 0) return '<span style="color:#aaa">—</span>';
     return destinos.map(d => {
         const cl = d.toLowerCase()==='atacama'?'atacama':d.toLowerCase()==='uyuni'?'uyuni':d.toLowerCase()==='santiago'?'santiago':'outro';
-        const ic = cl==='atacama'?'🏜️':cl==='uyuni'?'🪞':cl==='santiago'?'🏙️':'📍';
-        return `<span class="destino-badge ${cl}">${ic} ${esc(d)}</span>`;
+        return `<span class="destino-badge ${cl}">${esc(d)}</span>`;
     }).join(' ');
 }
 function esc(s) { if(!s) return ''; const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }

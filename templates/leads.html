@@ -9,61 +9,44 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     
-    <link rel="stylesheet" href="/static/css/variables.css">
-    <link rel="stylesheet" href="/static/css/base.css">
-    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/variables.css?v=2">
+    <link rel="stylesheet" href="/static/css/base.css?v=2">
+    <link rel="stylesheet" href="/static/css/components.css?v=2">
     <link rel="icon" href="/static/img/logo.png" type="image/png">
 
     <style>
         /* ===== Dashboard Layout (shared) ===== */
         .dashboard-layout { display: flex; min-height: 100vh; }
 
-        .sidebar {
-            width: 260px;
-            background: linear-gradient(180deg, var(--color-dark) 0%, var(--color-dark-700) 100%);
-            color: var(--color-white);
-            display: flex; flex-direction: column;
-            position: fixed; top: 0; left: 0; bottom: 0;
-            z-index: var(--z-sidebar);
-        }
-        .sidebar-header {
-            padding: var(--space-6);
-            display: flex; align-items: center; gap: var(--space-4);
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-        }
-        .sidebar-logo { width: 44px; height: 44px; border-radius: var(--radius-full); overflow: hidden; flex-shrink: 0; }
+        .sidebar { width: 240px; background: var(--sidebar-bg); border-right: 1px solid var(--sidebar-border); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: var(--z-sidebar); }
+        .sidebar-header { padding: var(--sp-5); display: flex; align-items: center; gap: var(--sp-3); border-bottom: 1px solid var(--sidebar-border); min-height: 56px; }
+        .sidebar-logo { width: 32px; height: 32px; border-radius: var(--radius-md); overflow: hidden; flex-shrink: 0; }
         .sidebar-logo img { width: 100%; height: 100%; object-fit: cover; }
-        .sidebar-brand { font-size: var(--font-size-sm); font-weight: var(--font-weight-bold); line-height: 1.3; }
-        .sidebar-brand span { color: var(--color-accent-light); }
-        .sidebar-nav { flex: 1; padding: var(--space-4) 0; overflow-y: auto; }
-        .nav-section { padding: var(--space-2) var(--space-6); margin-top: var(--space-4); }
-        .nav-section-title { font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255,255,255,0.4); margin-bottom: var(--space-2); }
-        .nav-item { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-6); color: rgba(255,255,255,0.7); font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); transition: all var(--transition-fast); cursor: pointer; text-decoration: none; border-left: 3px solid transparent; }
-        .nav-item:hover { background: rgba(255,255,255,0.05); color: var(--color-white); }
-        .nav-item.active { background: rgba(43,108,176,0.15); color: var(--color-white); border-left-color: var(--color-primary-light); }
-        .nav-item .nav-icon { font-size: var(--font-size-lg); width: 24px; text-align: center; }
-        .nav-item .nav-badge { margin-left: auto; background: var(--color-secondary); color: var(--color-white); font-size: var(--font-size-xs); padding: 2px 8px; border-radius: var(--radius-full); font-weight: var(--font-weight-semibold); }
-        .sidebar-footer { padding: var(--space-4) var(--space-6); border-top: 1px solid rgba(255,255,255,0.1); }
-
-        .main-content { flex: 1; margin-left: 260px; display: flex; flex-direction: column; }
-
-        .top-header {
-            height: 64px; background: var(--color-white);
-            border-bottom: 1px solid var(--color-dark-200);
-            display: flex; align-items: center; justify-content: space-between;
-            padding: 0 var(--space-8); position: sticky; top: 0; z-index: 100;
-        }
-        .header-left { display: flex; align-items: center; gap: var(--space-4); }
-        .menu-toggle { display: none; background: none; border: none; font-size: var(--font-size-xl); cursor: pointer; padding: var(--space-2); color: var(--color-dark-600); }
-        .page-title { font-size: var(--font-size-lg); font-weight: var(--font-weight-semibold); color: var(--color-dark); }
-        .header-right { display: flex; align-items: center; gap: var(--space-4); }
-        .user-info { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-4); border-radius: var(--radius-lg); cursor: pointer; transition: background var(--transition-fast); }
-        .user-info:hover { background: var(--color-dark-100); }
-        .user-avatar { width: 36px; height: 36px; border-radius: var(--radius-full); background: linear-gradient(135deg, var(--color-primary), var(--color-secondary)); color: var(--color-white); display: flex; align-items: center; justify-content: center; font-weight: var(--font-weight-bold); font-size: var(--font-size-sm); }
-        .user-name { font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); color: var(--color-dark); }
-        .user-role { font-size: var(--font-size-xs); color: var(--color-dark-500); }
-
-        .content-area { flex: 1; padding: var(--space-8); background: var(--color-light); }
+        .sidebar-brand { font-size: var(--font-size-sm); font-weight: var(--fw-semibold); color: var(--color-text); line-height: 1.3; }
+        .sidebar-brand span { color: var(--color-primary); }
+        .sidebar-nav { flex: 1; padding: var(--sp-3) 0; overflow-y: auto; }
+        .nav-section { padding: var(--sp-1) var(--sp-4); margin-top: var(--sp-4); }
+        .nav-section-title { font-size: 10px; font-weight: var(--fw-semibold); text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-4); margin-bottom: var(--sp-1); }
+        .nav-item { display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--sidebar-text); font-size: var(--font-size-sm); font-weight: var(--fw-medium); transition: background var(--t-fast), color var(--t-fast); cursor: pointer; text-decoration: none; border-left: 2px solid transparent; margin: 1px var(--sp-2); border-radius: var(--radius-md); }
+        .nav-item:hover { background: var(--sidebar-hover-bg); color: var(--color-text); }
+        .nav-item.active { background: var(--sidebar-active-bg); color: var(--sidebar-active-text); font-weight: var(--fw-semibold); }
+        .nav-item .nav-icon { width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; opacity: 0.7; }
+        .nav-item.active .nav-icon { opacity: 1; }
+        .nav-item .nav-badge { margin-left: auto; background: var(--color-primary-light); color: var(--color-primary); font-size: var(--font-size-xs); padding: 1px 6px; border-radius: var(--radius-full); font-weight: var(--fw-semibold); }
+        .sidebar-footer { padding: var(--sp-3) var(--sp-2); border-top: 1px solid var(--sidebar-border); }
+        .main-content { flex: 1; margin-left: 240px; display: flex; flex-direction: column; }
+        .top-header { height: 56px; background: var(--color-surface); border-bottom: 1px solid var(--color-border); display: flex; align-items: center; justify-content: space-between; padding: 0 var(--sp-6); position: sticky; top: 0; z-index: 100; }
+        .header-left { display: flex; align-items: center; gap: var(--sp-3); }
+        .menu-toggle { display: none; background: none; border: none; cursor: pointer; padding: 6px; color: var(--color-text-3); border-radius: var(--radius-md); }
+        .menu-toggle:hover { background: var(--color-bg); }
+        .page-title { font-size: var(--font-size-base); font-weight: var(--fw-semibold); color: var(--color-text); }
+        .header-right { display: flex; align-items: center; gap: var(--sp-3); }
+        .user-info { display: flex; align-items: center; gap: var(--sp-2); padding: 5px var(--sp-3); border-radius: var(--radius-md); cursor: pointer; transition: background var(--t-fast); }
+        .user-info:hover { background: var(--color-bg); }
+        .user-avatar { width: 30px; height: 30px; border-radius: var(--radius-full); background: var(--color-primary); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: var(--fw-semibold); font-size: var(--font-size-xs); }
+        .user-name { font-size: var(--font-size-sm); font-weight: var(--fw-medium); color: var(--color-text); }
+        .user-role { font-size: var(--font-size-xs); color: var(--color-text-3); }
+        .content-area { flex: 1; padding: var(--sp-6) var(--sp-8); background: var(--color-bg); }
 
         /* ===== Leads Page Specific ===== */
 
@@ -246,6 +229,51 @@
             padding: var(--space-10); text-align: center; cursor: pointer;
             transition: all var(--transition-base); background: var(--color-light);
         }
+
+        /* Custom Multi-Select Dropdown */
+        .multi-select-wrapper { position: relative; }
+        .multi-select-trigger {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: var(--space-2) var(--space-3);
+            font-family: var(--font-family); font-size: var(--font-size-sm);
+            border: 1.5px solid var(--color-dark-200); border-radius: var(--radius-md);
+            background: var(--color-white); color: var(--color-dark);
+            cursor: pointer; min-width: 150px; transition: border-color var(--transition-fast);
+            user-select: none;
+        }
+        .multi-select-trigger:hover, .multi-select-trigger.open { border-color: var(--color-primary); }
+        .multi-select-trigger .trigger-text { flex: 1; text-align: left; color: var(--color-dark-500); }
+        .multi-select-trigger .trigger-text.has-value { color: var(--color-dark); font-weight: var(--font-weight-medium); }
+        .multi-select-trigger .chevron { transition: transform var(--transition-fast); color: var(--color-dark-400); }
+        .multi-select-trigger.open .chevron { transform: rotate(180deg); }
+        .multi-select-dropdown {
+            display: none; position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+            background: var(--color-white); border: 1.5px solid var(--color-primary);
+            border-radius: var(--radius-lg); box-shadow: var(--shadow-md);
+            z-index: 200; overflow: hidden;
+        }
+        .multi-select-dropdown.open { display: block; }
+        .multi-select-option {
+            display: flex; align-items: center; gap: var(--space-3);
+            padding: 10px var(--space-4); cursor: pointer;
+            font-size: var(--font-size-sm); color: var(--color-dark);
+            transition: background var(--transition-fast);
+        }
+        .multi-select-option:hover { background: var(--color-dark-100); }
+        .multi-select-option.selected { background: var(--color-primary-light); color: var(--color-primary); }
+        .multi-select-option .check-icon {
+            width: 16px; height: 16px; border: 1.5px solid var(--color-dark-300);
+            border-radius: 4px; display: flex; align-items: center; justify-content: center;
+            flex-shrink: 0; transition: all var(--transition-fast);
+        }
+        .multi-select-option.selected .check-icon {
+            background: var(--color-primary); border-color: var(--color-primary);
+        }
+        .multi-select-option.selected .check-icon::after {
+            content: ''; display: block; width: 9px; height: 5px;
+            border-left: 2px solid white; border-bottom: 2px solid white;
+            transform: rotate(-45deg) translate(1px, -1px);
+        }
         .import-dropzone:hover, .import-dropzone.dragover {
             border-color: var(--color-primary); background: rgba(43,108,176,0.03);
         }
@@ -288,35 +316,31 @@
         <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
         <!-- Sidebar -->
-        <aside class="sidebar" id="sidebar">
+                <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
                 <div class="sidebar-logo"><img src="/static/img/logo.png" alt="Logo"></div>
                 <div class="sidebar-brand">Brasileiros <span>no Atacama</span></div>
             </div>
             <nav class="sidebar-nav">
                 <div class="nav-section"><div class="nav-section-title">Principal</div></div>
-                <a href="/dashboard" class="nav-item"><span class="nav-icon">📊</span><span>Dashboard</span></a>
+                <a href="/dashboard" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></span><span>Dashboard</span></a>
+                <div class="nav-section"><div class="nav-section-title">Inteligência</div></div>
+                <a href="/ai" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><circle cx="19" cy="5" r="3"/></svg></span><span>Assistente IA</span></a>
                 <div class="nav-section"><div class="nav-section-title">CRM</div></div>
-                <a href="/leads" class="nav-item active"><span class="nav-icon">👥</span><span>Leads</span></a>
-                <a href="/tags" class="nav-item"><span class="nav-icon">🏷️</span><span>Tags</span></a>
-                <a href="/pipeline" class="nav-item"><span class="nav-icon">🎯</span><span>Pipeline</span></a>
-                <a href="/segmentacao" class="nav-item"><span class="nav-icon">🔍</span><span>Segmentação</span></a>
-                <a href="/tarefas" class="nav-item"><span class="nav-icon">📋</span><span>Tarefas</span></a>
-                <div class="nav-section"><div class="nav-section-title">Conf. Admin</div></div>
-                <a href="/relatorios" class="nav-item"><span class="nav-icon">📈</span><span>Relatórios</span></a>
-                <a href="/ai" class="nav-item" style="color: #6B46C1; background: #FAF5FF; border-left: 2px solid #6B46C1;">
-                    <span class="nav-icon">✨</span>
-                    <span>Assistente IA</span>
-                </a>
-                <a href="/equipe" class="nav-item"><span class="nav-icon">👥</span><span>Equipe e Usuários</span></a>
+                <a href="/leads" class="nav-item active"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span><span>Leads</span></a>
+                <a href="/tags" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg></span><span>Tags</span></a>
+                <a href="/pipeline" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span><span>Pipeline</span></a>
+                <a href="/segmentacao" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span><span>Segmentação</span></a>
+                <a href="/tarefas" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><span>Tarefas</span></a>
+                <div class="nav-section"><div class="nav-section-title">Administração</div></div>
+                <a href="/relatorios" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span><span>Relatórios</span></a>
+                <a href="/equipe" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span><span>Equipe e Usuários</span></a>
                 <div class="nav-section"><div class="nav-section-title">Sistema</div></div>
-                <a href="/docs" class="nav-item" target="_blank"><span class="nav-icon">📖</span><span>API Docs</span></a>
-                <a href="http://localhost:5678" class="nav-item" target="_blank"><span class="nav-icon">⚡</span><span>Servidor n8n</span></a>
+                <a href="/docs" class="nav-item" target="_blank"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span><span>API Docs</span></a>
+                <a href="http://localhost:5678" class="nav-item" target="_blank"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span><span>Servidor n8n</span></a>
             </nav>
             <div class="sidebar-footer">
-                <a href="#" class="nav-item" id="logoutBtn" style="border:none;padding-left:0;">
-                    <span class="nav-icon">🚪</span><span>Sair</span>
-                </a>
+                <a href="#" class="nav-item" id="logoutBtn"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></span><span>Sair</span></a>
             </div>
         </aside>
 
@@ -324,7 +348,7 @@
         <main class="main-content">
             <header class="top-header">
                 <div class="header-left">
-                    <button class="menu-toggle" id="menuToggle">☰</button>
+                    <button class="menu-toggle" id="menuToggle" aria-label="Menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
                     <h2 class="page-title">Leads</h2>
                 </div>
                 <div class="header-right">
@@ -341,13 +365,13 @@
             <div class="content-area">
                 <!-- Header -->
                 <div class="leads-header">
-                    <h1>👥 Gestão de Leads</h1>
+                    <h1>Gestão de Leads</h1>
                     <div class="leads-actions">
                         <button class="btn btn-outline btn-sm" onclick="openImportModal()">
-                            📥 Importar
+                            Importar
                         </button>
                         <button class="btn btn-primary btn-sm" onclick="openLeadModal()">
-                            ➕ Novo Lead
+                            + Novo Lead
                         </button>
                     </div>
                 </div>
@@ -409,7 +433,7 @@
                         </thead>
                         <tbody id="leadsTableBody">
                             <tr><td colspan="10" class="empty-state">
-                                <div class="empty-icon">📭</div>
+                                <div class="empty-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
                                 <p>Carregando leads...</p>
                             </td></tr>
                         </tbody>
@@ -429,7 +453,7 @@
             </div>
             <div class="modal-body">
                 <div id="leadModalAlert" class="alert alert-error hidden" style="margin-bottom:var(--space-4);">
-                    <span>⚠️</span><span id="leadModalAlertMsg"></span>
+                    <span id="leadModalAlertMsg"></span>
                 </div>
                 <form id="leadForm">
                     <input type="hidden" id="leadId">
@@ -450,16 +474,24 @@
                         </div>
                         <div class="form-group">
                             <label class="form-label">Destinos</label>
-                            <div class="destinos-checkboxes" id="leadDestinosContainer">
-                                <label class="tag-checkbox-item" style="cursor:pointer" onclick="toggleDestinoCheck(this)">
-                                    <input type="checkbox" value="Atacama" class="destino-cb"> 🏜️ Atacama
-                                </label>
-                                <label class="tag-checkbox-item" style="cursor:pointer" onclick="toggleDestinoCheck(this)">
-                                    <input type="checkbox" value="Uyuni" class="destino-cb"> 🪞 Uyuni
-                                </label>
-                                <label class="tag-checkbox-item" style="cursor:pointer" onclick="toggleDestinoCheck(this)">
-                                    <input type="checkbox" value="Santiago" class="destino-cb"> 🏙️ Santiago
-                                </label>
+                            <div class="multi-select-wrapper" id="destinosWrapper">
+                                <div class="multi-select-trigger" id="destinosTrigger" onclick="toggleDestinosDropdown()">
+                                    <span class="trigger-text" id="destinosDisplay">Selecione os destinos</span>
+                                    <span class="chevron">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                                    </span>
+                                </div>
+                                <div class="multi-select-dropdown" id="destinosDropdown">
+                                    <div class="multi-select-option" data-value="Atacama" onclick="toggleDestinoOption(this)">
+                                        <span class="check-icon"></span> Atacama
+                                    </div>
+                                    <div class="multi-select-option" data-value="Uyuni" onclick="toggleDestinoOption(this)">
+                                        <span class="check-icon"></span> Uyuni
+                                    </div>
+                                    <div class="multi-select-option" data-value="Santiago" onclick="toggleDestinoOption(this)">
+                                        <span class="check-icon"></span> Santiago
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -477,22 +509,28 @@
                         <div class="form-group">
                             <label class="form-label" for="leadStatusVenda">Status (Oportunidade)</label>
                             <select id="leadStatusVenda" class="form-input" required>
-                                <option value="em_negociacao">⏳ Em Negociação</option>
-                                <option value="venda">✅ Venda Fechada (Ganhou)</option>
-                                <option value="perda">❌ Perdido (Arquivo)</option>
+                                <option value="em_negociacao">Em Negociação</option>
+                                <option value="venda">Venda Fechada (Ganhou)</option>
+                                <option value="perda">Perdido (Arquivo)</option>
                             </select>
                         </div>
                     </div>
 
+                    <!-- Anotações -->
+                    <div class="custom-fields-section">
+                        <h4>Anotações</h4>
+                        <textarea id="leadAnotacoes" class="form-input" rows="3" placeholder="Observações sobre este lead..." style="resize:vertical;font-family:inherit;"></textarea>
+                    </div>
+
                     <!-- Tags -->
                     <div class="custom-fields-section">
-                        <h4>🏷️ Tags</h4>
+                        <h4>Tags</h4>
                         <div class="tags-checkboxes" id="leadTagsContainer">Carregando tags...</div>
                     </div>
 
                     <!-- Custom Fields -->
                     <div class="custom-fields-section">
-                        <h4>📝 Campos Personalizados</h4>
+                        <h4>Campos Personalizados</h4>
                         <div id="customFieldsContainer"></div>
                         <button type="button" class="add-field-btn" onclick="addCustomField()">
                             + Adicionar campo
@@ -514,18 +552,21 @@
     <div class="modal-overlay" id="importModal">
         <div class="modal">
             <div class="modal-header">
-                <h3>📥 Importar Leads</h3>
+                <h3>Importar Leads</h3>
                 <button class="modal-close" onclick="closeImportModal()">✕</button>
             </div>
             <div class="modal-body">
                 <div class="import-dropzone" id="importDropzone" onclick="document.getElementById('importFile').click()">
-                    <div class="drop-icon">📂</div>
+                    <div class="drop-icon" style="margin-bottom:var(--sp-3);">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-4)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    </div>
                     <p>Arraste um arquivo aqui ou clique para selecionar</p>
                     <div class="file-types">Formatos: .xlsx, .xls, .csv</div>
                 </div>
                 <input type="file" id="importFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleFileSelect(event)">
                 <div class="import-file-name" id="importFileName">
-                    <span>📄</span><span id="importFileNameText"></span>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                    <span id="importFileNameText"></span>
                 </div>
                 <div class="import-results" id="importResults"></div>
                 <div style="margin-top:var(--space-4);font-size:var(--font-size-xs);color:var(--color-dark-400);">
@@ -668,8 +709,7 @@
             const cls = d.toLowerCase() === 'atacama' ? 'atacama'
                 : d.toLowerCase() === 'uyuni' ? 'uyuni'
                 : d.toLowerCase() === 'santiago' ? 'santiago' : 'outro';
-            const icon = cls === 'atacama' ? '🏜️' : cls === 'uyuni' ? '🪞' : cls === 'santiago' ? '🏙️' : '📍';
-            return `<span class="destino-tag ${cls}">${icon} ${d}</span>`;
+            return `<span class="destino-tag ${cls}">${d}</span>`;
         }).join(' ');
     }
 
@@ -689,7 +729,6 @@
 
         if (data.leads.length === 0) {
             tbody.innerHTML = `<tr><td colspan="10"><div class="empty-state">
-                <div class="empty-icon">📭</div>
                 <p>Nenhum lead encontrado</p>
             </div></td></tr>`;
             return;
@@ -710,9 +749,15 @@
                 <td>${formatDate(l.data_chegada)}</td>
                 <td>${formatDate(l.data_partida)}</td>
                 <td class="actions-cell">
-                    <button title="Abrir no Conversas" onclick="openConversas(${l.id}, '${esc(l.whatsapp || '')}', '${esc(l.nome)}')" style="font-size:14px;background:none;border:none;cursor:pointer;padding:2px 6px;">💬</button>
-                    <button title="Editar" onclick="editLead(${l.id})">✏️</button>
-                    <button title="Excluir" onclick="deleteLead(${l.id}, '${esc(l.nome)}')">🗑️</button>
+                    <button title="Abrir no Conversas" onclick="openConversas(${l.id}, '${esc(l.whatsapp || '')}', '${esc(l.nome)}')" style="background:none;border:none;cursor:pointer;padding:2px 6px;color:var(--color-primary);">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    </button>
+                    <button title="Editar" onclick="editLead(${l.id})" style="background:none;border:none;cursor:pointer;padding:2px 6px;color:var(--color-text-3);">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    </button>
+                    <button title="Excluir" onclick="deleteLead(${l.id}, '${esc(l.nome)}')" style="background:none;border:none;cursor:pointer;padding:2px 6px;color:var(--color-error);">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+                    </button>
                 </td>
             </tr>
         `).join('');
@@ -777,18 +822,52 @@
         }, 0);
     }
 
-    function toggleDestinoCheck(label) {
-        const cb = label.querySelector('input');
-        setTimeout(() => {
-            if (cb.checked) {
-                label.classList.add('checked');
-                label.style.background = 'var(--color-primary)';
-            } else {
-                label.classList.remove('checked');
-                label.style.background = '';
-            }
-        }, 0);
+    // ─── Custom Multi-Select Destinos ───────────────
+    function toggleDestinosDropdown() {
+        const trigger = document.getElementById('destinosTrigger');
+        const dropdown = document.getElementById('destinosDropdown');
+        trigger.classList.toggle('open');
+        dropdown.classList.toggle('open');
     }
+
+    function toggleDestinoOption(el) {
+        el.classList.toggle('selected');
+        updateDestinosDisplay();
+    }
+
+    function updateDestinosDisplay() {
+        const selected = Array.from(document.querySelectorAll('#destinosDropdown .multi-select-option.selected'))
+            .map(el => el.dataset.value);
+        const display = document.getElementById('destinosDisplay');
+        if (selected.length === 0) {
+            display.textContent = 'Selecione os destinos';
+            display.classList.remove('has-value');
+        } else {
+            display.textContent = selected.join(', ');
+            display.classList.add('has-value');
+        }
+    }
+
+    function setDestinosSelection(values) {
+        document.querySelectorAll('#destinosDropdown .multi-select-option').forEach(el => {
+            el.classList.toggle('selected', values.includes(el.dataset.value));
+        });
+        updateDestinosDisplay();
+    }
+
+    function getSelectedDestinos() {
+        return Array.from(document.querySelectorAll('#destinosDropdown .multi-select-option.selected'))
+            .map(el => el.dataset.value);
+    }
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', e => {
+        const wrapper = document.getElementById('destinosWrapper');
+        if (wrapper && !wrapper.contains(e.target)) {
+            document.getElementById('destinosTrigger')?.classList.remove('open');
+            document.getElementById('destinosDropdown')?.classList.remove('open');
+        }
+    });
 
     function openLeadModal(lead = null) {
         document.getElementById('leadModal').classList.add('show');
@@ -800,33 +879,27 @@
         document.getElementById('leadEmail').value = lead ? lead.email || '' : '';
         // Exibe o número formatado visualmente no input
         document.getElementById('leadWhatsapp').value = lead ? displayWhatsapp(lead.whatsapp) : '';
-        // Destinos checkboxes
+        // Destinos select
         const selDests = lead ? (lead.destinos || []) : [];
-        document.querySelectorAll('.destino-cb').forEach(cb => {
-            cb.checked = selDests.includes(cb.value);
-            const lbl = cb.closest('label');
-            if (cb.checked) {
-                lbl.classList.add('checked');
-                lbl.style.background = 'var(--color-primary)';
-            } else {
-                lbl.classList.remove('checked');
-                lbl.style.background = '';
-            }
-        });
+        setDestinosSelection(selDests);
         document.getElementById('leadChegada').value = lead ? lead.data_chegada || '' : '';
         document.getElementById('leadPartida').value = lead ? lead.data_partida || '' : '';
         document.getElementById('leadStatusVenda').value = lead ? (lead.status_venda || 'em_negociacao') : 'em_negociacao';
+
+        // Anotações
+        const campos = (lead && lead.campos_personalizados) ? lead.campos_personalizados : {};
+        document.getElementById('leadAnotacoes').value = campos.anotacoes || '';
 
         // Tags
         currentLeadTags = lead && lead.tags ? lead.tags.map(t => t.id) : [];
         renderTagCheckboxes(currentLeadTags);
 
-        // Custom fields
+        // Custom fields (exceto anotacoes que tem campo proprio)
         const container = document.getElementById('customFieldsContainer');
         container.innerHTML = '';
         if (lead && lead.campos_personalizados) {
             Object.entries(lead.campos_personalizados).forEach(([key, val]) => {
-                addCustomField(key, val);
+                if (key !== 'anotacoes') addCustomField(key, val);
             });
         }
     }
@@ -867,11 +940,14 @@
             return;
         }
 
+        const anotacoes = document.getElementById('leadAnotacoes').value.trim();
+        if (anotacoes) campos['anotacoes'] = anotacoes;
+
         const body = {
             nome,
             email: document.getElementById('leadEmail').value.trim() || null,
             whatsapp: normalizedWpp || null,
-            destinos: Array.from(document.querySelectorAll('.destino-cb:checked')).map(cb => cb.value),
+            destinos: getSelectedDestinos(),
             data_chegada: document.getElementById('leadChegada').value || null,
             data_partida: document.getElementById('leadPartida').value || null,
             status_venda: document.getElementById('leadStatusVenda').value,
@@ -1050,7 +1126,7 @@
 
             if (!resp.ok) {
                 resultsDiv.className = 'import-results show alert alert-error';
-                resultsDiv.innerHTML = `⚠️ ${data.detail || 'Erro na importação'}`;
+                resultsDiv.innerHTML = `Erro: ${data.detail || 'Erro na importação'}`;
             } else {
                 const hasErrors = data.erros > 0;
                 resultsDiv.className = `import-results show alert ${hasErrors ? 'alert-warning' : 'alert-success'}`;
@@ -1065,7 +1141,7 @@
         } catch (err) {
             const resultsDiv = document.getElementById('importResults');
             resultsDiv.className = 'import-results show alert alert-error';
-            resultsDiv.innerHTML = '⚠️ Erro de conexão';
+            resultsDiv.innerHTML = 'Erro de conexão';
         }
 
         document.getElementById('importBtnText').textContent = 'Importar';

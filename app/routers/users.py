@@ -19,6 +19,17 @@ from app.auth import get_current_user, require_admin, hash_password, create_acce
 router = APIRouter(prefix="/api/users", tags=["Usuários"])
 
 
+@router.get("/for-select", summary="Lista usuários para selects (qualquer usuário autenticado)")
+async def users_for_select(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Retorna lista simplificada de usuários ativos (id + nome) para uso em dropdowns."""
+    users = db.query(User.id, User.nome).filter(User.is_active == True).order_by(User.nome).all()
+    result = [{"id": 0, "nome": "Agente IA"}] + [{"id": u.id, "nome": u.nome} for u in users]
+    return {"users": result}
+
+
 @router.get("", response_model=UserListResponse, summary="Listar usuários")
 async def list_users(
     skip: int = Query(0, ge=0, description="Registros para pular"),
