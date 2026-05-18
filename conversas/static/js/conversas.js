@@ -300,11 +300,17 @@
         // Check URL params — open specific conversation
         const params = new URLSearchParams(window.location.search);
 
-        const openId  = params.get('open');     // ?open=CONV_ID  — abre conversa direto pelo ID
-        const leadId  = params.get('lead_id'); // ?lead_id=LEAD_ID — legado
+        const openId  = params.get('open');     // ?open=CONV_ID
+        const leadId  = params.get('lead_id'); // ?lead_id=LEAD_ID (legado)
+        const newLead = params.get('new_lead'); // ?new_lead=ID + new_wpp=NUM
+        const newWpp  = params.get('new_wpp');
+        const newNome = params.get('nome');
 
         if (openId) {
             setTimeout(() => loadChat(parseInt(openId)), 500);
+        } else if (newLead && newWpp) {
+            // Vindo do CRM: busca ou cria conversa e abre
+            setTimeout(() => resolveAndOpenConversation(parseInt(newLead), newWpp, newNome), 600);
         } else if (leadId) {
             loadConversationByLead(parseInt(leadId));
         }
@@ -361,17 +367,62 @@
     }
 
     /**
-     * Abre o painel de "Novo Contato" pre-preenchido com o WhatsApp do lead.
-     * Agora usada apenas como fallback caso o /initiate falhe no CRM.
+     * Vindo do CRM: busca conversa existente pelo lead_id.
+     * Se não encontrar, chama /initiate (mesmo domínio, sem CORS)
+     * para criar a conversa e abre direto.
+     */
+    async function resolveAndOpenConversation(leadId, whatsapp, nome) {
+        // 1. Tenta pelo lead_id
+        try {
+            const r = await Auth.apiRequest(`/api/conversations/by-lead/${leadId}`);
+            if (r && r.ok) {
+                const conv = await r.json();
+                loadChat(conv.id);
+                return;
+            }
+        } catch (_) {}
+
+        // 2. Tenta pelo número (pode já existir sem vinculação ao lead)
+        try {
+            const byWpp = conversations.find(c => c.whatsapp === whatsapp);
+            if (byWpp) {
+                loadChat(byWpp.id);
+                return;
+            }
+        } catch (_) {}
+
+        // 3. Não existe — cria conversa vazia via /initiate
+        showToast(`Abrindo conversa com ${nome || whatsapp}...`);
+        try {
+            const r = await Auth.apiRequest('/api/conversations/initiate', {
+                method: 'POST',
+                body: JSON.stringify({
+                    whatsapp: whatsapp,
+                    nome: nome || whatsapp,
+                    lead_id: leadId,
+                })
+            });
+            if (r && r.ok) {
+                const data = await r.json();
+                await loadConversations(); // atualiza lista
+                loadChat(data.conversation_id);
+            } else {
+                showToast('Não foi possível criar a conversa.');
+            }
+        } catch (e) {
+            showToast('Erro ao conectar com o servidor.');
+        }
+    }
+
+    /**
+     * Fallback: busca na lista pelo número.
      */
     function openNewContactPanel(whatsapp, leadId, nome) {
-        // Busca na lista se já existe conversa com este número
         const existing = conversations.find(c => c.whatsapp === whatsapp);
         if (existing) {
             loadChat(existing.id);
             return;
         }
-        // Fallback: abre busca com o número
         const searchInput = document.getElementById('searchInput');
         if (searchInput) {
             searchInput.value = whatsapp;

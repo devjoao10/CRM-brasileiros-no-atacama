@@ -962,60 +962,22 @@
     // ─── Conversas Integration ──────────────────────
 
     /**
-     * Abre o Conversas direto na conversa do lead.
-     * 1. Tenta buscar conversa existente pelo lead_id.
-     * 2. Se existir → abre /?open={conv_id}.
-     * 3. Se não existir → chama /initiate para criar conversa vazia → abre /?open={novo_id}.
+     * Abre o Conversas para o lead.
+     * Redireciona com parâmetros na URL — o Conversas resolve
+     * a busca/criação da conversa no próprio domínio (sem CORS).
      */
-    async function openConversas(leadId, whatsapp, nome) {
+    function openConversas(leadId, whatsapp, nome) {
         const base = window._conversasBase;
-        const token = Auth.getToken();
 
         if (!whatsapp) {
-            // Sem número — não é possível abrir conversa
             alert(`O lead "${nome}" não tem WhatsApp cadastrado.\nAdicione um número antes de abrir o Conversas.`);
             return;
         }
 
-        try {
-            // 1. Busca se já existe conversa para este lead
-            const findResp = await fetch(`${base}/api/conversations/by-lead/${leadId}`, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-
-            if (findResp.ok) {
-                // Conversa existe — abre direto
-                const conv = await findResp.json();
-                window.open(`${base}/?open=${conv.id}`, '_blank');
-                return;
-            }
-
-            // 2. Não existe — cria conversa vazia (sem envio de template)
-            const createResp = await fetch(`${base}/api/conversations/initiate`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    whatsapp: whatsapp,
-                    nome: nome || whatsapp,
-                    lead_id: leadId,
-                    // sem template_name — só cria a conversa
-                }),
-            });
-
-            if (createResp.ok) {
-                const data = await createResp.json();
-                window.open(`${base}/?open=${data.conversation_id}`, '_blank');
-            } else {
-                // Fallback: abre o Conversas na raiz
-                window.open(base, '_blank');
-            }
-        } catch (e) {
-            // Erro de rede — abre o Conversas normalmente
-            window.open(base, '_blank');
-        }
+        // Conversas JS vai buscar conversa existente pelo lead_id;
+        // se não existir, chama /initiate e abre a conversa criada.
+        const url = `${base}/?new_lead=${leadId}&new_wpp=${encodeURIComponent(whatsapp)}&nome=${encodeURIComponent(nome)}`;
+        window.open(url, '_blank');
     }
 
     function addCustomField(key = '', value = '') {
