@@ -445,8 +445,8 @@
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label class="form-label" for="leadWhatsapp">WhatsApp</label>
-                            <input type="text" id="leadWhatsapp" class="form-input" placeholder="+55 11 99999-9999">
+                            <label class="form-label" for="leadWhatsapp">WhatsApp <span style="font-weight:400;color:var(--color-dark-400);font-size:11px;">(ex: 48 98871-1776)</span></label>
+                            <input type="tel" id="leadWhatsapp" class="form-input" placeholder="48 98871-1776" maxlength="20" oninput="formatWhatsappInput(this)">
                         </div>
                         <div class="form-group">
                             <label class="form-label">Destinos</label>
@@ -696,12 +696,13 @@
         }
 
         const conversasBase = window.location.hostname === 'localhost' ? 'http://localhost:8001' : 'https://conversas.crmbrasileirosnoatacama.cloud';
+        window._conversasBase = conversasBase;
 
         tbody.innerHTML = data.leads.map(l => `
             <tr>
                 <td><strong>${esc(l.nome)}</strong></td>
                 <td>${l.email ? esc(l.email) : '<span class="text-muted">—</span>'}</td>
-                <td>${l.whatsapp ? esc(l.whatsapp) : '<span class="text-muted">—</span>'}</td>
+                <td>${l.whatsapp ? `<span style="font-family:monospace;font-size:12px">${esc(l.whatsapp)}</span>` : '<span class="text-muted">—</span>'}</td>
                 <td>${getDestinoTags(l.destinos)}</td>
                 <td class="tags-cell">${renderLeadTags(l.tags)}</td>
                 <td style="font-size:11px; white-space:nowrap;">${esc(l.responsavel_nome || 'Agente IA')}</td>
@@ -709,7 +710,7 @@
                 <td>${formatDate(l.data_chegada)}</td>
                 <td>${formatDate(l.data_partida)}</td>
                 <td class="actions-cell">
-                    <a href="${conversasBase}/?lead_id=${l.id}" target="_blank" title="Conversas" style="text-decoration:none; cursor:pointer; padding:2px 6px; font-size:14px;">💬</a>
+                    <button title="Abrir no Conversas" onclick="openConversas(${l.id}, '${esc(l.whatsapp || '')}', '${esc(l.nome)}')" style="font-size:14px;background:none;border:none;cursor:pointer;padding:2px 6px;">💬</button>
                     <button title="Editar" onclick="editLead(${l.id})">✏️</button>
                     <button title="Excluir" onclick="deleteLead(${l.id}, '${esc(l.nome)}')">🗑️</button>
                 </td>
@@ -797,7 +798,8 @@
         document.getElementById('leadId').value = lead ? lead.id : '';
         document.getElementById('leadNome').value = lead ? lead.nome : '';
         document.getElementById('leadEmail').value = lead ? lead.email || '' : '';
-        document.getElementById('leadWhatsapp').value = lead ? lead.whatsapp || '' : '';
+        // Exibe o número formatado visualmente no input
+        document.getElementById('leadWhatsapp').value = lead ? displayWhatsapp(lead.whatsapp) : '';
         // Destinos checkboxes
         const selDests = lead ? (lead.destinos || []) : [];
         document.querySelectorAll('.destino-cb').forEach(cb => {
@@ -857,10 +859,18 @@
             if (key) campos[key] = val;
         });
 
+        // Normaliza o WhatsApp para formato internacional 55XXXXXXXXXXX
+        const rawWpp = document.getElementById('leadWhatsapp').value.trim();
+        const normalizedWpp = normalizeWhatsapp(rawWpp);
+        if (rawWpp && !normalizedWpp) {
+            showLeadAlert('WhatsApp inválido. Use o formato: 48 98871-1776 (com DDD)');
+            return;
+        }
+
         const body = {
             nome,
             email: document.getElementById('leadEmail').value.trim() || null,
-            whatsapp: document.getElementById('leadWhatsapp').value.trim() || null,
+            whatsapp: normalizedWpp || null,
             destinos: Array.from(document.querySelectorAll('.destino-cb:checked')).map(cb => cb.value),
             data_chegada: document.getElementById('leadChegada').value || null,
             data_partida: document.getElementById('leadPartida').value || null,
@@ -898,6 +908,114 @@
         if (!confirm(`Desativar o lead "${nome}"?`)) return;
         const resp = await Auth.apiRequest(`/api/leads/${id}`, { method: 'DELETE' });
         if (resp && resp.ok) loadLeads();
+    }
+
+    // ─── WhatsApp Helpers ────────────────────────────
+
+    /**
+     * Normaliza qualquer formato de número para 55XXXXXXXXXXX (padrão Meta/WhatsApp).
+     * Aceita: (48) 98871-1776 | 48 98871-1776 | 5548988711776 | +55 48 98871-1776
+     * Retorna null se inválido (menos de 10 dígitos após remover +55).
+     */
+    function normalizeWhatsapp(raw) {
+        if (!raw) return null;
+        // Remove tudo que não for dígito
+        let digits = raw.replace(/\D/g, '');
+        // Remove o 55 do Brasil se já vier junto
+        if (digits.startsWith('55') && digits.length >= 12) {
+            digits = digits.slice(2);
+        }
+        // Valida: precisa ter 10 ou 11 dígitos (DDD + número)
+        if (digits.length < 10 || digits.length > 11) return null;
+        return '55' + digits;
+    }
+
+    /**
+     * Aplica máscara visual no input: (XX) XXXXX-XXXX
+     */
+    function formatWhatsappInput(input) {
+        let v = input.value.replace(/\D/g, '');
+        // Limita a 11 dígitos (DDD + 9 dígitos)
+        v = v.slice(0, 11);
+        if (v.length > 6) {
+            v = v.replace(/(\d{2})(\d{5})(\d{0,4})/, '($1) $2-$3');
+        } else if (v.length > 2) {
+            v = v.replace(/(\d{2})(\d{0,5})/, '($1) $2');
+        } else {
+            v = v.replace(/(\d{0,2})/, '($1');
+        }
+        input.value = v;
+    }
+
+    /**
+     * Formata número armazenado (55XXXXXXXXXXX) para exibição no modal.
+     */
+    function displayWhatsapp(stored) {
+        if (!stored) return '';
+        let d = stored.replace(/\D/g, '');
+        if (d.startsWith('55')) d = d.slice(2);
+        if (d.length === 11) return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`;
+        if (d.length === 10) return `(${d.slice(0,2)}) ${d.slice(2,6)}-${d.slice(6)}`;
+        return stored; // retorna original se não reconhecer
+    }
+
+    // ─── Conversas Integration ──────────────────────
+
+    /**
+     * Abre o Conversas direto na conversa do lead.
+     * 1. Tenta buscar conversa existente pelo lead_id.
+     * 2. Se existir → abre /?open={conv_id}.
+     * 3. Se não existir → chama /initiate para criar conversa vazia → abre /?open={novo_id}.
+     */
+    async function openConversas(leadId, whatsapp, nome) {
+        const base = window._conversasBase;
+        const token = Auth.getToken();
+
+        if (!whatsapp) {
+            // Sem número — não é possível abrir conversa
+            alert(`O lead "${nome}" não tem WhatsApp cadastrado.\nAdicione um número antes de abrir o Conversas.`);
+            return;
+        }
+
+        try {
+            // 1. Busca se já existe conversa para este lead
+            const findResp = await fetch(`${base}/api/conversations/by-lead/${leadId}`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+
+            if (findResp.ok) {
+                // Conversa existe — abre direto
+                const conv = await findResp.json();
+                window.open(`${base}/?open=${conv.id}`, '_blank');
+                return;
+            }
+
+            // 2. Não existe — cria conversa vazia (sem envio de template)
+            const createResp = await fetch(`${base}/api/conversations/initiate`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    whatsapp: whatsapp,
+                    nome: nome || whatsapp,
+                    lead_id: leadId,
+                    // sem template_name — só cria a conversa
+                }),
+            });
+
+            if (createResp.ok) {
+                const data = await createResp.json();
+                window.open(`${base}/?open=${data.conversation_id}`, '_blank');
+            } else {
+                // Fallback: abre o Conversas na raiz
+                window.open(base, '_blank');
+            }
+        } catch (e) {
+            // Erro de rede — abre o Conversas normalmente
+            window.open(base, '_blank');
+        }
     }
 
     function addCustomField(key = '', value = '') {

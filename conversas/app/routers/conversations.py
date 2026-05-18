@@ -20,6 +20,7 @@ from app.schemas.conversation import (
     MessageCreate,
     MessageResponse,
     NotificationCreate,
+    InitiateConversation,
 )
 from app.services import whatsapp
 from app.services import crm as crm_service
@@ -66,6 +67,107 @@ async def send_notification(
     return {
         "success": True,
         "message_id": msg_id,
+    }
+
+
+# ─── Initiate New Conversation ────────────────────────────────────────
+
+@router.post("/initiate", summary="Iniciar conversa com lead via template")
+async def initiate_conversation(
+    data: InitiateConversation,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Inicia uma conversa com um número WhatsApp.
+    
+    - Se já existir uma conversa com esse número, retorna a conversa existente.
+    - Se não existir, cria uma nova conversa e envia o template especificado.
+    - Vincula ao lead_id se fornecido.
+    
+    Retorna: { conversation_id, created, message_sent }
+    """
+    # Normaliza o número (remove não-dígitos)
+    wpp_clean = ''.join(c for c in data.whatsapp if c.isdigit())
+    if not wpp_clean.startswith('55'):
+        wpp_clean = '55' + wpp_clean
+
+    # Busca conversa existente por WhatsApp
+    conversation = db.query(Conversation).filter(
+        Conversation.whatsapp == wpp_clean
+    ).first()
+
+    created = False
+    message_sent = False
+
+    if not conversation:
+        # Cria nova conversa
+        conversation = Conversation(
+            whatsapp=wpp_clean,
+            nome=data.nome or wpp_clean,
+            lead_id=data.lead_id or 0,
+            status='aberta',
+            is_bot_active=False,  # humano inicia o contato
+            unread_count=0,
+        )
+        db.add(conversation)
+        db.commit()
+        db.refresh(conversation)
+        created = True
+        logger.info(f"Nova conversa criada para {wpp_clean} (lead_id={data.lead_id})")
+    else:
+        # Vincula ao lead_id se ainda não vinculada e foi fornecido
+        if data.lead_id and (not conversation.lead_id or conversation.lead_id <= 0):
+            conversation.lead_id = data.lead_id
+            if data.nome and not conversation.nome:
+                conversation.nome = data.nome
+            db.commit()
+            db.refresh(conversation)
+
+    # Envia o template se fornecido
+    if data.template_name:
+        try:
+            from app.models.template import MessageTemplate
+            t = db.query(MessageTemplate).filter(
+                MessageTemplate.name == data.template_name
+            ).first()
+            lang = t.language if t else (data.template_language or 'pt_BR')
+            body_text = t.body_text if t else data.template_name
+
+            wa_response = await whatsapp.send_template_message(
+                to=wpp_clean,
+                template_name=data.template_name,
+                language=lang,
+                components=[],
+                db=db,
+            )
+
+            wa_msg_id = None
+            if wa_response and 'messages' in wa_response:
+                wa_msg_id = wa_response['messages'][0].get('id')
+
+            # Salva a mensagem na conversa
+            msg = Message(
+                conversation_id=conversation.id,
+                direction='outbound',
+                content=body_text,
+                msg_type='template',
+                whatsapp_msg_id=wa_msg_id,
+                status='sent',
+            )
+            db.add(msg)
+            conversation.ultimo_msg = body_text[:200]
+            db.commit()
+            message_sent = True
+            logger.info(f"Template '{data.template_name}' enviado para {wpp_clean}")
+        except Exception as e:
+            logger.error(f"Erro ao enviar template para {wpp_clean}: {e}")
+
+    return {
+        "conversation_id": conversation.id,
+        "created": created,
+        "message_sent": message_sent,
+        "whatsapp": wpp_clean,
     }
 
 

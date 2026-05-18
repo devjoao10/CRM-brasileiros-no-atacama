@@ -170,11 +170,10 @@
                         el.addEventListener('click', async () => {
                             templatesDropdown.style.display = 'none';
                             if (!activeConversation) return;
-                            
+
                             try {
                                 let sendRes;
                                 if (t.status === 'APPROVED') {
-                                    // Send as official WhatsApp template (works outside 24h window)
                                     sendRes = await Auth.apiRequest(`/api/conversations/${activeConversation.id}/messages`, {
                                         method: 'POST',
                                         body: JSON.stringify({
@@ -184,7 +183,6 @@
                                         })
                                     });
                                 } else {
-                                    // Send as plain text (only works within 24h window)
                                     sendRes = await Auth.apiRequest(`/api/conversations/${activeConversation.id}/messages`, {
                                         method: 'POST',
                                         body: JSON.stringify({
@@ -193,7 +191,7 @@
                                         })
                                     });
                                 }
-                                
+
                                 if (sendRes.ok) {
                                     showToast(t.status === 'APPROVED' ? 'Template oficial enviado!' : 'Mensagem enviada como texto!');
                                     loadChat(activeConversation.id);
@@ -299,10 +297,15 @@
             document.getElementById('convSidebar').classList.add('open');
         });
 
-        // Check URL params — open specific lead conversation
+        // Check URL params — open specific conversation
         const params = new URLSearchParams(window.location.search);
-        const leadId = params.get('lead_id');
-        if (leadId) {
+
+        const openId  = params.get('open');     // ?open=CONV_ID  — abre conversa direto pelo ID
+        const leadId  = params.get('lead_id'); // ?lead_id=LEAD_ID — legado
+
+        if (openId) {
+            setTimeout(() => loadChat(parseInt(openId)), 500);
+        } else if (leadId) {
             loadConversationByLead(parseInt(leadId));
         }
     }
@@ -349,10 +352,32 @@
             if (resp && resp.ok) {
                 const conv = await resp.json();
                 setTimeout(() => loadChat(conv.id), 500);
+            } else {
+                console.log('No conversation found for lead', leadId);
             }
         } catch (e) {
             console.log('No conversation found for lead', leadId);
         }
+    }
+
+    /**
+     * Abre o painel de "Novo Contato" pre-preenchido com o WhatsApp do lead.
+     * Agora usada apenas como fallback caso o /initiate falhe no CRM.
+     */
+    function openNewContactPanel(whatsapp, leadId, nome) {
+        // Busca na lista se já existe conversa com este número
+        const existing = conversations.find(c => c.whatsapp === whatsapp);
+        if (existing) {
+            loadChat(existing.id);
+            return;
+        }
+        // Fallback: abre busca com o número
+        const searchInput = document.getElementById('searchInput');
+        if (searchInput) {
+            searchInput.value = whatsapp;
+            searchInput.dispatchEvent(new Event('input'));
+        }
+        showToast(`Buscando conversa com ${nome || whatsapp}...`);
     }
 
     async function sendMessage() {

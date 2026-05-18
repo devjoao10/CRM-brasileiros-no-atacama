@@ -71,3 +71,12 @@ class NotificationCreate(BaseModel):
     """Payload sent by N8N workflows to send WhatsApp notifications."""
     to: str = Field(..., min_length=10, max_length=20, description="Número WhatsApp do destinatário (ex: 5511999999999)")
     message: str = Field(..., min_length=1, max_length=5000, description="Texto da mensagem")
+
+
+class InitiateConversation(BaseModel):
+    """Payload para iniciar uma conversa nova com um lead que ainda não tem conversa."""
+    whatsapp: str = Field(..., min_length=10, max_length=20, description="Número WhatsApp no formato 55XXXXXXXXXXX")
+    nome: Optional[str] = Field(None, description="Nome do lead")
+    lead_id: Optional[int] = Field(None, description="ID do lead no CRM para vincular")
+    template_name: Optional[str] = Field(None, description="Nome do template WhatsApp a enviar")
+    template_language: Optional[str] = Field(default="pt_BR", description="Idioma do template")

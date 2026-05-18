@@ -22,8 +22,8 @@ class Tag(Base):
     cor = Column(String(7), nullable=False, default="#2B6CB0")  # Hex color
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    # Relationship
-    leads = relationship("Lead", secondary=lead_tags, back_populates="tags")
+    # Relationship — secondary como string para consistência com lead.py
+    leads = relationship("Lead", secondary="lead_tags", back_populates="tags")
 
     def __repr__(self):
         return f"<Tag(id={self.id}, nome='{self.nome}', cor='{self.cor}')>"
