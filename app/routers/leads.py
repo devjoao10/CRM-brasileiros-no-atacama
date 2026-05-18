@@ -651,9 +651,23 @@ async def get_lead_by_whatsapp(
     # Normalize: remove +, spaces, dashes
     normalized = whatsapp.replace("+", "").replace(" ", "").replace("-", "").strip()
 
+    # 1. Exact match (normalized vs normalized stored)
     lead = db.query(Lead).filter(
-        Lead.whatsapp.ilike(f"%{normalized[-10:]}%")
+        Lead.whatsapp == normalized
     ).first()
+
+    # 2. Exact match with + prefix
+    if not lead:
+        lead = db.query(Lead).filter(
+            Lead.whatsapp == f"+{normalized}"
+        ).first()
+
+    # 3. Stored number ends with last 11 digits of searched number (handles country code variations)
+    if not lead and len(normalized) >= 11:
+        suffix = normalized[-11:]
+        lead = db.query(Lead).filter(
+            Lead.whatsapp.ilike(f"%{suffix}")
+        ).first()
 
     if not lead:
         raise HTTPException(status_code=404, detail="Nenhum lead encontrado com este WhatsApp")
