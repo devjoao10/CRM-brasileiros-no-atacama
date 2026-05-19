@@ -23,7 +23,7 @@ from app.services import crm as crm_service
 logger = logging.getLogger(__name__)
 
 # ─── Debounce system for batching rapid messages ─────────────
-AGENT_DEBOUNCE_SECONDS = 5  # Wait 5s after last message before sending to agent
+AGENT_DEBOUNCE_SECONDS = 15  # Wait 15s after last message before sending to agent
 _debounce_tasks: dict[int, asyncio.Task] = {}  # conversation_id -> scheduled task
 router = APIRouter(tags=["Webhook"])
 
