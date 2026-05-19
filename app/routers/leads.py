@@ -427,6 +427,46 @@ async def delete_lead(
     return {"message": f"Lead '{lead.nome}' excluído permanentemente"}
 
 
+# ─── ANOTAÇÕES ────────────────────────────────────────────────────────
+
+@router.put("/{lead_id}/anotacoes", summary="Adicionar anotação ao lead")
+async def append_anotacao(
+    lead_id: int,
+    texto: str = Query(..., description="Texto da anotação a ser adicionada"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Adiciona uma anotação ao lead, acumulando com as existentes.
+    Cada nova anotação é separada por uma linha com timestamp.
+
+    **N8N**: Use para registrar resumos de conversa e ações do Gerenciador.
+    """
+    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead não encontrado")
+
+    from datetime import datetime as dt
+    timestamp = dt.now().strftime("%d/%m/%Y %H:%M")
+
+    campos = lead.campos_personalizados or {}
+    existing = campos.get("anotacoes", "")
+    new_entry = f"[{timestamp}] {texto}"
+
+    if existing:
+        campos["anotacoes"] = f"{new_entry}\n\n{existing}"
+    else:
+        campos["anotacoes"] = new_entry
+
+    lead.campos_personalizados = campos
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(lead, "campos_personalizados")
+
+    db.commit()
+    db.refresh(lead)
+    return {"message": "Anotação adicionada", "anotacoes": campos["anotacoes"]}
+
+
 # ─── IMPORT ──────────────────────────────────────────────────────────
 
 def _parse_date(value) -> Optional[date]:
