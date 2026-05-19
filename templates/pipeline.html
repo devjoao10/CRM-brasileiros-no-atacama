@@ -842,7 +842,7 @@
                  ondragstart="onDragStart(event)" ondragend="onDragEnd(event)"
                  onclick="openDetailPanel(${lead.entry_id}, ${lead.lead_id})">
                 <div class="lead-card-name">${esc(lead.nome)}</div>
-                <div class="lead-card-info">${lead.email ? esc(lead.email) : lead.whatsapp ? esc(lead.whatsapp) : ''}${lead.num_viajantes ? ' · ' + lead.num_viajantes + ' viajante' + (lead.num_viajantes > 1 ? 's' : '') : ''}</div>
+                <div class="lead-card-info">${lead.email ? esc(lead.email) : lead.whatsapp ? esc(lead.whatsapp) : ''}${lead.num_viajantes ? ' · ' + lead.num_viajantes + ' adulto' + (lead.num_viajantes > 1 ? 's' : '') + (lead.num_criancas ? ' + ' + lead.num_criancas + ' criança' + (lead.num_criancas > 1 ? 's' : '') : '') : ''}</div>
                 ${destinoBadges}
                 ${daysBadge}
                 ${tags ? `<div class="lead-card-tags">${tags}</div>` : ''}
@@ -923,7 +923,16 @@
         info += `<div class="detail-field"><span class="detail-field-label">Destinos</span><span class="detail-field-value">${(lead.destinos || []).join(', ') || '—'}</span></div>`;
         info += `<div class="detail-field"><span class="detail-field-label">Chegada</span><span class="detail-field-value">${lead.data_chegada ? fmtDate(lead.data_chegada) : '—'}</span></div>`;
         info += `<div class="detail-field"><span class="detail-field-label">Partida</span><span class="detail-field-value">${lead.data_partida ? fmtDate(lead.data_partida) : '—'}</span></div>`;
-        info += `<div class="detail-field"><span class="detail-field-label">Nº Viajantes</span><span class="detail-field-value">${lead.num_viajantes || '—'}</span></div>`;
+        // Viajantes display with children info
+        let viajantesText = '';
+        if (lead.num_viajantes) {
+            viajantesText = `${lead.num_viajantes} adulto${lead.num_viajantes > 1 ? 's' : ''}`;
+            if (lead.num_criancas && lead.num_criancas > 0) {
+                viajantesText += ` + ${lead.num_criancas} criança${lead.num_criancas > 1 ? 's' : ''}`;
+                if (lead.idades_criancas) viajantesText += ` (${lead.idades_criancas} anos)`;
+            }
+        }
+        info += `<div class="detail-field"><span class="detail-field-label">Viajantes</span><span class="detail-field-value">${viajantesText || '—'}</span></div>`;
 
         if (lead.campos_personalizados && Object.keys(lead.campos_personalizados).length) {
             Object.entries(lead.campos_personalizados).forEach(([k, v]) => {

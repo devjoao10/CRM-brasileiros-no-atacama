@@ -23,7 +23,9 @@ class LeadBase(BaseModel):
     destinos: Optional[list[str]] = Field(None, description="Lista de destinos: Atacama, Uyuni, Santiago ou outros")
     data_chegada: Optional[date] = Field(None, description="Data de chegada no destino (YYYY-MM-DD)")
     data_partida: Optional[date] = Field(None, description="Data de partida do destino (YYYY-MM-DD)")
-    num_viajantes: Optional[int] = Field(None, description="Número de viajantes")
+    num_viajantes: Optional[int] = Field(None, description="Número de viajantes adultos")
+    num_criancas: Optional[int] = Field(0, description="Número de crianças (default 0)")
+    idades_criancas: Optional[str] = Field(None, description="Idades das crianças separadas por vírgula: '6, 6, 3'")
     campos_personalizados: Optional[dict] = Field(default_factory=dict, description="Campos personalizados (JSON livre)")
     status_venda: str = Field("em_negociacao", description="Status geral: em_negociacao, venda, perda")
     responsavel_id: Optional[int] = Field(None, description="ID do usuário responsável (null = Agente IA)")
@@ -54,6 +56,8 @@ class LeadUpdate(BaseModel):
     data_chegada: Optional[date] = None
     data_partida: Optional[date] = None
     num_viajantes: Optional[int] = None
+    num_criancas: Optional[int] = None
+    idades_criancas: Optional[str] = None
     campos_personalizados: Optional[dict] = None
     status_venda: Optional[str] = None
     is_active: Optional[bool] = None
@@ -80,6 +84,8 @@ class LeadResponse(BaseModel):
     data_chegada: Optional[date] = None
     data_partida: Optional[date] = None
     num_viajantes: Optional[int] = None
+    num_criancas: Optional[int] = 0
+    idades_criancas: Optional[str] = None
     campos_personalizados: dict = {}
     status_venda: str = "em_negociacao"
     is_active: bool

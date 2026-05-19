@@ -19,7 +19,9 @@ class Lead(Base):
     destinos = Column(JSON, default=list, nullable=True)
     data_chegada = Column(Date, nullable=True)
     data_partida = Column(Date, nullable=True)
-    num_viajantes = Column(Integer, nullable=True)
+    num_viajantes = Column(Integer, nullable=True)  # Adultos
+    num_criancas = Column(Integer, default=0, nullable=True)
+    idades_criancas = Column(String(200), nullable=True)  # "6, 6, 3"
 
     # Custom fields — JSON dict for unlimited customization
     # Example: {"origem": "Instagram", "idioma": "pt-BR", "observacoes": "VIP"}

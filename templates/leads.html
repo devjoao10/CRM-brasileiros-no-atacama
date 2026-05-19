@@ -507,9 +507,19 @@
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label class="form-label" for="leadNumViajantes">Nº de Viajantes</label>
+                            <label class="form-label" for="leadNumViajantes">Nº de Adultos</label>
                             <input type="number" id="leadNumViajantes" class="form-input" placeholder="Ex: 2" min="1">
                         </div>
+                        <div class="form-group">
+                            <label class="form-label" for="leadNumCriancas">Nº de Crianças</label>
+                            <input type="number" id="leadNumCriancas" class="form-input" placeholder="0" min="0" value="0" oninput="renderIdadesCriancas()">
+                        </div>
+                    </div>
+                    <div id="idadesCriancasContainer" style="display:none;margin-bottom:16px;">
+                        <label class="form-label">Idades das Crianças</label>
+                        <div id="idadesCriancasInputs" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
+                    </div>
+                    <div class="form-row">
                         <div class="form-group">
                             <label class="form-label" for="leadStatusVenda">Status (Oportunidade)</label>
                             <select id="leadStatusVenda" class="form-input" required>
@@ -873,6 +883,43 @@
         }
     });
 
+    // ─── Children ages dynamic inputs ────────────────────────
+    function renderIdadesCriancas() {
+        const n = parseInt(document.getElementById('leadNumCriancas').value) || 0;
+        const container = document.getElementById('idadesCriancasContainer');
+        const inputs = document.getElementById('idadesCriancasInputs');
+
+        if (n <= 0) {
+            container.style.display = 'none';
+            inputs.innerHTML = '';
+            return;
+        }
+
+        container.style.display = 'block';
+        // Preserve existing values
+        const existing = Array.from(inputs.querySelectorAll('.idade-crianca-input')).map(el => el.value);
+
+        inputs.innerHTML = '';
+        for (let i = 0; i < n; i++) {
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.className = 'form-input idade-crianca-input';
+            input.placeholder = `Criança ${i + 1}`;
+            input.min = '0';
+            input.max = '17';
+            input.style.width = '100px';
+            if (existing[i]) input.value = existing[i];
+            inputs.appendChild(input);
+        }
+    }
+
+    function getIdadesCriancasString() {
+        const inputs = document.querySelectorAll('.idade-crianca-input');
+        if (inputs.length === 0) return null;
+        const idades = Array.from(inputs).map(el => el.value.trim()).filter(v => v !== '');
+        return idades.length > 0 ? idades.join(', ') : null;
+    }
+
     function openLeadModal(lead = null) {
         document.getElementById('leadModal').classList.add('show');
         document.getElementById('leadModalTitle').textContent = lead ? 'Editar Lead' : 'Novo Lead';
@@ -889,6 +936,16 @@
         document.getElementById('leadChegada').value = lead ? lead.data_chegada || '' : '';
         document.getElementById('leadPartida').value = lead ? lead.data_partida || '' : '';
         document.getElementById('leadNumViajantes').value = lead ? lead.num_viajantes || '' : '';
+        document.getElementById('leadNumCriancas').value = lead ? lead.num_criancas || 0 : 0;
+        renderIdadesCriancas();
+        // Fill children ages
+        if (lead && lead.idades_criancas) {
+            const idades = lead.idades_criancas.split(',').map(s => s.trim());
+            const inputs = document.querySelectorAll('.idade-crianca-input');
+            idades.forEach((idade, i) => {
+                if (inputs[i]) inputs[i].value = idade;
+            });
+        }
         document.getElementById('leadStatusVenda').value = lead ? (lead.status_venda || 'em_negociacao') : 'em_negociacao';
 
         // Anotações
@@ -956,6 +1013,8 @@
             data_chegada: document.getElementById('leadChegada').value || null,
             data_partida: document.getElementById('leadPartida').value || null,
             num_viajantes: parseInt(document.getElementById('leadNumViajantes').value) || null,
+            num_criancas: parseInt(document.getElementById('leadNumCriancas').value) || 0,
+            idades_criancas: getIdadesCriancasString(),
             status_venda: document.getElementById('leadStatusVenda').value,
             campos_personalizados: campos,
         };
