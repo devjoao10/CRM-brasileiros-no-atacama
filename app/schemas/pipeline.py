@@ -90,6 +90,7 @@ class LeadCardResponse(BaseModel):
     destinos: Optional[list[str]] = None
     data_chegada: Optional[date] = None
     data_partida: Optional[date] = None
+    num_viajantes: Optional[int] = None
     etapa_id: str
     posicao: Optional[int] = 0
     tags: list[TagResponse] = []

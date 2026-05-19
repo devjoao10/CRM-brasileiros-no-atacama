@@ -507,6 +507,10 @@
                     </div>
                     <div class="form-row">
                         <div class="form-group">
+                            <label class="form-label" for="leadNumViajantes">Nº de Viajantes</label>
+                            <input type="number" id="leadNumViajantes" class="form-input" placeholder="Ex: 2" min="1">
+                        </div>
+                        <div class="form-group">
                             <label class="form-label" for="leadStatusVenda">Status (Oportunidade)</label>
                             <select id="leadStatusVenda" class="form-input" required>
                                 <option value="em_negociacao">Em Negociação</option>
@@ -884,6 +888,7 @@
         setDestinosSelection(selDests);
         document.getElementById('leadChegada').value = lead ? lead.data_chegada || '' : '';
         document.getElementById('leadPartida').value = lead ? lead.data_partida || '' : '';
+        document.getElementById('leadNumViajantes').value = lead ? lead.num_viajantes || '' : '';
         document.getElementById('leadStatusVenda').value = lead ? (lead.status_venda || 'em_negociacao') : 'em_negociacao';
 
         // Anotações
@@ -950,6 +955,7 @@
             destinos: getSelectedDestinos(),
             data_chegada: document.getElementById('leadChegada').value || null,
             data_partida: document.getElementById('leadPartida').value || null,
+            num_viajantes: parseInt(document.getElementById('leadNumViajantes').value) || null,
             status_venda: document.getElementById('leadStatusVenda').value,
             campos_personalizados: campos,
         };

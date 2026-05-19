@@ -292,6 +292,10 @@
                             <option value="0">Agente IA</option>
                         </select>
                     </div>
+                    <div class="filter-group">
+                        <label>Viajantes</label>
+                        <input type="number" class="filter-days" id="pipeFilterViajantes" placeholder="min" min="1" oninput="applyFilters()" title="Filtrar leads com pelo menos X viajantes" style="width:70px">
+                    </div>
                     <button class="filter-clear" onclick="clearPipeFilters()">✕ Limpar</button>
                     <span class="filter-count" id="filterCount"></span>
                 </div>
@@ -694,7 +698,8 @@
                document.getElementById('pipeFilterDays').value ||
                document.getElementById('pipeFilterDateFrom').value ||
                document.getElementById('pipeFilterDateTo').value ||
-               document.getElementById('pipeFilterResponsavel').value;
+               document.getElementById('pipeFilterResponsavel').value ||
+               document.getElementById('pipeFilterViajantes').value;
     }
 
     function applyFilters() {
@@ -706,6 +711,7 @@
         const dateFrom = document.getElementById('pipeFilterDateFrom').value;
         const dateTo = document.getElementById('pipeFilterDateTo').value;
         const respFilter = document.getElementById('pipeFilterResponsavel').value;
+        const viajantesMin = document.getElementById('pipeFilterViajantes').value;
 
         const today = new Date();
         today.setHours(0, 0, 0, 0);
@@ -771,6 +777,12 @@
                         }
                     }
 
+                    // Viajantes filter
+                    if (viajantesMin) {
+                        const min = parseInt(viajantesMin);
+                        if (!isNaN(min) && (!lead.num_viajantes || lead.num_viajantes < min)) return false;
+                    }
+
                     return true;
                 })
             }))
@@ -786,6 +798,7 @@
         document.getElementById('pipeFilterDateFrom').value = '';
         document.getElementById('pipeFilterDateTo').value = '';
         document.getElementById('pipeFilterResponsavel').value = '';
+        document.getElementById('pipeFilterViajantes').value = '';
         selectedFilterTags.clear();
         updateTagBtnLabel();
         renderFilterTagsDropdown();
@@ -825,7 +838,7 @@
                  ondragstart="onDragStart(event)" ondragend="onDragEnd(event)"
                  onclick="openDetailPanel(${lead.entry_id}, ${lead.lead_id})">
                 <div class="lead-card-name">${esc(lead.nome)}</div>
-                <div class="lead-card-info">${lead.email ? esc(lead.email) : lead.whatsapp ? esc(lead.whatsapp) : ''}</div>
+                <div class="lead-card-info">${lead.email ? esc(lead.email) : lead.whatsapp ? esc(lead.whatsapp) : ''}${lead.num_viajantes ? ' · ' + lead.num_viajantes + ' viajante' + (lead.num_viajantes > 1 ? 's' : '') : ''}</div>
                 ${destinoBadges}
                 ${daysBadge}
                 ${tags ? `<div class="lead-card-tags">${tags}</div>` : ''}
@@ -906,6 +919,7 @@
         info += `<div class="detail-field"><span class="detail-field-label">Destinos</span><span class="detail-field-value">${(lead.destinos || []).join(', ') || '—'}</span></div>`;
         info += `<div class="detail-field"><span class="detail-field-label">Chegada</span><span class="detail-field-value">${lead.data_chegada ? fmtDate(lead.data_chegada) : '—'}</span></div>`;
         info += `<div class="detail-field"><span class="detail-field-label">Partida</span><span class="detail-field-value">${lead.data_partida ? fmtDate(lead.data_partida) : '—'}</span></div>`;
+        info += `<div class="detail-field"><span class="detail-field-label">Nº Viajantes</span><span class="detail-field-value">${lead.num_viajantes || '—'}</span></div>`;
 
         if (lead.campos_personalizados && Object.keys(lead.campos_personalizados).length) {
             Object.entries(lead.campos_personalizados).forEach(([k, v]) => {

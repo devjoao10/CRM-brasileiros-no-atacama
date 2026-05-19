@@ -235,6 +235,7 @@ async def get_kanban_board(
                         destinos=lead.destinos,
                         data_chegada=lead.data_chegada,
                         data_partida=lead.data_partida,
+                        num_viajantes=lead.num_viajantes,
                         etapa_id=entry.etapa_id,
                         posicao=entry.posicao,
                         tags=[TagResponse.model_validate(t) for t in lead.tags],
