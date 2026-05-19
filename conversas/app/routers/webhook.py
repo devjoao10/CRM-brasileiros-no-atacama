@@ -2,8 +2,10 @@
 Meta Cloud API Webhook receiver.
 Handles verification (GET) and incoming messages (POST).
 Includes automatic replies based on business hours and auto-reply settings.
+Includes debounce mechanism for batching rapid messages before AI processing.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone as tz
 
@@ -11,7 +13,7 @@ from fastapi import APIRouter, Request, HTTPException, Query, Depends
 from sqlalchemy.orm import Session
 
 from app.config import META_VERIFY_TOKEN, N8N_BASE_URL, N8N_AGENT_ENABLED
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.models.conversation import Conversation, Message
 from app.models.auto_reply import AutoReply, BusinessHours
 from app.models.api_config import ApiConfig
@@ -19,6 +21,10 @@ from app.services import whatsapp
 from app.services import crm as crm_service
 
 logger = logging.getLogger(__name__)
+
+# ─── Debounce system for batching rapid messages ─────────────
+AGENT_DEBOUNCE_SECONDS = 5  # Wait 5s after last message before sending to agent
+_debounce_tasks: dict[int, asyncio.Task] = {}  # conversation_id -> scheduled task
 router = APIRouter(tags=["Webhook"])
 
 
@@ -297,9 +303,9 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
     # Send auto-reply if needed
     await _send_auto_reply_if_needed(conversation, is_new_conversation, db)
 
-    # ─── N8N Agent: encaminhar para IA se bot ativo ───
+    # ─── N8N Agent: encaminhar para IA se bot ativo (com debounce) ───
     if N8N_AGENT_ENABLED and conversation.is_bot_active:
-        await _forward_to_agent(conversation, content, db)
+        _schedule_agent_debounce(conversation.id)
 
 
 async def _process_status_update(status_update: dict, db: Session):
@@ -326,6 +332,86 @@ async def _process_status_update(status_update: dict, db: Session):
                     f"code={error_detail.get('code')}, "
                     f"title={error_detail.get('title')}"
                 )
+
+
+def _schedule_agent_debounce(conversation_id: int):
+    """
+    Schedule (or reschedule) the agent forwarding with debounce.
+    Each new message resets the 5-second timer. When the timer expires,
+    all accumulated messages are sent at once to the agent.
+    """
+    # Cancel any existing scheduled task for this conversation
+    existing_task = _debounce_tasks.get(conversation_id)
+    if existing_task and not existing_task.done():
+        existing_task.cancel()
+        logger.debug(f"Debounce resetado para conversa {conversation_id}")
+
+    # Schedule a new task
+    task = asyncio.create_task(_debounce_then_forward(conversation_id))
+    _debounce_tasks[conversation_id] = task
+
+
+async def _debounce_then_forward(conversation_id: int):
+    """
+    Wait AGENT_DEBOUNCE_SECONDS, then forward all recent unprocessed
+    messages to the AI agent as a single batch.
+    """
+    try:
+        await asyncio.sleep(AGENT_DEBOUNCE_SECONDS)
+    except asyncio.CancelledError:
+        # Another message arrived — this task was replaced
+        return
+
+    # Clean up the task reference
+    _debounce_tasks.pop(conversation_id, None)
+
+    # Use a fresh DB session (we're in a background task)
+    db = SessionLocal()
+    try:
+        conversation = db.query(Conversation).filter(
+            Conversation.id == conversation_id
+        ).first()
+
+        if not conversation:
+            logger.warning(f"Conversa {conversation_id} não encontrada para debounce")
+            return
+
+        if not conversation.is_bot_active:
+            logger.info(f"Bot desativado para conversa {conversation_id}, ignorando")
+            return
+
+        # Get the last inbound messages that haven't been replied to yet
+        # Find the last outbound message to know where to start
+        last_outbound = db.query(Message).filter(
+            Message.conversation_id == conversation_id,
+            Message.direction == "outbound",
+        ).order_by(Message.created_at.desc()).first()
+
+        query = db.query(Message).filter(
+            Message.conversation_id == conversation_id,
+            Message.direction == "inbound",
+        )
+        if last_outbound:
+            query = query.filter(Message.created_at > last_outbound.created_at)
+
+        pending_msgs = query.order_by(Message.created_at.asc()).all()
+
+        if not pending_msgs:
+            logger.debug(f"Nenhuma mensagem pendente para conversa {conversation_id}")
+            return
+
+        # Combine all pending messages into one text
+        combined_text = "\n".join(m.content for m in pending_msgs if m.content)
+        logger.info(
+            f"Debounce: enviando {len(pending_msgs)} msg(s) agrupadas "
+            f"para agente — conversa {conversation_id}"
+        )
+
+        await _forward_to_agent(conversation, combined_text, db)
+    except Exception as e:
+        logger.error(f"Erro no debounce da conversa {conversation_id}: {e}", exc_info=True)
+    finally:
+        db.close()
 
 
 async def _forward_to_agent(conversation: Conversation, message_text: str, db: Session):
