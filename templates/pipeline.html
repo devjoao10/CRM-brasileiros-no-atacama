@@ -334,6 +334,10 @@
                 <div class="detail-tags" id="detailTags"><span style="color:var(--color-dark-300);font-size:var(--font-size-sm)">Nenhuma tag</span></div>
             </div>
             <div class="detail-section">
+                <h4>Anotações</h4>
+                <div id="detailAnotacoes" style="font-size:var(--font-size-sm); color:var(--color-dark-300); white-space:pre-wrap; line-height:1.5;">—</div>
+            </div>
+            <div class="detail-section">
                 <h4>Histórico</h4>
                 <div id="detailHistory"><div class="history-empty">Carregando...</div></div>
             </div>
@@ -923,10 +927,15 @@
 
         if (lead.campos_personalizados && Object.keys(lead.campos_personalizados).length) {
             Object.entries(lead.campos_personalizados).forEach(([k, v]) => {
+                if (k === 'anotacoes') return; // shown in dedicated section
                 info += `<div class="detail-field"><span class="detail-field-label">${esc(k)}</span><span class="detail-field-value">${esc(String(v))}</span></div>`;
             });
         }
         document.getElementById('detailInfo').innerHTML = info;
+
+        // Anotações (from campos_personalizados)
+        const anotacoes = (lead.campos_personalizados && lead.campos_personalizados.anotacoes) ? lead.campos_personalizados.anotacoes : '';
+        document.getElementById('detailAnotacoes').textContent = anotacoes || '—';
 
         // Tags
         const tagsHtml = (lead.tags || []).length > 0
@@ -935,10 +944,16 @@
         document.getElementById('detailTags').innerHTML = tagsHtml;
 
         // Load history
-        const histResp = await Auth.apiRequest(`/api/pipeline/history/${leadId}`);
-        if (histResp) {
-            const histData = await histResp.json();
-            renderHistory(histData.historico);
+        try {
+            const histResp = await Auth.apiRequest(`/api/pipeline/history/${leadId}`);
+            if (histResp && histResp.ok) {
+                const histData = await histResp.json();
+                renderHistory(histData.historico);
+            } else {
+                document.getElementById('detailHistory').innerHTML = '<div class="history-empty">Sem histórico</div>';
+            }
+        } catch(e) {
+            document.getElementById('detailHistory').innerHTML = '<div class="history-empty">Sem histórico</div>';
         }
     }
 
