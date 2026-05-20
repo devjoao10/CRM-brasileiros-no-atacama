@@ -23,6 +23,8 @@ class LeadBase(BaseModel):
     destinos: Optional[list[str]] = Field(None, description="Lista de destinos: Atacama, Uyuni, Santiago ou outros")
     data_chegada: Optional[date] = Field(None, description="Data de chegada no destino (YYYY-MM-DD)")
     data_partida: Optional[date] = Field(None, description="Data de partida do destino (YYYY-MM-DD)")
+    total_dias: Optional[int] = Field(None, description="Total de dias da viagem (alternativa a datas fixas)")
+    datas_destinos: Optional[dict] = Field(default_factory=dict, description="Datas por destino: {'Atacama': {'chegada':'...','partida':'...'}}")
     num_viajantes: Optional[int] = Field(None, description="Número de viajantes adultos")
     num_criancas: Optional[int] = Field(0, description="Número de crianças (default 0)")
     idades_criancas: Optional[str] = Field(None, description="Idades das crianças separadas por vírgula: '6, 6, 3'")
@@ -55,6 +57,8 @@ class LeadUpdate(BaseModel):
     destinos: Optional[list[str]] = None
     data_chegada: Optional[date] = None
     data_partida: Optional[date] = None
+    total_dias: Optional[int] = None
+    datas_destinos: Optional[dict] = None
     num_viajantes: Optional[int] = None
     num_criancas: Optional[int] = None
     idades_criancas: Optional[str] = None
@@ -83,6 +87,8 @@ class LeadResponse(BaseModel):
     destinos: Optional[list[str]] = None
     data_chegada: Optional[date] = None
     data_partida: Optional[date] = None
+    total_dias: Optional[int] = None
+    datas_destinos: Optional[dict] = None
     num_viajantes: Optional[int] = None
     num_criancas: Optional[int] = 0
     idades_criancas: Optional[str] = None

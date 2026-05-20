@@ -498,12 +498,22 @@
                     <div class="form-row">
                         <div class="form-group">
                             <label class="form-label" for="leadChegada">Data de Chegada</label>
-                            <input type="date" id="leadChegada" class="form-input">
+                            <input type="date" id="leadChegada" class="form-input" onchange="onDatasGeraisChange()">
                         </div>
                         <div class="form-group">
                             <label class="form-label" for="leadPartida">Data de Partida</label>
-                            <input type="date" id="leadPartida" class="form-input">
+                            <input type="date" id="leadPartida" class="form-input" onchange="onDatasGeraisChange()">
                         </div>
+                        <div class="form-group">
+                            <label class="form-label" for="leadTotalDias">Total de Dias</label>
+                            <input type="number" id="leadTotalDias" class="form-input" placeholder="Ex: 7" min="1">
+                        </div>
+                    </div>
+                    <!-- Per-destination dates (shown when 2+ destinations) -->
+                    <div id="datasDestinosContainer" style="display:none;margin-bottom:16px;">
+                        <label class="form-label" style="margin-bottom:8px;font-weight:600;">📅 Datas por Destino <span style="font-weight:400;opacity:0.6;font-size:0.85em;">(opcional)</span></label>
+                        <div id="datasDestinosAlert" style="display:none;background:var(--danger,#ef4444);color:#fff;padding:6px 12px;border-radius:6px;margin-bottom:8px;font-size:0.85em;"></div>
+                        <div id="datasDestinosInputs"></div>
                     </div>
                     <div class="form-row">
                         <div class="form-group">
@@ -860,6 +870,7 @@
             display.textContent = selected.join(', ');
             display.classList.add('has-value');
         }
+        renderDatasDestinos();
     }
 
     function setDestinosSelection(values) {
@@ -920,6 +931,119 @@
         return idades.length > 0 ? idades.join(', ') : null;
     }
 
+    // ─── Per-destination dates ────────────────────────
+    let _currentDatasDestinos = {};  // Preserve values during re-renders
+
+    function renderDatasDestinos() {
+        const destinos = getSelectedDestinos();
+        const container = document.getElementById('datasDestinosContainer');
+        const inputsDiv = document.getElementById('datasDestinosInputs');
+        const alertDiv = document.getElementById('datasDestinosAlert');
+        alertDiv.style.display = 'none';
+
+        if (destinos.length < 2) {
+            container.style.display = 'none';
+            inputsDiv.innerHTML = '';
+            return;
+        }
+
+        container.style.display = 'block';
+
+        // Save current values before re-render
+        document.querySelectorAll('.destino-date-block').forEach(block => {
+            const dest = block.dataset.destino;
+            const chegada = block.querySelector('.dest-chegada')?.value || '';
+            const partida = block.querySelector('.dest-partida')?.value || '';
+            if (chegada || partida) _currentDatasDestinos[dest] = { chegada, partida };
+        });
+
+        const chegadaGeral = document.getElementById('leadChegada').value;
+        const partidaGeral = document.getElementById('leadPartida').value;
+
+        inputsDiv.innerHTML = destinos.map(dest => {
+            const saved = _currentDatasDestinos[dest] || {};
+            return `
+                <div class="destino-date-block" data-destino="${dest}" style="background:var(--bg-secondary,#1a1a2e);border:1px solid var(--border,#333);border-radius:8px;padding:10px 14px;margin-bottom:8px;">
+                    <strong style="font-size:0.9em;">${dest}</strong>
+                    <div style="display:flex;gap:12px;margin-top:6px;">
+                        <div style="flex:1;">
+                            <label style="font-size:0.8em;opacity:0.7;">Chegada</label>
+                            <input type="date" class="form-input dest-chegada" value="${saved.chegada || ''}"
+                                ${chegadaGeral ? `min="${chegadaGeral}"` : ''} ${partidaGeral ? `max="${partidaGeral}"` : ''}
+                                onchange="validateDatasDestinos()">
+                        </div>
+                        <div style="flex:1;">
+                            <label style="font-size:0.8em;opacity:0.7;">Partida</label>
+                            <input type="date" class="form-input dest-partida" value="${saved.partida || ''}"
+                                ${chegadaGeral ? `min="${chegadaGeral}"` : ''} ${partidaGeral ? `max="${partidaGeral}"` : ''}
+                                onchange="validateDatasDestinos()">
+                        </div>
+                    </div>
+                </div>`;
+        }).join('');
+    }
+
+    function onDatasGeraisChange() {
+        const chegada = document.getElementById('leadChegada').value;
+        const partida = document.getElementById('leadPartida').value;
+        // Auto-calculate total_dias
+        if (chegada && partida) {
+            const diff = Math.round((new Date(partida) - new Date(chegada)) / 86400000);
+            if (diff > 0) document.getElementById('leadTotalDias').value = diff;
+        }
+        // Re-render to update min/max constraints
+        renderDatasDestinos();
+    }
+
+    function validateDatasDestinos() {
+        const alertDiv = document.getElementById('datasDestinosAlert');
+        const chegadaGeral = document.getElementById('leadChegada').value;
+        const partidaGeral = document.getElementById('leadPartida').value;
+        const blocks = document.querySelectorAll('.destino-date-block');
+        let totalDias = 0;
+        let errors = [];
+
+        blocks.forEach(block => {
+            const dest = block.dataset.destino;
+            const c = block.querySelector('.dest-chegada').value;
+            const p = block.querySelector('.dest-partida').value;
+            if (c && p) {
+                const dias = Math.round((new Date(p) - new Date(c)) / 86400000);
+                if (dias <= 0) errors.push(`${dest}: partida deve ser depois da chegada`);
+                else totalDias += dias;
+
+                if (chegadaGeral && c < chegadaGeral) errors.push(`${dest}: chegada antes da data geral`);
+                if (partidaGeral && p > partidaGeral) errors.push(`${dest}: partida depois da data geral`);
+            }
+        });
+
+        // Check sum vs total
+        if (chegadaGeral && partidaGeral && totalDias > 0) {
+            const totalGeral = Math.round((new Date(partidaGeral) - new Date(chegadaGeral)) / 86400000);
+            if (totalDias !== totalGeral) {
+                errors.push(`Soma dos destinos (${totalDias}d) ≠ total da viagem (${totalGeral}d)`);
+            }
+        }
+
+        if (errors.length > 0) {
+            alertDiv.textContent = errors.join(' | ');
+            alertDiv.style.display = 'block';
+        } else {
+            alertDiv.style.display = 'none';
+        }
+    }
+
+    function getDatasDestinosJSON() {
+        const result = {};
+        document.querySelectorAll('.destino-date-block').forEach(block => {
+            const dest = block.dataset.destino;
+            const c = block.querySelector('.dest-chegada').value;
+            const p = block.querySelector('.dest-partida').value;
+            if (c || p) result[dest] = { chegada: c || null, partida: p || null };
+        });
+        return Object.keys(result).length > 0 ? result : null;
+    }
+
     function openLeadModal(lead = null) {
         document.getElementById('leadModal').classList.add('show');
         document.getElementById('leadModalTitle').textContent = lead ? 'Editar Lead' : 'Novo Lead';
@@ -935,6 +1059,10 @@
         setDestinosSelection(selDests);
         document.getElementById('leadChegada').value = lead ? lead.data_chegada || '' : '';
         document.getElementById('leadPartida').value = lead ? lead.data_partida || '' : '';
+        document.getElementById('leadTotalDias').value = lead ? lead.total_dias || '' : '';
+        // Load per-destination dates
+        _currentDatasDestinos = (lead && lead.datas_destinos) ? { ...lead.datas_destinos } : {};
+        renderDatasDestinos();
         document.getElementById('leadNumViajantes').value = lead ? lead.num_viajantes || '' : '';
         document.getElementById('leadNumCriancas').value = lead ? lead.num_criancas || 0 : 0;
         renderIdadesCriancas();
@@ -1012,6 +1140,8 @@
             destinos: getSelectedDestinos(),
             data_chegada: document.getElementById('leadChegada').value || null,
             data_partida: document.getElementById('leadPartida').value || null,
+            total_dias: parseInt(document.getElementById('leadTotalDias').value) || null,
+            datas_destinos: getDatasDestinosJSON(),
             num_viajantes: parseInt(document.getElementById('leadNumViajantes').value) || null,
             num_criancas: parseInt(document.getElementById('leadNumCriancas').value) || 0,
             idades_criancas: getIdadesCriancasString(),

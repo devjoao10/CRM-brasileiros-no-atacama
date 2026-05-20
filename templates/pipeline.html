@@ -923,6 +923,24 @@
         info += `<div class="detail-field"><span class="detail-field-label">Destinos</span><span class="detail-field-value">${(lead.destinos || []).join(', ') || '—'}</span></div>`;
         info += `<div class="detail-field"><span class="detail-field-label">Chegada</span><span class="detail-field-value">${lead.data_chegada ? fmtDate(lead.data_chegada) : '—'}</span></div>`;
         info += `<div class="detail-field"><span class="detail-field-label">Partida</span><span class="detail-field-value">${lead.data_partida ? fmtDate(lead.data_partida) : '—'}</span></div>`;
+        if (lead.total_dias) {
+            info += `<div class="detail-field"><span class="detail-field-label">Total Dias</span><span class="detail-field-value">${lead.total_dias} dias</span></div>`;
+        }
+        // Per-destination dates
+        if (lead.datas_destinos && Object.keys(lead.datas_destinos).length > 0) {
+            let destDatesHtml = '';
+            Object.entries(lead.datas_destinos).forEach(([dest, datas]) => {
+                const c = datas.chegada ? fmtDate(datas.chegada) : '?';
+                const p = datas.partida ? fmtDate(datas.partida) : '?';
+                let diasStr = '';
+                if (datas.chegada && datas.partida) {
+                    const dias = Math.round((new Date(datas.partida) - new Date(datas.chegada)) / 86400000);
+                    if (dias > 0) diasStr = ` (${dias} noites)`;
+                }
+                destDatesHtml += `<div style="font-size:0.85em;padding:2px 0;">📅 ${esc(dest)}: ${c} → ${p}${diasStr}</div>`;
+            });
+            info += `<div class="detail-field"><span class="detail-field-label">Datas/Destino</span><span class="detail-field-value">${destDatesHtml}</span></div>`;
+        }
         // Viajantes display with children info
         let viajantesText = '';
         if (lead.num_viajantes) {
