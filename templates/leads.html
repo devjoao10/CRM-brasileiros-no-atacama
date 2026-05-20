@@ -1117,13 +1117,6 @@
         document.getElementById('leadModalTitle').textContent = lead ? 'Editar Lead' : 'Novo Lead';
         document.getElementById('leadModalAlert').classList.add('hidden');
 
-        // Clear dynamic DOM containers to prevent caching old values
-        document.getElementById('diasDestinoInputs').innerHTML = '';
-        const dtContainer = document.getElementById('datasDestinosContainer');
-        if(dtContainer) dtContainer.innerHTML = '';
-        _currentDiasDestino = {};
-        _currentDatasDestinos = {};
-
         document.getElementById('leadId').value = lead ? lead.id : '';
         document.getElementById('leadNome').value = lead ? lead.nome : '';
         document.getElementById('leadEmail').value = lead ? lead.email || '' : '';
