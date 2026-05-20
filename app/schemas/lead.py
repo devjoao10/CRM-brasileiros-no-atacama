@@ -60,8 +60,14 @@ class LeadBase(BaseModel):
     @classmethod
     def empty_str_to_none_dict(cls, v):
         """Convert empty strings to None/empty dict for dict fields."""
-        if isinstance(v, str) and not v.strip():
-            return None
+        if isinstance(v, str):
+            if not v.strip():
+                return None
+            import json
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return v
         return v
 
     @field_validator("data_chegada", "data_partida", mode="before")
@@ -126,8 +132,14 @@ class LeadUpdate(BaseModel):
     @field_validator("datas_destinos", "dias_por_destino", "campos_personalizados", mode="before")
     @classmethod
     def empty_str_to_none_dict(cls, v):
-        if isinstance(v, str) and not v.strip():
-            return None
+        if isinstance(v, str):
+            if not v.strip():
+                return None
+            import json
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return v
         return v
 
     @field_validator("data_chegada", "data_partida", mode="before")
