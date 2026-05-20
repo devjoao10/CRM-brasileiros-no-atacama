@@ -509,6 +509,11 @@
                             <input type="number" id="leadTotalDias" class="form-input" placeholder="Ex: 7" min="1">
                         </div>
                     </div>
+                    <!-- Dias por destino (shown when 2+ destinations) -->
+                    <div id="diasDestinoContainer" style="display:none;margin-bottom:16px;">
+                        <label class="form-label" style="margin-bottom:8px;font-weight:600;">📊 Dias por Destino</label>
+                        <div id="diasDestinoInputs" style="display:flex;flex-wrap:wrap;gap:12px;"></div>
+                    </div>
                     <!-- Per-destination dates (shown when 2+ destinations) -->
                     <div id="datasDestinosContainer" style="display:none;margin-bottom:16px;">
                         <label class="form-label" style="margin-bottom:8px;font-weight:600;">📅 Datas por Destino <span style="font-weight:400;opacity:0.6;font-size:0.85em;">(opcional)</span></label>
@@ -543,7 +548,7 @@
                     <!-- Anotações -->
                     <div class="custom-fields-section">
                         <h4>Anotações</h4>
-                        <textarea id="leadAnotacoes" class="form-input" rows="3" placeholder="Observações sobre este lead..." style="resize:vertical;font-family:inherit;"></textarea>
+                        <textarea id="leadAnotacoes" class="form-input" rows="5" placeholder="Observações sobre este lead..." style="resize:vertical;font-family:inherit;white-space:pre-wrap;line-height:1.6;"></textarea>
                     </div>
 
                     <!-- Tags -->
@@ -871,6 +876,7 @@
             display.classList.add('has-value');
         }
         renderDatasDestinos();
+        renderDiasDestino();
     }
 
     function setDestinosSelection(values) {
@@ -931,6 +937,55 @@
         return idades.length > 0 ? idades.join(', ') : null;
     }
 
+    // ─── Per-destination day counts ────────────────────────
+    let _currentDiasDestino = {};
+
+    function renderDiasDestino() {
+        const destinos = getSelectedDestinos();
+        const container = document.getElementById('diasDestinoContainer');
+        const inputsDiv = document.getElementById('diasDestinoInputs');
+
+        if (destinos.length < 2) {
+            container.style.display = 'none';
+            inputsDiv.innerHTML = '';
+            return;
+        }
+
+        container.style.display = 'block';
+
+        // Save current values before re-render
+        document.querySelectorAll('.dias-destino-input').forEach(el => {
+            if (el.value) _currentDiasDestino[el.dataset.destino] = el.value;
+        });
+
+        const destColors = { 'Atacama': '#e85d04', 'Uyuni': '#7b2cbf', 'Santiago': '#2b6cb0' };
+
+        inputsDiv.innerHTML = destinos.map(dest => {
+            const color = destColors[dest] || '#6c757d';
+            const savedVal = _currentDiasDestino[dest] || '';
+            return `
+                <div style="display:flex;align-items:center;gap:8px;background:#f8f9fa;border:1px solid #e2e8f0;border-left:4px solid ${color};border-radius:8px;padding:8px 14px;min-width:160px;">
+                    <strong style="font-size:0.85em;color:${color};white-space:nowrap;">${dest}</strong>
+                    <input type="number" class="form-input dias-destino-input" data-destino="${dest}" 
+                        value="${savedVal}" placeholder="dias" min="1" 
+                        style="width:70px;text-align:center;font-size:0.9em;"
+                        oninput="onDiasDestinoChange()">
+                    <span style="font-size:0.8em;color:#64748b;">dias</span>
+                </div>`;
+        }).join('');
+    }
+
+    function onDiasDestinoChange() {
+        // Auto-sum dias per destino to total
+        let soma = 0;
+        document.querySelectorAll('.dias-destino-input').forEach(el => {
+            soma += parseInt(el.value) || 0;
+        });
+        if (soma > 0) {
+            document.getElementById('leadTotalDias').value = soma;
+        }
+    }
+
     // ─── Per-destination dates ────────────────────────
     let _currentDatasDestinos = {};  // Preserve values during re-renders
 
@@ -960,20 +1015,23 @@
         const chegadaGeral = document.getElementById('leadChegada').value;
         const partidaGeral = document.getElementById('leadPartida').value;
 
+        const destColors = { 'Atacama': '#e85d04', 'Uyuni': '#7b2cbf', 'Santiago': '#2b6cb0' };
+
         inputsDiv.innerHTML = destinos.map(dest => {
             const saved = _currentDatasDestinos[dest] || {};
+            const color = destColors[dest] || '#6c757d';
             return `
-                <div class="destino-date-block" data-destino="${dest}" style="background:var(--bg-secondary,#1a1a2e);border:1px solid var(--border,#333);border-radius:8px;padding:10px 14px;margin-bottom:8px;">
-                    <strong style="font-size:0.9em;">${dest}</strong>
+                <div class="destino-date-block" data-destino="${dest}" style="background:#f8f9fa;border:1px solid #e2e8f0;border-left:4px solid ${color};border-radius:8px;padding:10px 14px;margin-bottom:8px;">
+                    <strong style="font-size:0.9em;color:${color};">${dest}</strong>
                     <div style="display:flex;gap:12px;margin-top:6px;">
                         <div style="flex:1;">
-                            <label style="font-size:0.8em;opacity:0.7;">Chegada</label>
+                            <label style="font-size:0.8em;color:#64748b;">Chegada</label>
                             <input type="date" class="form-input dest-chegada" value="${saved.chegada || ''}"
                                 ${chegadaGeral ? `min="${chegadaGeral}"` : ''} ${partidaGeral ? `max="${partidaGeral}"` : ''}
                                 onchange="validateDatasDestinos()">
                         </div>
                         <div style="flex:1;">
-                            <label style="font-size:0.8em;opacity:0.7;">Partida</label>
+                            <label style="font-size:0.8em;color:#64748b;">Partida</label>
                             <input type="date" class="form-input dest-partida" value="${saved.partida || ''}"
                                 ${chegadaGeral ? `min="${chegadaGeral}"` : ''} ${partidaGeral ? `max="${partidaGeral}"` : ''}
                                 onchange="validateDatasDestinos()">
