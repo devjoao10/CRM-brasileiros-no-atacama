@@ -54,6 +54,15 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
     # Startup
     Base.metadata.create_all(bind=engine)
+    # Inline migration: add new columns that create_all won't add to existing tables
+    from sqlalchemy import text, inspect
+    inspector = inspect(engine)
+    if 'leads' in inspector.get_table_names():
+        existing_cols = [c['name'] for c in inspector.get_columns('leads')]
+        with engine.begin() as conn:
+            if 'dias_por_destino' not in existing_cols:
+                conn.execute(text("ALTER TABLE leads ADD COLUMN dias_por_destino JSON DEFAULT NULL"))
+                logger.info("✅ Migration: added 'dias_por_destino' column to leads table")
     seed_database()
     _cleanup_old_uploads(max_age_hours=24)
     yield

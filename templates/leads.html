@@ -1102,6 +1102,16 @@
         return Object.keys(result).length > 0 ? result : null;
     }
 
+    function getDiasPorDestinoJSON() {
+        const result = {};
+        document.querySelectorAll('.dias-destino-input').forEach(el => {
+            const dest = el.dataset.destino;
+            const dias = parseInt(el.value);
+            if (dias > 0) result[dest] = dias;
+        });
+        return Object.keys(result).length > 0 ? result : null;
+    }
+
     function openLeadModal(lead = null) {
         document.getElementById('leadModal').classList.add('show');
         document.getElementById('leadModalTitle').textContent = lead ? 'Editar Lead' : 'Novo Lead';
@@ -1121,6 +1131,9 @@
         // Load per-destination dates
         _currentDatasDestinos = (lead && lead.datas_destinos) ? { ...lead.datas_destinos } : {};
         renderDatasDestinos();
+        // Load per-destination days
+        _currentDiasDestino = (lead && lead.dias_por_destino) ? { ...lead.dias_por_destino } : {};
+        renderDiasDestino();
         document.getElementById('leadNumViajantes').value = lead ? lead.num_viajantes || '' : '';
         document.getElementById('leadNumCriancas').value = lead ? lead.num_criancas || 0 : 0;
         renderIdadesCriancas();
@@ -1200,6 +1213,7 @@
             data_partida: document.getElementById('leadPartida').value || null,
             total_dias: parseInt(document.getElementById('leadTotalDias').value) || null,
             datas_destinos: getDatasDestinosJSON(),
+            dias_por_destino: getDiasPorDestinoJSON(),
             num_viajantes: parseInt(document.getElementById('leadNumViajantes').value) || null,
             num_criancas: parseInt(document.getElementById('leadNumCriancas').value) || 0,
             idades_criancas: getIdadesCriancasString(),

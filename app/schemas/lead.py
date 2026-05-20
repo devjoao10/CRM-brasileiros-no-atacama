@@ -25,6 +25,7 @@ class LeadBase(BaseModel):
     data_partida: Optional[date] = Field(None, description="Data de partida do destino (YYYY-MM-DD)")
     total_dias: Optional[int] = Field(None, description="Total de dias da viagem (alternativa a datas fixas)")
     datas_destinos: Optional[dict] = Field(default_factory=dict, description="Datas por destino: {'Atacama': {'chegada':'...','partida':'...'}}")
+    dias_por_destino: Optional[dict] = Field(default_factory=dict, description="Dias por destino: {'Atacama': 6, 'Santiago': 4}")
     num_viajantes: Optional[int] = Field(None, description="Número de viajantes adultos")
     num_criancas: Optional[int] = Field(0, description="Número de crianças (default 0)")
     idades_criancas: Optional[str] = Field(None, description="Idades das crianças separadas por vírgula: '6, 6, 3'")
@@ -55,7 +56,7 @@ class LeadBase(BaseModel):
             return None
         return v
 
-    @field_validator("datas_destinos", "campos_personalizados", mode="before")
+    @field_validator("datas_destinos", "dias_por_destino", "campos_personalizados", mode="before")
     @classmethod
     def empty_str_to_none_dict(cls, v):
         """Convert empty strings to None/empty dict for dict fields."""
@@ -93,6 +94,7 @@ class LeadUpdate(BaseModel):
     data_partida: Optional[date] = None
     total_dias: Optional[int] = None
     datas_destinos: Optional[dict] = None
+    dias_por_destino: Optional[dict] = None
     num_viajantes: Optional[int] = None
     num_criancas: Optional[int] = None
     idades_criancas: Optional[str] = None
@@ -121,7 +123,7 @@ class LeadUpdate(BaseModel):
             return None
         return v
 
-    @field_validator("datas_destinos", "campos_personalizados", mode="before")
+    @field_validator("datas_destinos", "dias_por_destino", "campos_personalizados", mode="before")
     @classmethod
     def empty_str_to_none_dict(cls, v):
         if isinstance(v, str) and not v.strip():
@@ -153,6 +155,7 @@ class LeadResponse(BaseModel):
     data_partida: Optional[date] = None
     total_dias: Optional[int] = None
     datas_destinos: Optional[dict] = None
+    dias_por_destino: Optional[dict] = None
     num_viajantes: Optional[int] = None
     num_criancas: Optional[int] = 0
     idades_criancas: Optional[str] = None
