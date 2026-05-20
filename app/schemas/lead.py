@@ -39,10 +39,44 @@ class LeadBase(BaseModel):
         if v is None:
             return None
         if isinstance(v, str):
+            if not v.strip():
+                return None
             # Comma-separated or single value
             return [d.strip() for d in v.split(",") if d.strip()]
         if isinstance(v, list):
             return [str(d).strip() for d in v if str(d).strip()]
+        return v
+
+    @field_validator("total_dias", "num_viajantes", "num_criancas", "responsavel_id", mode="before")
+    @classmethod
+    def empty_str_to_none_int(cls, v):
+        """Convert empty strings to None for int fields (N8N sends '' when no data)."""
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @field_validator("datas_destinos", "campos_personalizados", mode="before")
+    @classmethod
+    def empty_str_to_none_dict(cls, v):
+        """Convert empty strings to None/empty dict for dict fields."""
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @field_validator("data_chegada", "data_partida", mode="before")
+    @classmethod
+    def empty_str_to_none_date(cls, v):
+        """Convert empty strings to None for date fields."""
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @field_validator("email", "idades_criancas", mode="before")
+    @classmethod
+    def empty_str_to_none_str(cls, v):
+        """Convert empty strings to None for optional string fields."""
+        if isinstance(v, str) and not v.strip():
+            return None
         return v
 
 
@@ -73,9 +107,39 @@ class LeadUpdate(BaseModel):
         if v is None:
             return None
         if isinstance(v, str):
+            if not v.strip():
+                return None
             return [d.strip() for d in v.split(",") if d.strip()]
         if isinstance(v, list):
             return [str(d).strip() for d in v if str(d).strip()]
+        return v
+
+    @field_validator("total_dias", "num_viajantes", "num_criancas", "responsavel_id", mode="before")
+    @classmethod
+    def empty_str_to_none_int(cls, v):
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @field_validator("datas_destinos", "campos_personalizados", mode="before")
+    @classmethod
+    def empty_str_to_none_dict(cls, v):
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @field_validator("data_chegada", "data_partida", mode="before")
+    @classmethod
+    def empty_str_to_none_date(cls, v):
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @field_validator("email", "idades_criancas", mode="before")
+    @classmethod
+    def empty_str_to_none_str(cls, v):
+        if isinstance(v, str) and not v.strip():
+            return None
         return v
 
 
