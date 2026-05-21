@@ -297,8 +297,7 @@
                     <label class="form-label" for="taskResponsavel">Responsável</label>
                     <select id="taskResponsavel" class="form-input">
                         <option value="current">Atribuir a mim</option>
-                        <option value="5">Júlia (Vendas)</option>
-                        <option value="null">Agente IA (Automação)</option>
+                        <!-- Carregado dinamicamente da API -->
                     </select>
                 </div>
                 <div class="form-group">
@@ -363,8 +362,28 @@
         });
 
         initCalendar();
+        loadResponsaveis();
         fetchTasks();
     });
+
+    async function loadResponsaveis() {
+        const resp = await Auth.apiRequest('/api/users/for-select');
+        if (!resp || !resp.ok) return;
+        const data = await resp.json();
+        const select = document.getElementById('taskResponsavel');
+        
+        for (const u of data.users) {
+            const opt = document.createElement('option');
+            if (u.id === 0) {
+                opt.value = 'null';
+                opt.textContent = u.nome + ' (Automação)';
+            } else {
+                opt.value = u.id;
+                opt.textContent = u.nome;
+            }
+            select.appendChild(opt);
+        }
+    }
 
     function switchView(mode) {
         viewMode = mode;
