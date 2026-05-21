@@ -330,7 +330,7 @@ def get_lead(
     lead = db.query(Lead).filter(Lead.id == lead_id).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead não encontrado")
-    return _build_lead_response(lead, db)
+    return _build_lead_response(lead)
 
 
 @router.post("", response_model=LeadResponse, status_code=201, summary="Criar lead")
@@ -369,7 +369,7 @@ def create_lead(
     db.add(lead)
     db.commit()
     db.refresh(lead)
-    return _build_lead_response(lead, db)
+    return _build_lead_response(lead)
 
 
 @router.put("/{lead_id}", response_model=LeadResponse, summary="Atualizar lead")
@@ -395,7 +395,7 @@ def update_lead(
 
     db.commit()
     db.refresh(lead)
-    return _build_lead_response(lead, db)
+    return _build_lead_response(lead)
 
 
 @router.delete("/{lead_id}", summary="Excluir lead permanentemente")
@@ -711,7 +711,7 @@ def get_lead_by_whatsapp(
     if not lead:
         raise HTTPException(status_code=404, detail="Nenhum lead encontrado com este WhatsApp")
 
-    return _build_lead_response(lead, db)
+    return _build_lead_response(lead)
 
 
 @router.put("/{lead_id}/responsavel", response_model=LeadResponse,
@@ -756,5 +756,5 @@ def update_lead_responsavel(
         db.add(event)
         db.commit()
 
-    return _build_lead_response(lead, db)
+    return _build_lead_response(lead)
 
