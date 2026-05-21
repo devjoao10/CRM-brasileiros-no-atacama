@@ -422,8 +422,14 @@
             url += 'tipo=manual';
         }
 
-        // Se for "minhas", o backend já filtra pelo current_user.
-        // Se for "equipe", removemos o user_filter para vir tudo (admin).
+        // Se for "minhas", passamos o ID do usuário logado no user_filter (crucial para o Admin)
+        if (currentTab === 'minhas') {
+            const user = Auth.getUser();
+            if (user && user.id) {
+                url += `&user_filter=${user.id}`;
+            }
+        }
+        // Se for "equipe", não passamos user_filter, e o backend (sendo Admin) trará de todos.
 
         const resp = await Auth.apiRequest(url);
         if (!resp) return;
