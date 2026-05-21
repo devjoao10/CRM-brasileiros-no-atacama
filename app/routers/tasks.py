@@ -29,8 +29,11 @@ def list_tasks(
     if current_user.role != UserRole.ADMIN:
         query = query.filter(Task.user_id == current_user.id)
     else:
-        if user_filter:
-            query = query.filter(Task.user_id == user_filter)
+        if user_filter is not None:
+            if user_filter == 0:
+                query = query.filter(Task.user_id.is_(None))  # AI tasks
+            else:
+                query = query.filter(Task.user_id == user_filter)
 
     if status:
         query = query.filter(Task.status == status)
