@@ -28,6 +28,7 @@ class Task(Base):
     
     google_calendar_event_id = Column(String(255), nullable=True)
     google_calendar_link = Column(String(500), nullable=True)
+    resultado_ia = Column(Text, nullable=True)
     
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())

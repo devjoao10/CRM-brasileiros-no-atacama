@@ -70,6 +70,16 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"⚠️ Could not alter user_id in tasks: {e}")
             
+            # Add resultado_ia column for AI task results
+            if 'tasks' in inspector.get_table_names():
+                task_cols = [c['name'] for c in inspector.get_columns('tasks')]
+                if 'resultado_ia' not in task_cols:
+                    try:
+                        conn.execute(text("ALTER TABLE tasks ADD COLUMN resultado_ia TEXT DEFAULT NULL"))
+                        logger.info("✅ Migration: added 'resultado_ia' column to tasks table")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Could not add resultado_ia: {e}")
+            
             # Criando índices de performance com segurança (IF NOT EXISTS)
             try:
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_leads_created_at ON leads (created_at)"))

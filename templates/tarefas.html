@@ -295,10 +295,17 @@
                 </div>
                 <div class="form-group" style="margin-top:var(--space-4);">
                     <label class="form-label" for="taskResponsavel">Responsável</label>
-                    <select id="taskResponsavel" class="form-input">
+                    <select id="taskResponsavel" class="form-input" onchange="toggleResultadoIA()">
                         <option value="current">Atribuir a mim</option>
                         <!-- Carregado dinamicamente da API -->
                     </select>
+                </div>
+                <div class="form-group" id="resultadoIAGroup" style="display:none; margin-top:var(--space-4);">
+                    <label class="form-label" for="taskResultadoIA" style="display:flex;align-items:center;gap:6px;">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#805AD5" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                        Resultado da IA
+                    </label>
+                    <textarea id="taskResultadoIA" class="form-input" rows="3" placeholder="Preenchido automaticamente pela IA ao concluir a tarefa..." style="background:var(--color-dark-50); border-color:#805AD5;"></textarea>
                 </div>
                 <div class="form-group">
                     <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--color-dark-500);margin-top:10px;">
@@ -383,6 +390,12 @@
             }
             select.appendChild(opt);
         }
+    }
+
+    function toggleResultadoIA() {
+        const val = document.getElementById('taskResponsavel').value;
+        const group = document.getElementById('resultadoIAGroup');
+        group.style.display = (val === 'null') ? 'block' : 'none';
     }
 
     function switchView(mode) {
@@ -522,6 +535,7 @@
                         <span>${dateStr}</span>
                         ${t.google_calendar_event_id ? '<span style="color:#2B6CB0; margin-left:8px;" title="Sincronizado no Google Calendar">Cal</span>' : ''}
                     </div>
+                    ${(t.user_id === null && t.resultado_ia) ? `<div style="margin-top:6px;padding:6px 10px;background:#faf5ff;border-left:3px solid #805AD5;border-radius:4px;font-size:12px;color:#553C9A;"><strong>Resultado IA:</strong> ${esc(t.resultado_ia)}</div>` : ''}
                 </div>
                 <div class="task-actions">
                     ${t.status !== 'concluido' ? `<button class="check-btn" title="Marcar como Concluída" onclick="updateTaskStatus(${t.id}, 'concluido')">✓</button>` : ''}
@@ -560,6 +574,8 @@
             } else {
                 document.getElementById('taskData').value = '';
             }
+            
+            document.getElementById('taskResultadoIA').value = task.resultado_ia || '';
         } else {
             document.getElementById('taskModalTitle').textContent = 'Nova Tarefa';
             document.getElementById('taskId').value = '';
@@ -568,7 +584,9 @@
             document.getElementById('taskStatus').value = 'pendente';
             document.getElementById('taskResponsavel').value = 'current';
             document.getElementById('taskData').value = '';
+            document.getElementById('taskResultadoIA').value = '';
         }
+        toggleResultadoIA();
     }
 
     function closeTaskModal() {
@@ -616,6 +634,8 @@
         
         if (responsavel === 'null') {
             body.user_id = null;
+            const resultadoIA = document.getElementById('taskResultadoIA').value.trim();
+            if (resultadoIA) body.resultado_ia = resultadoIA;
         } else if (responsavel !== 'current') {
             body.user_id = parseInt(responsavel);
         }

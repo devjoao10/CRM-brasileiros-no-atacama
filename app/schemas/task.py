@@ -13,6 +13,7 @@ class TaskBase(BaseModel):
     user_id: Optional[int] = None
     google_calendar_event_id: Optional[str] = None
     google_calendar_link: Optional[str] = None
+    resultado_ia: Optional[str] = None
 
 class TaskCreate(TaskBase):
     pass
@@ -28,6 +29,7 @@ class TaskUpdate(BaseModel):
     user_id: Optional[int] = None
     google_calendar_event_id: Optional[str] = None
     google_calendar_link: Optional[str] = None
+    resultado_ia: Optional[str] = None
 
 class TaskResponse(TaskBase):
     id: int
