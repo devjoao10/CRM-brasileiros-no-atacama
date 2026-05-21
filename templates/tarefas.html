@@ -293,6 +293,14 @@
                         </select>
                     </div>
                 </div>
+                <div class="form-group" style="margin-top:var(--space-4);">
+                    <label class="form-label" for="taskResponsavel">Responsável</label>
+                    <select id="taskResponsavel" class="form-input">
+                        <option value="current">Atribuir a mim</option>
+                        <option value="5">Júlia (Vendas)</option>
+                        <option value="null">Agente IA (Automação)</option>
+                    </select>
+                </div>
                 <div class="form-group">
                     <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--color-dark-500);margin-top:10px;">
                         <input type="checkbox" id="syncCalendar" checked>
@@ -510,6 +518,15 @@
             document.getElementById('taskTitulo').value = task.titulo;
             document.getElementById('taskDescricao').value = task.descricao || '';
             document.getElementById('taskStatus').value = task.status;
+            
+            if (task.user_id === null) {
+                document.getElementById('taskResponsavel').value = 'null';
+            } else if (task.user_id) {
+                document.getElementById('taskResponsavel').value = task.user_id; // Try to set it to 5, if it's not in options, it defaults to first
+            } else {
+                document.getElementById('taskResponsavel').value = 'current';
+            }
+
             if (task.data_vencimento) {
                 // Formatar para yyyy-MM-ddThh:mm
                 const d = new Date(task.data_vencimento);
@@ -524,6 +541,7 @@
             document.getElementById('taskTitulo').value = '';
             document.getElementById('taskDescricao').value = '';
             document.getElementById('taskStatus').value = 'pendente';
+            document.getElementById('taskResponsavel').value = 'current';
             document.getElementById('taskData').value = '';
         }
     }
@@ -556,6 +574,7 @@
         const descricao = document.getElementById('taskDescricao').value.trim();
         const status = document.getElementById('taskStatus').value;
         const datestr = document.getElementById('taskData').value;
+        const responsavel = document.getElementById('taskResponsavel').value;
         
         if (!titulo) {
             document.getElementById('taskAlertMsg').textContent = 'Título é obrigatório';
@@ -570,14 +589,18 @@
             tipo: 'manual' // Default para criações manuais (A IA via API passa automatica)
         };
         
+        if (responsavel === 'null') {
+            body.user_id = null;
+        } else if (responsavel !== 'current') {
+            body.user_id = parseInt(responsavel);
+        }
+        
         if (datestr) {
             body.data_vencimento = new Date(datestr).toISOString();
         }
 
         const syncCalendar = document.getElementById('syncCalendar').checked;
         if (syncCalendar && !id) {
-            // Se tiver o checkbox selecionado (normalmente enviaria um webhook aqui, mas podemos sinalizar salvando uma tag ou esperando que a engine backend/n8n processe isso)
-            // Em tese, aqui preparamos os dados para informar isso. Para fim demonstrativo e mock:
             body.google_calendar_event_id = "pending_sync"; 
         }
 

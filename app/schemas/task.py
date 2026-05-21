@@ -10,6 +10,7 @@ class TaskBase(BaseModel):
     status: TaskStatus = TaskStatus.PENDENTE
     tipo: TaskType = TaskType.MANUAL
     lead_id: Optional[int] = None
+    user_id: Optional[int] = None
     google_calendar_event_id: Optional[str] = None
     google_calendar_link: Optional[str] = None
 
@@ -24,12 +25,12 @@ class TaskUpdate(BaseModel):
     status: Optional[TaskStatus] = None
     tipo: Optional[TaskType] = None
     lead_id: Optional[int] = None
+    user_id: Optional[int] = None
     google_calendar_event_id: Optional[str] = None
     google_calendar_link: Optional[str] = None
 
 class TaskResponse(TaskBase):
     id: int
-    user_id: int
     created_at: datetime
     updated_at: datetime
 

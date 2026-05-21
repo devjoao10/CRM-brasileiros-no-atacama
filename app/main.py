@@ -64,6 +64,12 @@ async def lifespan(app: FastAPI):
                 conn.execute(text("ALTER TABLE leads ADD COLUMN dias_por_destino JSON DEFAULT NULL"))
                 logger.info("✅ Migration: added 'dias_por_destino' column to leads table")
             
+            # Allow tasks to be assigned to AI (user_id = NULL)
+            try:
+                conn.execute(text("ALTER TABLE tasks ALTER COLUMN user_id DROP NOT NULL"))
+            except Exception as e:
+                logger.warning(f"⚠️ Could not alter user_id in tasks: {e}")
+            
             # Criando índices de performance com segurança (IF NOT EXISTS)
             try:
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_leads_created_at ON leads (created_at)"))

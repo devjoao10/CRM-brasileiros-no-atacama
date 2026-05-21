@@ -55,7 +55,15 @@ def create_task(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    new_task = Task(**data.model_dump(), user_id=current_user.id)
+    # Se user_id for explicitamente enviado (inclusive None para IA), use-o. 
+    # Senão, assume o usuário logado.
+    if data.user_id is not None or "user_id" in data.model_dump(exclude_unset=True):
+        final_user_id = data.user_id
+    else:
+        final_user_id = current_user.id
+        
+    task_data = data.model_dump(exclude={"user_id"})
+    new_task = Task(**task_data, user_id=final_user_id)
     
     db.add(new_task)
     db.commit()
