@@ -40,14 +40,9 @@ def _json_list_contains(column, value: str):
         return column.op("@>")(json.dumps([value]))
 
 
-def _build_lead_response(lead: Lead, db: Session) -> LeadResponse:
-    """Build LeadResponse with funnel info populated."""
-    entries = (
-        db.query(FunnelEntry)
-        .filter(FunnelEntry.lead_id == lead.id)
-        .options(joinedload(FunnelEntry.funnel))
-        .all()
-    )
+def _build_lead_response(lead: Lead) -> LeadResponse:
+    """Build LeadResponse with funnel info populated using pre-loaded relationships."""
+    entries = lead.funnel_entries if hasattr(lead, 'funnel_entries') else []
 
     funis = []
     for entry in entries:
@@ -66,23 +61,18 @@ def _build_lead_response(lead: Lead, db: Session) -> LeadResponse:
                 entry_id=entry.id,
             ))
 
-    # Get responsavel name
-    responsavel_nome = None
-    if lead.responsavel_id:
-        responsavel = db.query(User).filter(User.id == lead.responsavel_id).first()
-        if responsavel:
-            responsavel_nome = responsavel.nome
+    responsavel_nome = lead.responsavel.nome if lead.responsavel else ("Agente IA" if lead.responsavel_id is None else None)
 
     resp = LeadResponse.model_validate(lead)
     resp.funis = funis
-    resp.responsavel_nome = responsavel_nome or ("Agente IA" if lead.responsavel_id is None else None)
+    resp.responsavel_nome = responsavel_nome
     return resp
 
 
 # ─── CRUD ────────────────────────────────────────────────────────────
 
 @router.get("", response_model=LeadListResponse, summary="Listar leads")
-async def list_leads(
+def list_leads(
     skip: int = Query(0, ge=0, description="Registros para pular"),
     limit: int = Query(100, ge=1, le=500, description="Máximo de registros"),
     search: Optional[str] = Query(None, description="Busca por nome, email ou whatsapp"),
@@ -103,7 +93,10 @@ async def list_leads(
     O campo destinos é uma lista. O filtro `destino=Atacama` retorna leads que
     possuem "Atacama" em sua lista de destinos.
     """
-    query = db.query(Lead)
+    query = db.query(Lead).options(
+        joinedload(Lead.responsavel),
+        joinedload(Lead.funnel_entries).joinedload(FunnelEntry.funnel)
+    )
 
     if search:
         search_filter = f"%{search}%"
@@ -142,12 +135,12 @@ async def list_leads(
         total=total,
         skip=skip,
         limit=limit,
-        leads=[_build_lead_response(l, db) for l in leads],
+        leads=[_build_lead_response(l) for l in leads],
     )
 
 
 @router.get("/destinos", summary="Listar destinos disponíveis")
-async def list_destinos(
+def list_destinos(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -165,7 +158,7 @@ async def list_destinos(
 
 
 @router.get("/segment", response_model=LeadListResponse, summary="Segmentação avançada de leads")
-async def segment_leads(
+def segment_leads(
     # Paginação
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
@@ -328,7 +321,7 @@ async def list_custom_field_keys(
 
 
 @router.get("/{lead_id}", response_model=LeadResponse, summary="Detalhes de um lead")
-async def get_lead(
+def get_lead(
     lead_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -341,7 +334,7 @@ async def get_lead(
 
 
 @router.post("", response_model=LeadResponse, status_code=201, summary="Criar lead")
-async def create_lead(
+def create_lead(
     data: LeadCreate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -380,7 +373,7 @@ async def create_lead(
 
 
 @router.put("/{lead_id}", response_model=LeadResponse, summary="Atualizar lead")
-async def update_lead(
+def update_lead(
     lead_id: int,
     data: LeadUpdate,
     current_user: User = Depends(get_current_user),
@@ -406,7 +399,7 @@ async def update_lead(
 
 
 @router.delete("/{lead_id}", summary="Excluir lead permanentemente")
-async def delete_lead(
+def delete_lead(
     lead_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -550,7 +543,7 @@ def _process_row(row: dict, header_map: dict) -> dict:
 
 
 @router.post("/import", response_model=ImportResponse, summary="Importar leads de Excel/CSV")
-async def import_leads(
+def import_leads(
     file: UploadFile = File(..., description="Arquivo .xlsx, .xls ou .csv"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -573,7 +566,7 @@ async def import_leads(
     **N8N**: Envie o arquivo como `multipart/form-data`.
     """
     filename = file.filename.lower() if file.filename else ""
-    content = await file.read()
+    content = file.file.read()
     
     if len(content) > MAX_UPLOAD_SIZE_BYTES:
         raise HTTPException(
@@ -685,7 +678,7 @@ async def import_leads(
 
 @router.get("/by-whatsapp/{whatsapp}", response_model=LeadResponse,
             summary="Buscar lead pelo WhatsApp")
-async def get_lead_by_whatsapp(
+def get_lead_by_whatsapp(
     whatsapp: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -723,7 +716,7 @@ async def get_lead_by_whatsapp(
 
 @router.put("/{lead_id}/responsavel", response_model=LeadResponse,
             summary="Alterar responsável do lead")
-async def update_lead_responsavel(
+def update_lead_responsavel(
     lead_id: int,
     responsavel_id: Optional[int] = Query(None, description="ID do novo responsável (null = Agente IA)"),
     current_user: User = Depends(get_current_user),

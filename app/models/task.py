@@ -21,9 +21,9 @@ class Task(Base):
     id = Column(Integer, primary_key=True, index=True)
     titulo = Column(String(200), nullable=False)
     descricao = Column(Text, nullable=True)
-    data_vencimento = Column(DateTime(timezone=True), nullable=True)
+    data_vencimento = Column(DateTime(timezone=True), nullable=True, index=True)
     
-    status = Column(SAEnum(TaskStatus), default=TaskStatus.PENDENTE, nullable=False)
+    status = Column(SAEnum(TaskStatus), default=TaskStatus.PENDENTE, nullable=False, index=True)
     tipo = Column(SAEnum(TaskType), default=TaskType.MANUAL, nullable=False)
     
     google_calendar_event_id = Column(String(255), nullable=True)
@@ -34,8 +34,8 @@ class Task(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Foreign Keys
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    lead_id = Column(Integer, ForeignKey("leads.id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    lead_id = Column(Integer, ForeignKey("leads.id"), nullable=True, index=True)
 
     # Relationships
     user = relationship("app.models.user.User", backref="tasks")

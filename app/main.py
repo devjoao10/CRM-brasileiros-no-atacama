@@ -63,6 +63,17 @@ async def lifespan(app: FastAPI):
             if 'dias_por_destino' not in existing_cols:
                 conn.execute(text("ALTER TABLE leads ADD COLUMN dias_por_destino JSON DEFAULT NULL"))
                 logger.info("✅ Migration: added 'dias_por_destino' column to leads table")
+            
+            # Criando índices de performance com segurança (IF NOT EXISTS)
+            try:
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_leads_created_at ON leads (created_at)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_status ON tasks (status)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_user_id ON tasks (user_id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_lead_id ON tasks (lead_id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_data_vencimento ON tasks (data_vencimento)"))
+                logger.info("✅ Migration: Performance indexes verified/created")
+            except Exception as e:
+                logger.warning(f"⚠️ Index creation failed (might already exist): {e}")
     seed_database()
     _cleanup_old_uploads(max_age_hours=24)
     yield

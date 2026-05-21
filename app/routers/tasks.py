@@ -12,7 +12,7 @@ from app.models.user import User, UserRole
 router = APIRouter(prefix="/api/tasks", tags=["Tarefas"])
 
 @router.get("", response_model=List[TaskResponse], summary="Listar tarefas")
-async def list_tasks(
+def list_tasks(
     status: Optional[TaskStatus] = Query(None, description="Filtrar por status"),
     tipo: Optional[TaskType] = Query(None, description="Filtrar por tipo (manual/automatica)"),
     due_date: Optional[date] = Query(None, description="Filtrar por data exata (YYYY-MM-DD)"),
@@ -50,7 +50,7 @@ async def list_tasks(
     return tasks
 
 @router.post("", response_model=TaskResponse, status_code=201, summary="Criar tarefa")
-async def create_task(
+def create_task(
     data: TaskCreate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -64,7 +64,7 @@ async def create_task(
     return new_task
 
 @router.put("/{task_id}", response_model=TaskResponse, summary="Atualizar tarefa")
-async def update_task(
+def update_task(
     task_id: int,
     data: TaskUpdate,
     current_user: User = Depends(get_current_user),
@@ -87,7 +87,7 @@ async def update_task(
     return task
 
 @router.delete("/{task_id}", summary="Excluir tarefa")
-async def delete_task(
+def delete_task(
     task_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
