@@ -29,7 +29,12 @@
         loadConversations();
 
         // Poll for new messages every 5 seconds
-        pollInterval = setInterval(loadConversations, 5000);
+        pollInterval = setInterval(() => {
+            loadConversations();
+            if (activeConversation) {
+                loadChat(activeConversation.id);
+            }
+        }, 5000);
     });
 
     // ─── Load Users ─────────────────────────────
