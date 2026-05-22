@@ -1,0 +1,171 @@
+{
+  "name": "Envio de Tarefas por Responsável",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "c217ca4b-6f97-4cde-973b-802e85e0b0d0",
+      "name": "Todo Dia às 08:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -880,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://crm:8000/api/tasks",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "status",
+              "value": "pendente"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b17248bd-b401-44eb-9a28-73800e75fb00",
+      "name": "Buscar Tarefas Pendentes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        -656,
+        32
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QulESeRfj4JdhZUI",
+          "name": "CRM Brasileiros API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const tarefas = $input.all().map(item => item.json);\n\n// === EMAILS REAIS DOS RESPONSÁVEIS ===\n// Quando os emails do CRM forem corrigidos, basta atualizar aqui.\nconst responsaveis = {\n  1: { nome: \"João Pedro\", email: \"joaopedro.fg.baldo@gmail.com\" },\n  5: { nome: \"Júlia\", email: \"EMAIL_REAL_DA_JULIA@gmail.com\" }\n  // Novo vendedor? Só adicionar: 6: { nome: \"Fulano\", email: \"fulano@gmail.com\" }\n};\n\nconst hojeData = new Date();\nhojeData.setUTCHours(hojeData.getUTCHours() - 3);\nconst hojeStr = hojeData.toISOString().split('T')[0];\n\n// Agrupa tarefas por user_id\nconst tarefasPorUsuario = {};\n\nfor (const t of tarefas) {\n  const uid = t.user_id;\n  if (!uid || !responsaveis[uid]) continue;\n\n  if (!tarefasPorUsuario[uid]) {\n    tarefasPorUsuario[uid] = { atrasadas: [], hoje: [] };\n  }\n\n  if (!t.data_vencimento) continue;\n\n  const vencData = new Date(t.data_vencimento);\n  vencData.setUTCHours(vencData.getUTCHours() - 3);\n  const vencStr = vencData.toISOString().split('T')[0];\n\n  if (vencStr < hojeStr) {\n    tarefasPorUsuario[uid].atrasadas.push(t);\n  } else if (vencStr === hojeStr) {\n    tarefasPorUsuario[uid].hoje.push(t);\n  }\n}\n\n// Monta um item de saída POR RESPONSÁVEL\nconst output = [];\n\nfor (const [uid, grupo] of Object.entries(tarefasPorUsuario)) {\n  const user = responsaveis[uid];\n  const totalEnviar = grupo.atrasadas.length + grupo.hoje.length;\n\n  let html = `<div style=\"font-family: Arial, sans-serif; color: #333; line-height: 1.6; max-width: 600px; margin: auto; border: 1px solid #ddd; padding: 20px; border-radius: 8px;\">`;\n  html += `<h2 style=\"color: #FF5A5F;\">Bom dia, ${user.nome}! ☀️</h2>`;\n  html += `<p>Aqui está o resumo das <b>suas</b> atividades para hoje. Vamos com tudo!</p>`;\n\n  if (grupo.atrasadas.length > 0) {\n    html += `<h3 style=\"color: #D32F2F; border-bottom: 2px solid #D32F2F; padding-bottom: 5px;\">🚨 Tarefas Atrasadas (Urgência Máxima)</h3><ul style=\"padding-left: 20px;\">`;\n    for (const t of grupo.atrasadas) {\n      const vencData = new Date(t.data_vencimento);\n      vencData.setUTCHours(vencData.getUTCHours() - 3);\n      const parts = vencData.toISOString().split('T')[0].split('-');\n      const dataBR = `${parts[2]}/${parts[1]}/${parts[0]}`;\n      const horario = vencData.toISOString().split('T')[1].substring(0, 5);\n      const desc = t.descricao ? `<br><span style=\"color: #555;\"><i>\"${t.descricao}\"</i></span>` : '';\n      html += `<li style=\"margin-bottom: 12px;\"><b>${t.titulo}</b>${desc}<br><small style=\"color: #777;\">Vencimento original: ${dataBR} às ${horario} | ID Lead: #${t.lead_id || 'N/A'}</small></li>`;\n    }\n    html += `</ul>`;\n  }\n\n  if (grupo.hoje.length > 0) {\n    html += `<h3 style=\"color: #1976D2; border-bottom: 2px solid #1976D2; padding-bottom: 5px;\">📅 Tarefas para Hoje</h3><ul style=\"padding-left: 20px;\">`;\n    for (const t of grupo.hoje) {\n      const vencData = new Date(t.data_vencimento);\n      vencData.setUTCHours(vencData.getUTCHours() - 3);\n      const horario = vencData.toISOString().split('T')[1].substring(0, 5);\n      const desc = t.descricao ? `<br><span style=\"color: #555;\"><i>\"${t.descricao}\"</i></span>` : '';\n      html += `<li style=\"margin-bottom: 12px;\"><b>${t.titulo}</b>${desc}<br><small style=\"color: #777;\">Horário: ${horario} | ID Lead: #${t.lead_id || 'N/A'}</small></li>`;\n    }\n    html += `</ul>`;\n  } else if (grupo.atrasadas.length === 0) {\n    html += `<p style=\"color: #2E7D32; font-weight: bold;\">✅ Não há tarefas agendadas para hoje!</p>`;\n  }\n\n  html += `<hr style=\"border: 0; border-top: 1px solid #eee; margin: 20px 0;\">`;\n  html += `<p style=\"font-size: 12px; color: #999;\">Por favor, atualize o status no CRM assim que concluir.</p></div>`;\n\n  output.push({\n    json: {\n      html_email: html,\n      total_enviar: totalEnviar,\n      email_destino: user.email,\n      nome_responsavel: user.nome\n    }\n  });\n}\n\nreturn output;"
+      },
+      "id": "2002576d-bcbc-45b6-8d32-d38f58c798d4",
+      "name": "Formatar E-mail (HTML)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.total_enviar }}"
+            }
+          ]
+        }
+      },
+      "id": "c220debe-5c6b-4412-88bd-874639966002",
+      "name": "Tem tarefas?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -224,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "{{ $json.email_destino }}",
+        "subject": "Pauta do Dia: Suas Tarefas no CRM - {{ $json.nome_responsavel }}",
+        "message": "={{ $json.html_email }}",
+        "options": {}
+      },
+      "id": "ae1df2a7-1985-4d14-ae98-9111d031c1c3",
+      "name": "Disparar Gmail",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        64,
+        48
+      ],
+      "webhookId": "4467e0c7-e8ad-4d5f-91bc-e795a7be4620",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "SzxEuybhMFsQE2k1",
+          "name": "Gmail account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Todo Dia às 08:00": {
+      "main": [
+        [
+          {
+            "node": "Buscar Tarefas Pendentes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Tarefas Pendentes": {
+      "main": [
+        [
+          {
+            "node": "Formatar E-mail (HTML)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatar E-mail (HTML)": {
+      "main": [
+        [
+          {
+            "node": "Tem tarefas?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tem tarefas?": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Disparar Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "7540610c-f798-4f9b-9412-62667650cac0",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "083aac8fdc212de887e980aca64dcecc5afaa37badada0c3ad26e1ea83120112"
+  },
+  "id": "vtj8ZfQLBn1Ai38R",
+  "tags": []
+}

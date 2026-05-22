@@ -1,0 +1,155 @@
+{
+  "name": "Notificação WhatsApp",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "notificacao",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a2b844b7-9fd0-4cb6-b511-e81d134eee7c",
+      "name": "Webhook Notificação",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "notificacao",
+      "notes": "Recebe chamadas do Gerenciador de Leads para enviar notificações via WhatsApp.\n\nPayload esperado:\n{\n  \"tipo\": \"lead_qualificado\" | \"tarefa_criada\" | \"custom\",\n  \"nome\": \"Nome do lead\",\n  \"whatsapp\": \"555190119605\",\n  \"email\": \"email@example.com\",\n  \"destinos\": \"Atacama, Uyuni\",\n  \"data_chegada\": \"2026-06-01\",\n  \"data_partida\": \"2026-06-07\",\n  \"num_viajantes\": \"2\",\n  \"observacoes\": \"Casal, viagem romântica\",\n  \"titulo_tarefa\": \"Enviar proposta\",\n  \"vencimento_tarefa\": \"2026-05-21\"\n}"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\n\n// Puxando os dados que chegaram\nconst tipo = (input.tipo || input.body?.tipo || 'lead_qualificado').toLowerCase();\nconst nome = input.nome || input.body?.nome || 'Não informado';\nconst whatsapp = input.whatsapp || input.body?.whatsapp || 'Não informado';\nconst destinos = input.destinos || input.body?.destinos || 'Não informado';\nconst numViajantes = input.num_viajantes || input.body?.num_viajantes || 'Não informado';\n\n// Coloque o número do WhatsApp da Júlia/Equipe aqui dentro das aspas simples (com DDI e DDD)\nconst destinatario = '5551990119605';\n\nreturn [{\n  json: {\n    destinatario,\n    nome_lead: nome,\n    destinos: destinos,\n    whatsapp_lead: whatsapp,\n    viajantes: numViajantes.toString(),\n    tipo,\n    sucesso: true\n  }\n}];"
+      },
+      "id": "77610cbd-d3f6-4232-8aa5-a3a9fef4a531",
+      "name": "Formatar Mensagem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        272,
+        0
+      ],
+      "notes": "Formata a mensagem de notificação de acordo com o tipo:\n- lead_qualificado: dados completos do lead qualificado pela Bia\n- tarefa_criada: detalhes da tarefa automática\n- custom: mensagem genérica\n\nUsa NOTIFICACAO_WHATSAPP ou ADMIN_WHATSAPP como número destino."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/1179664375222126/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"messaging_product\": \"whatsapp\",\n  \"to\": \"{{ $json.destinatario }}\", \n  \"type\": \"template\",\n  \"template\": {\n    \"name\": \"alerta_novo_lead\",\n    \"language\": {\n      \"code\": \"pt_BR\"\n    },\n    \"components\": [\n      {\n        \"type\": \"body\",\n        \"parameters\": [\n          { \"type\": \"text\", \"text\": \"{{ $json.nome_lead }}\" },\n          { \"type\": \"text\", \"text\": \"{{ $json.destinos }}\" },\n          { \"type\": \"text\", \"text\": \"{{ $json.whatsapp_lead }}\" },\n          { \"type\": \"text\", \"text\": \"{{ $json.viajantes }}\" }\n        ]\n      }\n    ]\n  }\n}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "04cb6c97-ed53-48ff-9f64-bf286f43dad3",
+      "name": "Enviar WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        528,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "0zkAccTeEjOZfYmV",
+          "name": "Meta WhatsApp API"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "notes": "Envia a notificação formatada via WhatsApp usando a API do Conversas.\n\nRequer:\n- NOTIFICACAO_WHATSAPP ou ADMIN_WHATSAPP: variável N8N com o número destino\n- CRM_API_KEY: chave de autenticação da API\n- Conversas rodando com WhatsApp configurado"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"sucesso\": true, \"tipo\": $('Formatar Mensagem').item.json.tipo, \"destinatario\": $('Formatar Mensagem').item.json.destinatario, \"mensagem\": \"Notificação enviada com sucesso\" } }}\n",
+        "options": {}
+      },
+      "id": "203c2e3f-9a94-4b64-aaf5-d79f67d78772",
+      "name": "Responder ao Gerenciador",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        784,
+        0
+      ],
+      "notes": "Retorna confirmação para o Gerenciador de Leads informando que a notificação foi enviada."
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook Notificação": {
+      "main": [
+        [
+          {
+            "node": "Formatar Mensagem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatar Mensagem": {
+      "main": [
+        [
+          {
+            "node": "Enviar WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Responder ao Gerenciador",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Responder ao Gerenciador": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "a9fff695-494d-4368-ac63-e2cb449bca17",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "083aac8fdc212de887e980aca64dcecc5afaa37badada0c3ad26e1ea83120112"
+  },
+  "id": "prM7IEhhDyg5mwlM",
+  "tags": [
+    {
+      "updatedAt": "2026-05-05T20:34:55.577Z",
+      "createdAt": "2026-05-05T20:34:55.577Z",
+      "id": "3Ep8CnpaNhvSmzLk",
+      "name": "CRM Atacama"
+    },
+    {
+      "updatedAt": "2026-05-19T19:27:08.153Z",
+      "createdAt": "2026-05-19T19:27:08.153Z",
+      "id": "HAiz9kkp9bsnJp1d",
+      "name": "Conversas"
+    },
+    {
+      "updatedAt": "2026-05-19T19:27:08.160Z",
+      "createdAt": "2026-05-19T19:27:08.160Z",
+      "id": "ViTYPyc9I8XUBvU6",
+      "name": "Notificações"
+    }
+  ]
+}

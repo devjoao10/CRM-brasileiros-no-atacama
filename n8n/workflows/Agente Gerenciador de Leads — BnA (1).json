@@ -1,0 +1,850 @@
+{
+  "name": "Agente Gerenciador de Leads — BnA",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "gerenciador-leads",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "2eabee3d-e4bf-4e07-b9a3-6bb55832df49",
+      "name": "Webhook Gerenciador",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1888,
+        160
+      ],
+      "webhookId": "gerenciador-leads-bna"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Processe o seguinte payload recebido da Bia:\n\n{{ JSON.stringify($json.body, null, 2) }}",
+        "options": {
+          "systemMessage": "Você é o Gerenciador de Leads do CRM. Seu trabalho é processar o payload recebido e usar as tools para salvar as informações no CRM.\n\nAo criar ou atualizar o lead, repasse TODOS os campos do payload para a tool. Mapeamento direto:\n- nome → nome\n- whatsapp → whatsapp\n- destinos → destinos\n- email → email\n- num_viajantes → num_viajantes\n- num_criancas → num_criancas\n- idades_criancas → idades_criancas\n- data_chegada → data_chegada\n- data_partida → data_partida\n- total_dias → total_dias\n- datas_destinos → datas_destinos\n- dias_por_destino → dias_por_destino\nSe algum campo veio vazio no payload, envie vazio \"\". Nunca omita campos.\n\nAo adicionar nota no lead, use SEMPRE este formato (cada linha separada por quebra de linha):\n\n\nRESUMO: [contexto_conversa da Bia]\nCOMPOSICAO: [X adultos + Y criancas (idades)]\nPERIODO: [datas ou total de dias]\nDESTINOS: [destino(s) e divisao de dias se tiver]\nACAO: [o que foi feito - lead criado, atualizado, tags, funil]\nSTATUS: [pronto_para_humano true/false]\n\nIMPORTANTE: Coloque uma linha em branco entre a data e o RESUMO. Omita campos que nao tiverem informacao.\n\nTROCA DE RESPONSÁVEL E NOTIFICAÇÃO:\nVerifique o campo \"pronto_para_humano\" no payload recebido:\n- Se \"pronto_para_humano\" for \"true\", siga EXATAMENTE estes 2 passos finais:\n  1. Chame a tool \"Alterar Responsavel\" repassando o \"lead_id\" numérico do cliente. Isso transferirá o lead para a equipe humana (Júlia - ID 5).\n  2. Logo em seguida, chame a tool \"Acionar Notificador\" passando os dados solicitados, para que a equipe de vendas seja avisada imediatamente.\n- Se \"pronto_para_humano\" for \"false\", NÃO chame nenhuma dessas duas tools (nem Alterar Responsavel, nem Acionar Notificador)."
+        }
+      },
+      "id": "37b52018-3651-4ced-9b85-ccf7f7170017",
+      "name": "Agente Gerenciador de Leads",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        -1600,
+        160
+      ],
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "6829a4dd-d31a-4d94-bae8-a293bddb646d",
+      "name": "Gemini 2.5 Flash",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -1600,
+        368
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "bfExCtzPat75eohQ",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { output: $json.output } }}",
+        "options": {}
+      },
+      "id": "e69bb4a7-826e-438f-83c8-d06ce793b839",
+      "name": "Responder ao Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -1328,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "toolDescription": "Busca um lead no CRM pelo numero WhatsApp. Retorna dados completos incluindo nome, email, destinos, num_viajantes, funis e tags. Use SEMPRE primeiro para verificar se o lead ja existe. Se retornar 404 o lead nao existe.",
+        "url": "http://crm:8000/api/leads/by-whatsapp/{whatsapp}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "whatsapp",
+              "description": "\tNumero WhatsApp do lead com DDD e codigo do pais"
+            }
+          ]
+        }
+      },
+      "id": "4abe1e49-a02d-44f8-8254-53e8ff22da4e",
+      "name": "Tool Buscar Lead WhatsApp",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        -2864,
+        448
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QulESeRfj4JdhZUI",
+          "name": "CRM Brasileiros API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Cria um novo lead no CRM. Use apenas quando buscar_lead_whatsapp retornar 404. Campos obrigatorios: nome e whatsapp. Repasse obrigatoriamente todos os campos mapeados. Se algum dado nao foi coletado na conversa, nao preencha o campo. Deixe vazio os campos que nao tiver informacao.",
+        "method": "POST",
+        "url": "http://crm:8000/api/leads",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"nome\": \"{nome}\",\n  \"whatsapp\": \"{whatsapp}\",\n  \"destinos\": \"{destinos}\",\n  \"email\": \"{email}\",\n  \"num_viajantes\": \"{num_viajantes}\",\n  \"num_criancas\": \"{num_criancas}\",\n  \"idades_criancas\": \"{idades_criancas}\",\n  \"data_chegada\": \"{data_chegada}\",\n  \"data_partida\": \"{data_partida}\",\n  \"total_dias\": \"{total_dias}\",\n  \"datas_destinos\": {datas_destinos},\n  \"dias_por_destino\": {dias_por_destino}\n}",
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "nome",
+              "description": "Nome completo do lead"
+            },
+            {
+              "name": "whatsapp",
+              "description": "Numero WhatsApp com DDD e codigo do pais"
+            },
+            {
+              "name": "destinos",
+              "description": "Destino da viagem ex Atacama ou Uyuni ou Santiago"
+            },
+            {
+              "name": "email",
+              "description": "Email do lead"
+            },
+            {
+              "name": "num_viajantes",
+              "description": "Numero de viajantes ADULTOS. Nao incluir criancas neste campo. Se vier no payload, preencha. Se não, envie vazio \"\""
+            },
+            {
+              "name": "data_chegada",
+              "description": "Data de chegada formato YYYY-MM-DD"
+            },
+            {
+              "name": "data_partida",
+              "description": "Data de partida formato YYYY-MM-DD"
+            },
+            {
+              "name": "num_criancas",
+              "description": "Numero de criancas. 0 se nao tem criancas"
+            },
+            {
+              "name": "idades_criancas",
+              "description": "Idades das criancas separadas por virgula. Ex: 6, 6, 3"
+            },
+            {
+              "name": "total_dias",
+              "description": "Total de dias da viagem quando o cliente nao sabe as datas exatas"
+            },
+            {
+              "name": "datas_destinos",
+              "description": "JSON com datas por destino. Envie {} se nao souber"
+            },
+            {
+              "name": "dias_por_destino",
+              "description": "Dias separados por destino (JSON), ex: {\"Atacama\": 6}. Envie {} se nao souber"
+            }
+          ]
+        }
+      },
+      "id": "7559aec3-2ed8-4f09-a78a-dd04620a0b06",
+      "name": "Tool Criar Lead",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        -2640,
+        448
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QulESeRfj4JdhZUI",
+          "name": "CRM Brasileiros API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Atualiza dados de um lead existente no CRM. Envie APENAS os campos que possuem informacao nova. Se um campo nao foi mencionado na conversa, nao envie. Campos sem informacao devem ficar vazios, nao invente dados.",
+        "method": "PUT",
+        "url": "http://crm:8000/api/leads/{lead_id}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"nome\": \"{nome}\",\n  \"whatsapp\": \"{whatsapp}\",\n  \"destinos\": \"{destinos}\",\n  \"email\": \"{email}\",\n  \"num_viajantes\": \"{num_viajantes}\",\n  \"num_criancas\": \"{num_criancas}\",\n  \"idades_criancas\": \"{idades_criancas}\",\n  \"data_chegada\": \"{data_chegada}\",\n  \"data_partida\": \"{data_partida}\",\n  \"total_dias\": \"{total_dias}\",\n  \"datas_destinos\": {datas_destinos},\n  \"dias_por_destino\": {dias_por_destino}\n}",
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "lead_id",
+              "description": "ID numerico do lead"
+            },
+            {
+              "name": "nome",
+              "description": "Nome atualizado do lead"
+            },
+            {
+              "name": "whatsapp",
+              "description": "WhatsApp atualizado"
+            },
+            {
+              "name": "destinos",
+              "description": "Destino atualizado ex Atacama"
+            },
+            {
+              "name": "email",
+              "description": "Email atualizado"
+            },
+            {
+              "name": "num_viajantes",
+              "description": "Numero de viajantes ADULTOS. Nao incluir criancas neste campo. Se vier no payload, preencha. Se não, envie vazio \"\""
+            },
+            {
+              "name": "data_chegada",
+              "description": "Data de chegada formato YYYY-MM-DD"
+            },
+            {
+              "name": "data_partida",
+              "description": "Data de partida formato YYYY-MM-DD"
+            },
+            {
+              "name": "num_criancas",
+              "description": "Numero de criancas. Envie \"0\" se nao tem criancas"
+            },
+            {
+              "name": "idades_criancas",
+              "description": "Idades das criancas separadas por virgula. Ex: 6, 6, 3. Envie vazio \"\" se nao tem criancas"
+            },
+            {
+              "name": "total_dias",
+              "description": "Total de dias da viagem quando o cliente nao sabe as datas exatas. Envie vazio \"\" se nao souber"
+            },
+            {
+              "name": "datas_destinos",
+              "description": "JSON com datas por destino. Envie {} se nao souber"
+            },
+            {
+              "name": "dias_por_destino",
+              "description": "Dias separados por destino (JSON), ex: {\"Atacama\": 6}. Envie {} se nao souber"
+            }
+          ]
+        }
+      },
+      "id": "d64b68be-8b77-4b0d-aa16-247278153fa2",
+      "name": "Tool Atualizar Lead",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        -2432,
+        448
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QulESeRfj4JdhZUI",
+          "name": "CRM Brasileiros API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Lista todas as tags disponiveis no CRM com seus IDs e nomes. Use para descobrir quais tags existem antes de aplicar ao lead. Nao invente tags, use apenas as retornadas.",
+        "url": "http://crm:8000/api/tags",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "ae64cc35-58d9-43a2-a520-f20a88a5f72a",
+      "name": "Tool Listar Tags",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        -2208,
+        448
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QulESeRfj4JdhZUI",
+          "name": "CRM Brasileiros API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Retorna as tags atualmente aplicadas a um lead especifico. Use ANTES de definir_tags para nao perder tags existentes, pois definir_tags substitui todas.",
+        "url": "http://crm:8000/api/tags/lead/{lead_id}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "lead_id",
+              "description": "ID numerico do lead"
+            }
+          ]
+        }
+      },
+      "id": "dc49c08f-39a1-42af-9a1e-cad169a854bd",
+      "name": "Tool Buscar Tags Lead",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        -1984,
+        448
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QulESeRfj4JdhZUI",
+          "name": "CRM Brasileiros API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Define as tags de um lead. ATENCAO: substitui TODAS as tags existentes. Envie a lista completa incluindo as tags atuais mais as novas. Sempre use buscar_tags_lead antes para pegar as atuais.",
+        "method": "PUT",
+        "url": "http://crm:8000/api/tags/lead/{lead_id}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"tag_ids\": {tag_ids}\n}\n",
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "lead_id",
+              "description": "ID numerico do lead"
+            },
+            {
+              "name": "tag_ids",
+              "description": "Array JSON de IDs das tags ex [1, 2, 3]"
+            }
+          ]
+        }
+      },
+      "id": "ee419edb-fc40-47bc-a536-97279f04bacb",
+      "name": "Tool Definir Tags Lead",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        -1776,
+        480
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QulESeRfj4JdhZUI",
+          "name": "CRM Brasileiros API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Lista todos os funis e etapas do CRM com IDs e nomes. Use para descobrir qual funil corresponde ao destino do lead. NUNCA use IDs fixos, sempre consulte antes. Se o lead nao tem destino definido, nao adicione a nenhum funil.",
+        "url": "http://crm:8000/api/pipeline/funnels",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "d9741b49-a821-43b7-af49-9aac6ead1058",
+      "name": "Tool Listar Funis",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        -1536,
+        480
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QulESeRfj4JdhZUI",
+          "name": "CRM Brasileiros API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Adiciona um lead a um funil em uma etapa especifica. Retorna 409 se o lead ja esta neste funil, nesse caso use mover_etapa. Use somente quando souber o destino do lead para escolher o funil correto.",
+        "method": "POST",
+        "url": "http://crm:8000/api/pipeline/funnels/{funnel_id}/leads",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"lead_id\": \"{lead_id}\",\n  \"etapa_id\": \"{etapa_id}\"\n}\n",
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "funnel_id",
+              "description": "ID numerico do funil"
+            },
+            {
+              "name": "lead_id",
+              "description": "ID numerico do lead"
+            },
+            {
+              "name": "etapa_id",
+              "description": "ID da etapa dentro do funil"
+            }
+          ]
+        }
+      },
+      "id": "8d67d615-77cd-483e-b849-97238c286e0f",
+      "name": "Tool Adicionar ao Funil",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        -1328,
+        448
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QulESeRfj4JdhZUI",
+          "name": "CRM Brasileiros API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Move um lead para outra etapa dentro do mesmo funil. Requer o entry_id que vem do array funis do lead retornado por buscar_lead_whatsapp.",
+        "method": "PUT",
+        "url": "http://crm:8000/api/pipeline/entries/{entry_id}/move",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"etapa_id\": \"{etapa_id}\"\n}\n",
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "entry_id",
+              "description": "ID numerico da entrada no funil"
+            },
+            {
+              "name": "etapa_id",
+              "description": "ID da etapa de destino"
+            }
+          ]
+        }
+      },
+      "id": "9632bf30-e2a2-47d1-a6de-cfdfc01ee662",
+      "name": "Tool Mover Etapa",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        -1104,
+        448
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QulESeRfj4JdhZUI",
+          "name": "CRM Brasileiros API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Transfere um lead de um funil para outro. Use quando o destino do lead mudou. Requer entry_id do funil atual e os IDs do funil e etapa de destino.",
+        "method": "POST",
+        "url": "http://crm:8000/api/pipeline/entries/{entry_id}/transfer",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"destino_funnel_id\": \"{destino_funnel_id}\",\n  \"destino_etapa_id\": \"{destino_etapa_id}\"\n}\n",
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "entry_id",
+              "description": "ID numerico da entrada no funil atual"
+            },
+            {
+              "name": "destino_funnel_id",
+              "description": "ID numerico do funil de destino"
+            },
+            {
+              "name": "destino_etapa_id",
+              "description": "ID da etapa no funil de destino"
+            }
+          ]
+        }
+      },
+      "id": "781048fd-2ea5-4cd8-8a55-26181b11d4d0",
+      "name": "Tool Transferir Funil",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        -880,
+        448
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QulESeRfj4JdhZUI",
+          "name": "CRM Brasileiros API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Registra uma anotacao no lead com timestamp automatico. Use SEMPRE ao final do processamento com um resumo claro do que foi coletado e quais acoes foram executadas no CRM. As anotacoes acumulam e nao sobrescrevem as anteriores.\\",
+        "method": "PUT",
+        "url": "http://crm:8000/api/leads/{lead_id}/anotacoes?texto={texto}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "lead_id",
+              "description": "ID numerico do lead"
+            },
+            {
+              "name": "texto",
+              "description": "Resumo claro do que foi coletado e ações executadas no CRM"
+            }
+          ]
+        }
+      },
+      "id": "c1887c53-9661-4656-8eb4-fa8d6d2965c6",
+      "name": "Tool Adicionar Nota",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        -672,
+        448
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QulESeRfj4JdhZUI",
+          "name": "CRM Brasileiros API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Cria uma tarefa automatica no CRM. Use para follow-up quando lead e qualificado ou quando pronto_para_humano e true. O campo tipo deve ser sempre automatica. Se nao ha necessidade de follow-up, nao crie tarefa.",
+        "method": "POST",
+        "url": "http://crm:8000/api/tasks",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"titulo\": \"{titulo}\",\n  \"descricao\": \"{descricao}\",\n  \"lead_id\": \"{lead_id}\",\n  \"tipo\": \"automatica\",\n  \"data_vencimento\": \"{data_vencimento}\"\n}\n",
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "titulo",
+              "description": "Titulo curto da tarefa"
+            },
+            {
+              "name": "descricao",
+              "description": "Descricao detalhada da tarefa"
+            },
+            {
+              "name": "lead_id",
+              "description": "ID numerico do lead"
+            },
+            {
+              "name": "data_vencimento",
+              "description": "Data e hora ISO 8601 ex 2026-06-01T10:00:00"
+            }
+          ]
+        }
+      },
+      "id": "771c794e-e8c2-4b3a-8795-7bc5bf8dff86",
+      "name": "Tool Criar Tarefa",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        -448,
+        448
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QulESeRfj4JdhZUI",
+          "name": "CRM Brasileiros API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Atribui o lead a equipe humana de vendas. Use APENAS quando o payload contiver pronto_para_humano=true.",
+        "method": "PUT",
+        "url": "=http://crm:8000/api/leads/{lead_id}/responsavel?responsavel_id=5",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "lead_id",
+              "description": "O ID numerico do lead que acabou de ser criado ou atualizado."
+            }
+          ]
+        }
+      },
+      "id": "f8ee2257-283f-4c97-aaa5-2b9e32e57e92",
+      "name": "Tool Alterar Responsavel",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        -224,
+        448
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QulESeRfj4JdhZUI",
+          "name": "CRM Brasileiros API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Envia um alerta para a equipe humana de vendas informando que o lead foi qualificado. Use APENAS quando o payload recebido contiver pronto_para_humano=true.",
+        "method": "POST",
+        "url": "http://n8n:5678/webhook/notificacao",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"tipo\": \"lead_qualificado\",\n  \"nome\": \"{nome}\",\n  \"whatsapp\": \"{whatsapp}\",\n  \"destinos\": \"{destinos}\",\n  \"num_viajantes\": \"{num_viajantes}\"\n}",
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "nome",
+              "description": "Nome do lead"
+            },
+            {
+              "name": "whatsapp",
+              "description": "WhatsApp do lead"
+            },
+            {
+              "name": "destinos",
+              "description": "Destinos da viagem"
+            },
+            {
+              "name": "num_viajantes",
+              "description": "Número de viajantes"
+            }
+          ]
+        }
+      },
+      "id": "ba043d13-13b6-4159-950b-b823eb6b1076",
+      "name": "Tool Acionar Notificador",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        -16,
+        400
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook Gerenciador": {
+      "main": [
+        [
+          {
+            "node": "Agente Gerenciador de Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agente Gerenciador de Leads": {
+      "main": [
+        [
+          {
+            "node": "Responder ao Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini 2.5 Flash": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agente Gerenciador de Leads",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Buscar Lead WhatsApp": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente Gerenciador de Leads",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Criar Lead": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente Gerenciador de Leads",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Atualizar Lead": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente Gerenciador de Leads",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Listar Tags": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente Gerenciador de Leads",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Buscar Tags Lead": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente Gerenciador de Leads",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Definir Tags Lead": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente Gerenciador de Leads",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Listar Funis": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente Gerenciador de Leads",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Adicionar ao Funil": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente Gerenciador de Leads",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Mover Etapa": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente Gerenciador de Leads",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Transferir Funil": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente Gerenciador de Leads",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Adicionar Nota": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente Gerenciador de Leads",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Criar Tarefa": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente Gerenciador de Leads",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Alterar Responsavel": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente Gerenciador de Leads",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Acionar Notificador": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente Gerenciador de Leads",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "669f6a31-5c57-4bad-9025-f493bdb9b30f",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "083aac8fdc212de887e980aca64dcecc5afaa37badada0c3ad26e1ea83120112"
+  },
+  "id": "6o8aUBnewvDU7eTT",
+  "tags": []
+}
