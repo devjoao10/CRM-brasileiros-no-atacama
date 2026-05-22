@@ -29,10 +29,19 @@
         loadConversations();
 
         // Poll for new messages every 5 seconds
-        pollInterval = setInterval(() => {
+        pollInterval = setInterval(async () => {
             loadConversations();
             if (activeConversation) {
-                loadChat(activeConversation.id);
+                const resp = await Auth.apiRequest(`/api/conversations/${activeConversation.id}`);
+                if (!resp || !resp.ok) return;
+                const data = await resp.json();
+                const oldCount = (activeConversation.messages || []).length;
+                const newCount = (data.messages || []).length;
+                if (newCount !== oldCount) {
+                    activeConversation = data;
+                    renderChat();
+                    renderLeadPanel();
+                }
             }
         }, 5000);
     });
