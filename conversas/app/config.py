@@ -28,6 +28,7 @@ META_PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID", "")
 META_API_VERSION = os.getenv("META_API_VERSION", "v21.0")
 META_API_BASE = f"https://graph.facebook.com/{META_API_VERSION}"
 META_WABA_ID = os.getenv("META_WABA_ID", "")  # WhatsApp Business Account ID
+META_APP_SECRET = os.getenv("META_APP_SECRET", "")  # App Secret — valida X-Hub-Signature-256
 
 # ─── N8N Integration ─────────────────────────────
 N8N_BASE_URL = os.getenv("N8N_BASE_URL", "http://127.0.0.1:5678")
