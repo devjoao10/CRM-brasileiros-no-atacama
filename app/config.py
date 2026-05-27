@@ -42,13 +42,21 @@ DATABASE_READONLY_URL = os.getenv("DATABASE_READONLY_URL", DATABASE_URL)
 APP_DOMAIN = os.getenv("APP_DOMAIN", "http://127.0.0.1:8000")
 CONVERSAS_BASE_URL = os.getenv("CONVERSAS_BASE_URL", "http://127.0.0.1:8001")
 
-# Senha inicial do admin — OBRIGATÓRIA em produção, fallback inseguro apenas em dev
-_default_admin_pwd = "admin123" if ENVIRONMENT == "development" else None
-ADMIN_INITIAL_PASSWORD = os.getenv("ADMIN_INITIAL_PASSWORD", _default_admin_pwd)
-if not ADMIN_INITIAL_PASSWORD:
+# ─── Seed do Admin Inicial ────────────────────────────────────────────
+# SEED_INITIAL_ADMIN controla se o admin inicial é criado no startup.
+# Em dev: padrão true (conveniência local). Em prod: padrão false (segurança).
+SEED_INITIAL_ADMIN = os.getenv(
+    "SEED_INITIAL_ADMIN", "true" if ENVIRONMENT == "development" else "false"
+).lower() in ("true", "1", "yes")
+
+ADMIN_INITIAL_EMAIL = os.getenv("ADMIN_INITIAL_EMAIL", "admin@brasileirosnoatacama.com")
+ADMIN_INITIAL_PASSWORD = os.getenv("ADMIN_INITIAL_PASSWORD", "")
+
+# Se seed está ativado, a senha é obrigatória — nunca usa fallback hardcoded.
+if SEED_INITIAL_ADMIN and not ADMIN_INITIAL_PASSWORD:
     raise RuntimeError(
-        "\n\n🔒 ERRO CRÍTICO: ADMIN_INITIAL_PASSWORD não está definida!\n"
-        "Defina a variável de ambiente ADMIN_INITIAL_PASSWORD antes de rodar em produção.\n"
+        "\n\n🔒 ERRO: SEED_INITIAL_ADMIN está ativado mas ADMIN_INITIAL_PASSWORD não foi definida!\n"
+        "Defina ADMIN_INITIAL_PASSWORD no .env ou desative o seed com SEED_INITIAL_ADMIN=false.\n"
     )
 
 # Upload

@@ -1,20 +1,28 @@
 """
 Seed script for local development.
-Creates test users, quick replies, templates, auto-replies, and business hours.
+Creates dev users, quick replies, templates, auto-replies, and business hours.
+
+Controlled by CONVERSAS_SEED_DEV_DATA (default: true in dev, false in prod).
+Dev user credentials come from CONVERSAS_DEV_EMAIL and CONVERSAS_DEV_PASSWORD — no hardcoded values.
 """
 
 import hashlib
 import logging
+import os
 
 from app.database import SessionLocal
 from app.auth import User
+from app.config import ENVIRONMENT
 
 logger = logging.getLogger(__name__)
 
-# ─── Test credentials ────────────────────────
-TEST_EMAIL = "admin@teste.com"
-TEST_PASSWORD = "123456"
-TEST_NAME = "Admin Teste"
+# ─── Seed control ─────────────────────────────────
+CONVERSAS_SEED_DEV_DATA = os.getenv(
+    "CONVERSAS_SEED_DEV_DATA", "true" if ENVIRONMENT == "development" else "false"
+).lower() in ("true", "1", "yes")
+
+CONVERSAS_DEV_EMAIL = os.getenv("CONVERSAS_DEV_EMAIL", "")
+CONVERSAS_DEV_PASSWORD = os.getenv("CONVERSAS_DEV_PASSWORD", "")
 
 
 def _hash_password(password: str) -> str:
@@ -23,23 +31,34 @@ def _hash_password(password: str) -> str:
 
 
 def seed_dev_user():
-    """Create a test user if it doesn't exist."""
+    """Create a dev user if CONVERSAS_SEED_DEV_DATA is enabled and user doesn't exist."""
+    if not CONVERSAS_SEED_DEV_DATA:
+        logger.info("[SEED] Conversas dev seed desativado (CONVERSAS_SEED_DEV_DATA=false)")
+        return
+
+    if not CONVERSAS_DEV_EMAIL or not CONVERSAS_DEV_PASSWORD:
+        raise RuntimeError(
+            "\n\n🔒 ERRO: CONVERSAS_SEED_DEV_DATA está ativado mas CONVERSAS_DEV_EMAIL "
+            "e/ou CONVERSAS_DEV_PASSWORD não foram definidas!\n"
+            "Defina ambas no .env ou desative com CONVERSAS_SEED_DEV_DATA=false.\n"
+        )
+
     db = SessionLocal()
     try:
-        existing = db.query(User).filter(User.email == TEST_EMAIL).first()
+        existing = db.query(User).filter(User.email == CONVERSAS_DEV_EMAIL).first()
         if not existing:
             user = User(
-                nome=TEST_NAME,
-                email=TEST_EMAIL,
-                hashed_password=_hash_password(TEST_PASSWORD),
+                nome="Admin Dev",
+                email=CONVERSAS_DEV_EMAIL,
+                hashed_password=_hash_password(CONVERSAS_DEV_PASSWORD),
                 role="admin",
                 is_active=True,
             )
             db.add(user)
             db.commit()
-            logger.info(f"[SEED] Usuario de teste criado: {TEST_EMAIL} / {TEST_PASSWORD}")
+            logger.info(f"[SEED] Usuario dev criado: {CONVERSAS_DEV_EMAIL}")
         else:
-            logger.info(f"[SEED] Usuario de teste ja existe: {TEST_EMAIL}")
+            logger.info(f"[SEED] Usuario dev ja existe: {CONVERSAS_DEV_EMAIL}")
     finally:
         db.close()
 
