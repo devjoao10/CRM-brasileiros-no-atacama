@@ -9,7 +9,7 @@ replacement = '''                <a href="/docs" class="nav-item" target="_blank
                     <span class="nav-icon">📖</span>
                     <span>API Docs</span>
                 </a>
-                <a href="http://localhost:5678" class="nav-item" target="_blank">
+                <a href="https://n8n.crmbrasileirosnoatacama.cloud" class="nav-item" target="_blank">
                     <span class="nav-icon">⚡</span>
                     <span>Servidor n8n</span>
                 </a>'''

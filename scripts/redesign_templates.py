@@ -81,7 +81,7 @@ def make_nav(active):
         item('/equipe','equipe','Equipe e Usuários'),
         '                <div class="nav-section"><div class="nav-section-title">Sistema</div></div>',
         item('/docs','docs','API Docs','_blank'),
-        item('http://localhost:5678','n8n','Servidor n8n','_blank'),
+        item('https://n8n.crmbrasileirosnoatacama.cloud','n8n','Servidor n8n','_blank'),
         '            </nav>',
     ]
     return '\n'.join(lines)
