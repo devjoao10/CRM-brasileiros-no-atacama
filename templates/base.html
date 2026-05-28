@@ -1,0 +1,61 @@
+{#
+  base.html — Layout base reutilizável (WP-UX-01 / Passo 0)
+
+  Esqueleto único que elimina a duplicação de <head>/sidebar/topbar/scripts.
+  NESTE PASSO (andaime) nenhuma página estende esta base ainda — o arquivo é
+  inerte até a migração página a página (Passos 1+).
+
+  Blocos disponíveis para as páginas-filhas:
+    - extra_head : libs por página (ex.: chart.js, marked.js)
+    - extra_css  : CSS específico da página
+    - sidebar    : sobrescrevível (ex.: kanban full-board pode suprimir — Passo 6)
+    - content    : corpo da página
+    - scripts    : JS específico da página (inclui proteções XSS do OP-13)
+
+  Variáveis de contexto (definidas via {% set %} na página-filha, sem tocar routers):
+    - page_title : título exibido na aba e na topbar
+    - active_nav : slug do item ativo na sidebar
+#}
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ page_title|default('CRM') }} — CRM Brasileiros no Atacama</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" href="/static/css/variables.css?v=2">
+    <link rel="stylesheet" href="/static/css/base.css?v=2">
+    <link rel="stylesheet" href="/static/css/components.css?v=2">
+    <link rel="stylesheet" href="/static/css/layout.css?v=1">
+    <link rel="icon" href="/static/img/logo.png" type="image/png">
+
+    {% block extra_head %}{% endblock %}
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <div class="dashboard-layout">
+        <!-- Sidebar Overlay (mobile) -->
+        <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+        <!-- Sidebar (contextual) -->
+        {% block sidebar %}{% include "partials/_sidebar.html" %}{% endblock %}
+
+        <!-- Main Content -->
+        <main class="main-content">
+            {% include "partials/_topbar.html" %}
+            <div class="content-area">
+                {% block content %}{% endblock %}
+            </div>
+        </main>
+    </div>
+
+    <!-- Auth module first, then shared layout behavior, then page scripts -->
+    <script src="/static/js/auth.js"></script>
+    <script src="/static/js/layout.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>
