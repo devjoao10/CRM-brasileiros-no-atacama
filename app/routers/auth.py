@@ -45,7 +45,7 @@ async def login(request: Request, data: LoginRequest, response: Response, db: Se
     #         detail="Por favor, verifique seu e-mail para ativar a conta."
     #     )
 
-    access_token = create_access_token(data={"sub": user.email})
+    access_token = create_access_token(data={"sub": user.email, "role": user.role})
 
     # Set cookie for frontend
     is_production = os.getenv("ENVIRONMENT", "development") == "production"
@@ -55,7 +55,8 @@ async def login(request: Request, data: LoginRequest, response: Response, db: Se
         httponly=True,
         secure=is_production,  # HTTPS only em produção
         max_age=28800,  # 8 hours
-        samesite="lax"
+        samesite="lax",
+        path="/",  # Garante que o cookie é enviado em todas as rotas
     )
 
     return TokenResponse(

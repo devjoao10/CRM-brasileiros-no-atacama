@@ -158,8 +158,12 @@
                 <div class="nav-section" style="padding: var(--sp-1) var(--sp-4); margin-top: var(--sp-4);"><div class="nav-section-title" style="font-size: 10px; font-weight: var(--fw-semibold); text-transform: uppercase; color: var(--color-text-4);">BNA Operacional</div></div>
                 <a href="/operational/boards" class="nav-item active" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); background: var(--sidebar-active-bg); color: var(--sidebar-active-text); font-weight: var(--fw-semibold); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2);"><span>Esteira de Processos</span></a>
                 <a href="/operational/my-pending" class="nav-item" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--sidebar-text); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2);"><span>Minhas Pendências</span></a>
+
+                <div style="flex: 1;"></div>
+                <a href="#" id="logoutBtn" class="nav-item" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--color-error); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2); margin-bottom: var(--sp-4);"><span>Sair</span></a>
             </nav>
         </aside>
+
 
         <!-- Main Content -->
         <main class="main-content">
@@ -210,25 +214,23 @@
         </div>
     </div>
 
+    <script src="/static/js/auth.js"></script>
     <script>
-        // Check local credentials
-        let token = localStorage.getItem("crm_access_token");
-        if (!token) {
-            window.location.href = "/login";
+        // ── Auth ──
+        if (!Auth.requireAuth()) throw new Error("redirect");
+        document.getElementById('logoutBtn').addEventListener('click', e => { e.preventDefault(); Auth.logout(); });
+
+        const user = Auth.getUser();
+        let isAdmin = user && user.role === "admin";
+        if (isAdmin) {
+            document.getElementById("newBoardBtn").style.display = "block";
         }
-        
-        // Parse token payload to check if user is admin
-        let isAdmin = false;
-        try {
-            let base64Url = token.split('.')[1];
-            let base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-            let payload = JSON.parse(window.atob(base64));
-            isAdmin = payload.role === "admin";
-            if (isAdmin) {
-                document.getElementById("newBoardBtn").style.display = "block";
-            }
-        } catch (e) {
-            console.error("Token decoding failed", e);
+
+        // ── XSS Helper ──
+        function esc(str) {
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
         }
 
         const modal = document.getElementById("createBoardModal");
@@ -239,10 +241,8 @@
         // Fetch boards on load
         async function fetchBoards() {
             try {
-                let response = await fetch("/api/operational/boards", {
-                    headers: { "Authorization": `Bearer ${token}` }
-                });
-                if (!response.ok) throw new Error();
+                let response = await Auth.apiRequest("/api/operational/boards");
+                if (!response || !response.ok) throw new Error();
                 let boards = await response.json();
                 renderBoards(boards);
             } catch (e) {
@@ -275,8 +275,8 @@
                 card.onclick = () => window.location.href = `/operational/boards/${b.id}`;
                 card.innerHTML = `
                     <div>
-                        <div class="board-title">${b.name}</div>
-                        <div class="board-desc">${b.description || 'Sem descrição.'}</div>
+                        <div class="board-title">${esc(b.name)}</div>
+                        <div class="board-desc">${esc(b.description || 'Sem descrição.')}</div>
                     </div>
                     <div class="board-meta">
                         <span>Acessar Quadro &rarr;</span>
@@ -294,16 +294,12 @@
             let description = document.getElementById("boardDesc").value;
             
             try {
-                let response = await fetch("/api/operational/boards", {
+                let response = await Auth.apiRequest("/api/operational/boards", {
                     method: "POST",
-                    headers: { 
-                        "Content-Type": "application/json",
-                        "Authorization": `Bearer ${token}` 
-                    },
                     body: JSON.stringify({ name, description })
                 });
                 
-                if (response.ok) {
+                if (response && response.ok) {
                     modal.classList.remove("show");
                     document.getElementById("createBoardForm").reset();
                     fetchBoards();

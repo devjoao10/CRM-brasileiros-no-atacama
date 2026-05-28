@@ -17,7 +17,7 @@ def _require_cookie(request: Request):
 async def operational_boards_page(request: Request):
     """Serve the list of operational boards."""
     if not _require_cookie(request):
-        return RedirectResponse(url="/login", status_code=302)
+        return RedirectResponse(url="/login?next=/operational/boards", status_code=302)
     return templates.TemplateResponse("operational/boards.html", {"request": request})
 
 
@@ -25,7 +25,7 @@ async def operational_boards_page(request: Request):
 async def operational_kanban_page(board_id: int, request: Request):
     """Serve the Kanban view for a specific board."""
     if not _require_cookie(request):
-        return RedirectResponse(url="/login", status_code=302)
+        return RedirectResponse(url=f"/login?next=/operational/boards/{board_id}", status_code=302)
     return templates.TemplateResponse("operational/kanban.html", {"request": request, "board_id": board_id})
 
 
@@ -33,5 +33,5 @@ async def operational_kanban_page(board_id: int, request: Request):
 async def operational_my_pending_page(request: Request):
     """Serve the personalized list of pending tasks and notifications."""
     if not _require_cookie(request):
-        return RedirectResponse(url="/login", status_code=302)
+        return RedirectResponse(url="/login?next=/operational/my-pending", status_code=302)
     return templates.TemplateResponse("operational/pending.html", {"request": request})

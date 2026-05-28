@@ -121,6 +121,9 @@
                 <div class="nav-section" style="padding: var(--sp-1) var(--sp-4); margin-top: var(--sp-4);"><div class="nav-section-title" style="font-size: 10px; font-weight: var(--fw-semibold); text-transform: uppercase; color: var(--color-text-4);">BNA Operacional</div></div>
                 <a href="/operational/boards" class="nav-item" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--sidebar-text); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2);"><span>Esteira de Processos</span></a>
                 <a href="/operational/my-pending" class="nav-item active" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); background: var(--sidebar-active-bg); color: var(--sidebar-active-text); font-weight: var(--fw-semibold); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2);"><span>Minhas Pendências</span></a>
+
+                <div style="flex: 1;"></div>
+                <a href="#" id="logoutBtn" class="nav-item" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--color-error); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2); margin-bottom: var(--sp-4);"><span>Sair</span></a>
             </nav>
         </aside>
 
@@ -161,16 +164,23 @@
         </main>
     </div>
 
+    <script src="/static/js/auth.js"></script>
     <script>
-        let token = localStorage.getItem("crm_access_token");
-        if (!token) window.location.href = "/login";
+        if (!Auth.requireAuth()) throw new Error("redirect");
+        document.getElementById('logoutBtn').addEventListener('click', e => { e.preventDefault(); Auth.logout(); });
+        let token = Auth.getToken();
+
+        // ── XSS Helper ──
+        function esc(str) {
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
+        }
 
         async function fetchPending() {
             try {
-                let response = await fetch("/api/operational/my-pending", {
-                    headers: { "Authorization": `Bearer ${token}` }
-                });
-                if (!response.ok) throw new Error();
+                let response = await Auth.apiRequest("/api/operational/my-pending");
+                if (!response || !response.ok) throw new Error();
                 let data = await response.json();
                 renderPending(data);
             } catch (e) {
@@ -196,8 +206,8 @@
                     div.className = "card-item";
                     div.onclick = () => window.location.href = `/operational/boards/${c.board_id}`;
                     div.innerHTML = `
-                        <div style="font-weight:var(--fw-semibold); font-size:13px; color:var(--color-text); margin-bottom:2px;">${c.title}</div>
-                        <div style="font-size:11px; color:var(--color-text-3); margin-bottom:6px;">${c.description || 'Sem descrição.'}</div>
+                        <div style="font-weight:var(--fw-semibold); font-size:13px; color:var(--color-text); margin-bottom:2px;">${esc(c.title)}</div>
+                        <div style="font-size:11px; color:var(--color-text-3); margin-bottom:6px;">${esc(c.description || 'Sem descrição.')}</div>
                         <div style="font-size:10px; color:var(--color-text-4); display:flex; justify-content:space-between;">
                             <span>Quadro #${c.board_id}</span>
                             <span>Prazo: ${c.due_date ? new Date(c.due_date).toLocaleDateString('pt-BR') : 'Sem prazo'}</span>
@@ -223,7 +233,7 @@
                     div.className = "notif-item";
                     div.innerHTML = `
                         <div style="display:flex; flex-direction:column; gap:2px; font-size:12px;">
-                            <span style="font-weight:var(--fw-medium); color:var(--color-text-2);">${n.message}</span>
+                            <span style="font-weight:var(--fw-medium); color:var(--color-text-2);">${esc(n.message)}</span>
                             <span style="font-size:10px; color:var(--color-text-4);">${new Date(n.created_at).toLocaleString('pt-BR')}</span>
                         </div>
                         <button class="btn" style="padding:2px 6px; font-size:9px; background:var(--color-surface); border:1px solid var(--color-border);" onclick="readNotif(${n.id})">Marcar lida</button>
@@ -234,21 +244,19 @@
         }
 
         async function readNotif(id) {
-            let response = await fetch(`/api/operational/notifications/${id}/read`, {
-                method: "POST",
-                headers: { "Authorization": `Bearer ${token}` }
+            let response = await Auth.apiRequest(`/api/operational/notifications/${id}/read`, {
+                method: "POST"
             });
-            if (response.ok) {
+            if (response && response.ok) {
                 fetchPending();
             }
         }
 
         document.getElementById("readAllBtn").onclick = async () => {
-            let response = await fetch("/api/operational/notifications/read-all", {
-                method: "POST",
-                headers: { "Authorization": `Bearer ${token}` }
+            let response = await Auth.apiRequest("/api/operational/notifications/read-all", {
+                method: "POST"
             });
-            if (response.ok) {
+            if (response && response.ok) {
                 fetchPending();
             }
         };
