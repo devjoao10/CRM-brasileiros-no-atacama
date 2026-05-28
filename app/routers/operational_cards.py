@@ -279,7 +279,7 @@ def create_field_definition(
 ):
     service = OperationalCardService(db)
     try:
-        data_dict = definition_data.model_dump()
+        data_dict = definition_data.model_dump(exclude_unset=True)
         definition = service.create_field_definition(data_dict, current_user)
         return definition
     except ValueError as e:

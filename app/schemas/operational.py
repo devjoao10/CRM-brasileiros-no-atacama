@@ -117,7 +117,7 @@ class CardFieldDefinitionCreate(BaseModel):
     board_id: int = Field(..., description="ID do quadro")
     name: str = Field(..., min_length=1, max_length=100, description="Nome do campo")
     field_type: str = Field(..., description="Tipo do campo: short_text, long_text, date, select, boolean")
-    select_options: Optional[List[str]] = Field(default=list, description="Opções válidas (apenas para tipo select)")
+    select_options: Optional[List[str]] = Field(default=None, description="Opções válidas (apenas para tipo select)")
     is_required: Optional[bool] = Field(False, description="Se preenchimento é obrigatório")
 
 
@@ -137,7 +137,6 @@ class CardFieldDefinitionResponse(BaseModel):
 
 
 class CardFieldValueCreate(BaseModel):
-    definition_id: int = Field(..., description="ID da definição do campo")
     value_text: Optional[str] = Field(None, description="Valor textual (para short_text, long_text e select)")
     value_date: Optional[datetime] = Field(None, description="Valor de data (para date)")
     value_boolean: Optional[bool] = Field(None, description="Valor booleano (para boolean)")
