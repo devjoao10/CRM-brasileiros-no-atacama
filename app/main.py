@@ -15,6 +15,7 @@ from slowapi.errors import RateLimitExceeded
 from app.config import PROJECT_NAME, VERSION, DESCRIPTION, API_PREFIX, ENVIRONMENT
 from app.database import engine, Base
 from app.routers import auth, users, leads, tags, pipeline, segments, teams, pages, tasks, analytics, ai
+from app.routers import operational_boards, operational_cards, operational_flow
 from app.models.lead import Lead  # noqa: F401
 from app.models.tag import Tag, lead_tags  # noqa: F401
 from app.models.pipeline import Funnel, FunnelEntry, LeadHistory  # noqa: F401
@@ -22,6 +23,10 @@ from app.models.segment import Segment  # noqa: F401
 from app.models.team import Team, user_teams  # noqa: F401
 from app.models.task import Task  # noqa: F401
 from app.models.chat import ChatSession, ChatMessage  # noqa: F401
+import app.models.operational.board  # noqa: F401 — Operational Kanban models
+import app.models.operational.card  # noqa: F401
+import app.models.operational.checklist  # noqa: F401
+import app.models.operational.notification  # noqa: F401
 from app.seed import seed_database
 
 logger = logging.getLogger(__name__)
@@ -148,6 +153,10 @@ app.include_router(teams.router)
 app.include_router(tasks.router)
 app.include_router(analytics.router)
 app.include_router(ai.router)
+# Include operational Kanban routers (OP-06 integration)
+app.include_router(operational_boards.router)
+app.include_router(operational_cards.router)
+app.include_router(operational_flow.router)
 # Include page routes (must be last to not conflict with API routes)
 app.include_router(pages.router)
 
