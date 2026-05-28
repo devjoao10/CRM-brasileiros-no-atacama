@@ -14,7 +14,7 @@ from app.models.template import MessageTemplate  # noqa: F401
 from app.models.auto_reply import AutoReply, BusinessHours  # noqa: F401
 from app.models.api_config import ApiConfig  # noqa: F401
 from app.routers import webhook, conversations, pages, auth, quick_replies, templates, settings, api_config
-from app.seed import seed_dev_user, seed_quick_replies, seed_templates, seed_auto_replies, seed_business_hours
+from app.seed import seed_dev_user, seed_quick_replies, seed_templates, seed_auto_replies, seed_business_hours, CONVERSAS_SEED_DEV_DATA
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Startup: create tables if they don't exist."""
     Base.metadata.create_all(bind=engine)
-    if ENVIRONMENT == "development":
-        seed_dev_user()
+    seed_dev_user()  # Guarded internally by CONVERSAS_SEED_DEV_DATA
+    if CONVERSAS_SEED_DEV_DATA:
         seed_quick_replies()
         seed_templates()
         seed_auto_replies()

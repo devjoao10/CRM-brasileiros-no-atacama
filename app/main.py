@@ -87,7 +87,7 @@ async def lifespan(app: FastAPI):
                 logger.info("✅ Migration: Performance indexes verified/created")
             except Exception as e:
                 logger.warning(f"⚠️ Index creation failed (might already exist): {e}")
-    seed_database()
+    seed_database()  # Guarded internally by SEED_INITIAL_ADMIN config flag
     _cleanup_old_uploads(max_age_hours=24)
     yield
     # Shutdown (nada por enquanto)
