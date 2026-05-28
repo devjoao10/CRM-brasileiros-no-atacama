@@ -1,50 +1,13 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Relatórios — CRM Brasileiros no Atacama</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/variables.css?v=2">
-    <link rel="stylesheet" href="/static/css/base.css?v=2">
-    <link rel="stylesheet" href="/static/css/components.css?v=2">
-    <link rel="icon" href="/static/img/logo.png" type="image/png">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{% extends "base.html" %}
+{% set page_title = "Relatórios & BI" %}
+{% set active_nav = "relatorios" %}
 
+{% block extra_head %}
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{% endblock %}
+
+{% block extra_css %}
     <style>
-        .dashboard-layout { display: flex; min-height: 100vh; }
-                .sidebar { width: 240px; background: var(--sidebar-bg); border-right: 1px solid var(--sidebar-border); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: var(--z-sidebar); }
-        .sidebar-header { padding: var(--sp-5); display: flex; align-items: center; gap: var(--sp-3); border-bottom: 1px solid var(--sidebar-border); min-height: 56px; }
-        .sidebar-logo { width: 32px; height: 32px; border-radius: var(--radius-md); overflow: hidden; flex-shrink: 0; }
-        .sidebar-logo img { width: 100%; height: 100%; object-fit: cover; }
-        .sidebar-brand { font-size: var(--font-size-sm); font-weight: var(--fw-semibold); color: var(--color-text); line-height: 1.3; }
-        .sidebar-brand span { color: var(--color-primary); }
-        .sidebar-nav { flex: 1; padding: var(--sp-3) 0; overflow-y: auto; }
-        .nav-section { padding: var(--sp-1) var(--sp-4); margin-top: var(--sp-4); }
-        .nav-section-title { font-size: 10px; font-weight: var(--fw-semibold); text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-4); margin-bottom: var(--sp-1); }
-        .nav-item { display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--sidebar-text); font-size: var(--font-size-sm); font-weight: var(--fw-medium); transition: background var(--t-fast), color var(--t-fast); cursor: pointer; text-decoration: none; border-left: 2px solid transparent; margin: 1px var(--sp-2); border-radius: var(--radius-md); }
-        .nav-item:hover { background: var(--sidebar-hover-bg); color: var(--color-text); }
-        .nav-item.active { background: var(--sidebar-active-bg); color: var(--sidebar-active-text); font-weight: var(--fw-semibold); }
-        .nav-item .nav-icon { width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; opacity: 0.7; }
-        .nav-item.active .nav-icon { opacity: 1; }
-        .nav-item .nav-badge { margin-left: auto; background: var(--color-primary-light); color: var(--color-primary); font-size: var(--font-size-xs); padding: 1px 6px; border-radius: var(--radius-full); font-weight: var(--fw-semibold); }
-        .sidebar-footer { padding: var(--sp-3) var(--sp-2); border-top: 1px solid var(--sidebar-border); }
-        .main-content { flex: 1; margin-left: 240px; display: flex; flex-direction: column; }
-        .top-header { height: 56px; background: var(--color-surface); border-bottom: 1px solid var(--color-border); display: flex; align-items: center; justify-content: space-between; padding: 0 var(--sp-6); position: sticky; top: 0; z-index: 100; }
-        .header-left { display: flex; align-items: center; gap: var(--sp-3); }
-        .menu-toggle { display: none; background: none; border: none; cursor: pointer; padding: 6px; color: var(--color-text-3); border-radius: var(--radius-md); }
-        .menu-toggle:hover { background: var(--color-bg); }
-        .page-title { font-size: var(--font-size-base); font-weight: var(--fw-semibold); color: var(--color-text); }
-        .header-right { display: flex; align-items: center; gap: var(--sp-3); }
-        .user-info { display: flex; align-items: center; gap: var(--sp-2); padding: 5px var(--sp-3); border-radius: var(--radius-md); cursor: pointer; transition: background var(--t-fast); }
-        .user-info:hover { background: var(--color-bg); }
-        .user-avatar { width: 30px; height: 30px; border-radius: var(--radius-full); background: var(--color-primary); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: var(--fw-semibold); font-size: var(--font-size-xs); }
-        .user-name { font-size: var(--font-size-sm); font-weight: var(--fw-medium); color: var(--color-text); }
-        .user-role { font-size: var(--font-size-xs); color: var(--color-text-3); }
-        .content-area { flex: 1; padding: var(--sp-6) var(--sp-8); background: var(--color-bg); }
-        
         .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-6); margin-bottom: var(--space-8); }
         .stat-card { background: var(--color-white); border-radius: var(--radius-xl); padding: var(--space-6); box-shadow: var(--shadow-sm); display: flex; align-items: center; gap: var(--space-4); transition: all var(--transition-base); }
         .stat-card:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
@@ -65,74 +28,12 @@
         .dataTable td { padding: var(--space-3) 0; border-bottom: 1px solid var(--color-dark-100); font-size: 14px; }
 
         @media (max-width: 1024px) {
-            .sidebar { transform: translateX(-100%); transition: transform var(--transition-base); }
-            .sidebar.open { transform: translateX(0); }
-            .main-content { margin-left: 0; }
-            .menu-toggle { display: block; }
             .charts-row { grid-template-columns: 1fr; }
         }
     </style>
-</head>
-<body>
-    <div class="dashboard-layout">
-                <aside class="sidebar" id="sidebar">
-            <div class="sidebar-header">
-                <div class="sidebar-logo"><img src="/static/img/logo.png" alt="Logo"></div>
-                <div class="sidebar-brand">Brasileiros <span>no Atacama</span></div>
-            </div>
-            <nav class="sidebar-nav">
-                <div class="nav-section"><div class="nav-section-title">Principal</div></div>
-                <a href="/dashboard" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></span><span>Dashboard</span></a>
-                <div class="nav-section"><div class="nav-section-title">Inteligência</div></div>
-                <a href="/ai" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><circle cx="19" cy="5" r="3"/></svg></span><span>Assistente IA</span></a>
-                <div class="nav-section"><div class="nav-section-title">CRM</div></div>
-                <a href="/leads" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span><span>Leads</span></a>
-                <a href="/tags" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg></span><span>Tags</span></a>
-                <a href="/pipeline" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span><span>Pipeline</span></a>
-                <a href="/segmentacao" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span><span>Segmentação</span></a>
-                <a href="/tarefas" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><span>Tarefas</span></a>
-                <div class="nav-section">
-                    <div class="nav-section-title">BNA Operacional</div>
-                </div>
-                <a href="/operational/boards" class="nav-item">
-                    <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></span>
-                    <span>Esteira de Processos</span>
-                </a>
-                <a href="/operational/my-pending" class="nav-item">
-                    <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></span>
-                    <span>Minhas Pendências</span>
-                </a>
+{% endblock %}
 
-                <div class="nav-section"><div class="nav-section-title">Administração</div></div>
-                <a href="/relatorios" class="nav-item active"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span><span>Relatórios</span></a>
-                <a href="/equipe" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span><span>Equipe e Usuários</span></a>
-                <div class="nav-section"><div class="nav-section-title">Sistema</div></div>
-                <a href="/docs" class="nav-item" target="_blank"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span><span>API Docs</span></a>
-                <a href="https://n8n.crmbrasileirosnoatacama.cloud" class="nav-item" target="_blank"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span><span>Servidor n8n</span></a>
-            </nav>
-            <div class="sidebar-footer">
-                <a href="#" class="nav-item" id="logoutBtn"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></span><span>Sair</span></a>
-            </div>
-        </aside>
-
-        <main class="main-content">
-            <header class="top-header">
-                <div class="header-left">
-                    <button class="menu-toggle" id="menuToggle" aria-label="Menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
-                    <h2 class="page-title">Relatórios & BI</h2>
-                </div>
-                <div class="header-right">
-                    <div class="user-info">
-                        <div class="user-avatar" id="userAvatar">A</div>
-                        <div>
-                            <div class="user-name" id="userName">Carregando...</div>
-                            <div class="user-role" id="userRole">—</div>
-                        </div>
-                    </div>
-                </div>
-            </header>
-
-            <div class="content-area">
+{% block content %}
                 <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:var(--space-4); margin-bottom:var(--space-6); background:white; padding:var(--space-4); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm);">
                     <div style="display:flex; gap:var(--space-2); align-items:center;">
                         <span style="font-weight:600;">Filtrar Data de Criação:</span>
@@ -199,7 +100,7 @@
                             <tbody><tr><td colspan="3">Carregando dados...</td></tr></tbody>
                         </table>
                     </div>
-                    
+
                     <div class="chart-card">
                         <h3 class="chart-title">Tags Atribuídas</h3>
                         <table class="dataTable" id="tagsTable">
@@ -220,11 +121,9 @@
                         </table>
                     </div>
                 </div>
-            </div>
-        </main>
-    </div>
+{% endblock %}
 
-    <script src="/static/js/auth.js"></script>
+{% block scripts %}
     <script>
         let lineChart = null;
         let pieChart = null;
@@ -238,29 +137,21 @@
                 return;
             }
 
-            if (user) {
-                document.getElementById('userName').textContent = user.nome;
-                document.getElementById('userRole').textContent = 'Administrador';
-                document.getElementById('userAvatar').textContent = user.nome.charAt(0).toUpperCase();
-            }
-
             const end = new Date();
             const start = new Date();
             start.setDate(end.getDate() - 30);
-            
+
             document.getElementById('repStart').value = start.toISOString().split('T')[0];
             document.getElementById('repEnd').value = end.toISOString().split('T')[0];
 
             loadReports();
-            document.getElementById('logoutBtn').addEventListener('click', (e) => { e.preventDefault(); Auth.logout(); });
-            document.getElementById('menuToggle').addEventListener('click', () => document.getElementById('sidebar').classList.toggle('open'));
         });
 
         async function loadReports() {
             const start = document.getElementById('repStart').value;
             const end = document.getElementById('repEnd').value;
             let url = `/api/analytics/reports?start_date=${start}&end_date=${end}`;
-            
+
             const reqBtn = document.querySelector('.btn-primary');
             reqBtn.textContent = 'Gerando...';
 
@@ -301,7 +192,7 @@
             if (pieChart) pieChart.destroy();
             const keys = Object.keys(destinosData);
             const vals = Object.values(destinosData);
-            
+
             pieChart = new Chart(ctx2, {
                 type: 'doughnut',
                 data: {
@@ -318,7 +209,7 @@
         function renderTableGeneric(dataObj, total, tableId, emptyMsg) {
             const tbody = document.querySelector(`#${tableId} tbody`);
             tbody.innerHTML = '';
-            
+
             const keys = Object.keys(dataObj);
             if (keys.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="3" style="text-align:center;">${emptyMsg}</td></tr>`;
@@ -336,5 +227,4 @@
             }
         }
     </script>
-</body>
-</html>
+{% endblock %}
