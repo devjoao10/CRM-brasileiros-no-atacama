@@ -161,7 +161,7 @@ class CardFieldValueResponse(BaseModel):
 # ==============================================================================
 
 class ChecklistCreate(BaseModel):
-    card_id: int = Field(..., description="ID do card")
+    card_id: Optional[int] = Field(None, description="ID do card (opcional, fonte de verdade no path)")
     name: str = Field(..., min_length=1, max_length=100, description="Nome do checklist")
     position: Optional[int] = 0
 
@@ -179,7 +179,7 @@ class ChecklistResponse(BaseModel):
 
 
 class ChecklistItemCreate(BaseModel):
-    checklist_id: int = Field(..., description="ID do checklist")
+    checklist_id: Optional[int] = Field(None, description="ID do checklist (opcional, fonte de verdade no path)")
     name: str = Field(..., min_length=1, max_length=200, description="Nome da tarefa")
     position: Optional[int] = 0
 
