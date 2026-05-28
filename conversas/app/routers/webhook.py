@@ -6,13 +6,16 @@ Includes debounce mechanism for batching rapid messages before AI processing.
 """
 
 import asyncio
+import hashlib
+import hmac
+import json
 import logging
 from datetime import datetime, timezone as tz
 
 from fastapi import APIRouter, Request, HTTPException, Query, Depends
 from sqlalchemy.orm import Session
 
-from app.config import META_VERIFY_TOKEN, N8N_BASE_URL, N8N_AGENT_ENABLED
+from app.config import META_VERIFY_TOKEN, N8N_BASE_URL, N8N_AGENT_ENABLED, META_APP_SECRET, ENVIRONMENT
 from app.database import get_db, SessionLocal
 from app.models.conversation import Conversation, Message
 from app.models.auto_reply import AutoReply, BusinessHours
@@ -21,6 +24,22 @@ from app.services import whatsapp
 from app.services import crm as crm_service
 
 logger = logging.getLogger(__name__)
+
+
+def _is_signature_required() -> bool:
+    return ENVIRONMENT != "development" or bool(META_APP_SECRET)
+
+
+def _verify_meta_signature(raw_body: bytes, signature_header: str) -> bool:
+    if not signature_header or not signature_header.startswith("sha256="):
+        return False
+    expected = "sha256=" + hmac.new(
+        META_APP_SECRET.encode("utf-8"),
+        raw_body,
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(signature_header, expected)
+
 
 # ─── Debounce system for batching rapid messages ─────────────
 AGENT_DEBOUNCE_SECONDS = 15  # Wait 15s after last message before sending to agent
@@ -64,8 +83,25 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)):
     Parses the webhook payload and stores messages in the database.
     Sends auto-replies based on business hours and configuration.
     """
-    body = await request.json()
-    logger.info(f"Webhook recebido: {body}")
+    raw_body = await request.body()
+    sig = request.headers.get("X-Hub-Signature-256", "")
+
+    if META_APP_SECRET:
+        if not _verify_meta_signature(raw_body, sig):
+            logger.warning("Assinatura HMAC inválida ou ausente no webhook Meta")
+            raise HTTPException(status_code=403, detail="Invalid signature")
+    elif _is_signature_required():
+        logger.error("META_APP_SECRET não configurado; webhook Meta rejeitado em ambiente não-development")
+        raise HTTPException(status_code=500, detail="Webhook signature verification not configured")
+    else:
+        logger.warning("META_APP_SECRET não configurado; validação HMAC desativada apenas em development")
+
+    try:
+        body = json.loads(raw_body)
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    logger.info("Webhook Meta recebido e validado")
 
     try:
         for entry in body.get("entry", []):
