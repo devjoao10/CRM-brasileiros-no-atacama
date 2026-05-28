@@ -1,50 +1,9 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Quadros Operacionais — BNA CRM</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/variables.css?v=2">
-    <link rel="stylesheet" href="/static/css/base.css?v=2">
-    <link rel="stylesheet" href="/static/css/components.css?v=2">
-    <link rel="icon" href="/static/img/logo.png" type="image/png">
-    
+{% extends "base.html" %}
+{% set page_title = "Quadros Operacionais" %}
+{% set active_nav = "operational-boards" %}
+
+{% block extra_css %}
     <style>
-        .operational-layout {
-            display: flex;
-            min-height: 100vh;
-        }
-        .main-content {
-            flex: 1;
-            margin-left: 240px;
-            display: flex;
-            flex-direction: column;
-            background: var(--color-bg);
-        }
-        .top-header {
-            height: 56px;
-            background: var(--color-surface);
-            border-bottom: 1px solid var(--color-border);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 var(--sp-6);
-            position: sticky; top: 0;
-            z-index: 100;
-        }
-        .header-left { display: flex; align-items: center; gap: var(--sp-3); }
-        .page-title {
-            font-size: var(--font-size-base);
-            font-weight: var(--fw-semibold);
-            color: var(--color-text);
-        }
-        .content-area {
-            flex: 1;
-            padding: var(--sp-6) var(--sp-8);
-        }
         .board-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -138,45 +97,13 @@
             to { transform: scale(1); opacity: 1; }
         }
     </style>
-</head>
-<body>
-    <div class="operational-layout">
-        <!-- Sidebar dynamically imported/rendered inline to match other pages -->
-        <aside class="sidebar" id="sidebar" style="width: 240px; background: var(--sidebar-bg); border-right: 1px solid var(--sidebar-border); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: var(--z-sidebar);">
-            <div class="sidebar-header" style="padding: var(--sp-5); border-bottom: 1px solid var(--sidebar-border); display: flex; align-items: center; gap: var(--sp-3); min-height: 56px;">
-                <div class="sidebar-logo" style="width: 32px; height: 32px; border-radius: var(--radius-md); overflow: hidden;"><img src="/static/img/logo.png" alt="Logo" style="width:100%; height:100%; object-fit:cover;"></div>
-                <div class="sidebar-brand" style="font-size: var(--font-size-sm); font-weight: var(--fw-semibold); color: var(--color-text);">Brasileiros <span style="color: var(--color-primary);">no Atacama</span></div>
-            </div>
-            <nav class="sidebar-nav" style="flex: 1; padding: var(--sp-3) 0; overflow-y: auto; display: flex; flex-direction: column;">
-                <div class="nav-section" style="padding: var(--sp-1) var(--sp-4); margin-top: var(--sp-4);"><div class="nav-section-title" style="font-size: 10px; font-weight: var(--fw-semibold); text-transform: uppercase; color: var(--color-text-4);">Principal</div></div>
-                <a href="/dashboard" class="nav-item" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--sidebar-text); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2);"><span>Dashboard</span></a>
-                
-                <div class="nav-section" style="padding: var(--sp-1) var(--sp-4); margin-top: var(--sp-4);"><div class="nav-section-title" style="font-size: 10px; font-weight: var(--fw-semibold); text-transform: uppercase; color: var(--color-text-4);">CRM</div></div>
-                <a href="/leads" class="nav-item" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--sidebar-text); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2);"><span>Leads</span></a>
-                <a href="/pipeline" class="nav-item" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--sidebar-text); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2);"><span>Pipeline</span></a>
-                
-                <div class="nav-section" style="padding: var(--sp-1) var(--sp-4); margin-top: var(--sp-4);"><div class="nav-section-title" style="font-size: 10px; font-weight: var(--fw-semibold); text-transform: uppercase; color: var(--color-text-4);">BNA Operacional</div></div>
-                <a href="/operational/boards" class="nav-item active" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); background: var(--sidebar-active-bg); color: var(--sidebar-active-text); font-weight: var(--fw-semibold); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2);"><span>Esteira de Processos</span></a>
-                <a href="/operational/my-pending" class="nav-item" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--sidebar-text); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2);"><span>Minhas Pendências</span></a>
+{% endblock %}
 
-                <div style="flex: 1;"></div>
-                <a href="#" id="logoutBtn" class="nav-item" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--color-error); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2); margin-bottom: var(--sp-4);"><span>Sair</span></a>
-            </nav>
-        </aside>
-
-
-        <!-- Main Content -->
-        <main class="main-content">
-            <header class="top-header">
-                <div class="header-left">
-                    <h2 class="page-title">Esteira de Processos — Quadros Operacionais</h2>
-                </div>
-                <div class="header-right">
+{% block content %}
+            <div class="content-area">
+                <div style="display: flex; justify-content: flex-end; margin-bottom: var(--sp-4);">
                     <button class="btn btn-primary" id="newBoardBtn" style="display: none;">+ Novo Quadro</button>
                 </div>
-            </header>
-
-            <div class="content-area">
                 <div id="boardsList" class="board-grid">
                     <!-- Loaded dynamically -->
                     <div style="text-align: center; grid-column: 1/-1; padding: var(--sp-12); color: var(--color-text-3);">
@@ -190,8 +117,6 @@
                     <p style="font-size: var(--font-size-sm); color: var(--color-text-3); margin-bottom: var(--sp-6);">Crie um novo quadro operacional para gerenciar o pós-vendas da agência.</p>
                 </div>
             </div>
-        </main>
-    </div>
 
     <!-- Create Board Modal -->
     <div class="modal" id="createBoardModal">
@@ -213,12 +138,12 @@
             </form>
         </div>
     </div>
+{% endblock %}
 
-    <script src="/static/js/auth.js"></script>
+{% block scripts %}
     <script>
         // ── Auth ──
         if (!Auth.requireAuth()) throw new Error("redirect");
-        document.getElementById('logoutBtn').addEventListener('click', e => { e.preventDefault(); Auth.logout(); });
 
         const user = Auth.getUser();
         let isAdmin = user && user.role === "admin";
@@ -313,5 +238,4 @@
 
         fetchBoards();
     </script>
-</body>
-</html>
+{% endblock %}
