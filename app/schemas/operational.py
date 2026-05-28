@@ -277,3 +277,8 @@ class MentionResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class MyPendingResponse(BaseModel):
+    assigned_cards: List[CardResponse]
+    unread_notifications: List[NotificationResponse]
