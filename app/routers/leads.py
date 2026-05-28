@@ -24,7 +24,7 @@ from app.schemas.lead import (
     ImportResponse,
     DESTINOS_PRINCIPAIS,
 )
-from app.auth import get_current_user
+from app.auth import get_current_user, require_admin
 
 router = APIRouter(prefix="/api/leads", tags=["Leads"])
 
@@ -401,7 +401,7 @@ def update_lead(
 @router.delete("/{lead_id}", summary="Excluir lead permanentemente")
 def delete_lead(
     lead_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """Exclui um lead permanentemente do banco de dados (Hard delete)."""
