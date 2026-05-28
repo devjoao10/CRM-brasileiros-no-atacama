@@ -212,7 +212,7 @@
 
     <script>
         // Check local credentials
-        let token = localStorage.getItem("token") || document.cookie.split('; ').find(row => row.startsWith('access_token='))?.split('=')[1];
+        let token = localStorage.getItem("crm_access_token");
         if (!token) {
             window.location.href = "/login";
         }
