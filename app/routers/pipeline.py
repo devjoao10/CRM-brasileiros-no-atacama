@@ -15,7 +15,7 @@ from app.schemas.pipeline import (
     HistoryResponse, HistoryListResponse,
 )
 from app.schemas.tag import TagResponse
-from app.auth import get_current_user
+from app.auth import get_current_user, require_admin
 
 router = APIRouter(prefix="/api/pipeline", tags=["Pipeline"])
 
@@ -158,7 +158,7 @@ async def update_funnel(
 @router.delete("/funnels/{funnel_id}", summary="Excluir funil")
 async def delete_funnel(
     funnel_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     funnel = db.query(Funnel).filter(Funnel.id == funnel_id).first()
