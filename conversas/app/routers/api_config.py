@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.auth import get_current_user, User
+from app.auth import get_current_user, require_admin, User
 from app.models.api_config import ApiConfig
 from app.schemas.api_config import (
     ApiConfigUpdate,
@@ -46,7 +46,7 @@ async def get_api_config(
 async def update_api_config(
     data: ApiConfigUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """Atualizar credenciais da API WhatsApp."""
     config = _get_or_create_config(db)
@@ -74,7 +74,7 @@ async def update_api_config(
 @router.post("/test", response_model=ApiConfigTestResponse)
 async def test_api_connection(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """Testar conexão com a Meta API usando as credenciais salvas."""
     result = await meta_templates.test_connection(db)
@@ -84,7 +84,7 @@ async def test_api_connection(
 @router.post("/connect")
 async def connect_api(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """Testar e ativar a conexão com a Meta API."""
     config = _get_or_create_config(db)
@@ -119,7 +119,7 @@ async def connect_api(
 @router.post("/disconnect")
 async def disconnect_api(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """Desconectar a API (não apaga credenciais, apenas desativa)."""
     config = _get_or_create_config(db)
