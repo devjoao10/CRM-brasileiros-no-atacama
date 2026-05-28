@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quadros Operacionais — BNA CRM</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/variables.css?v=2">
+    <link rel="stylesheet" href="/static/css/base.css?v=2">
+    <link rel="stylesheet" href="/static/css/components.css?v=2">
+    <link rel="icon" href="/static/img/logo.png" type="image/png">
+    
+    <style>
+        .operational-layout {
+            display: flex;
+            min-height: 100vh;
+        }
+        .main-content {
+            flex: 1;
+            margin-left: 240px;
+            display: flex;
+            flex-direction: column;
+            background: var(--color-bg);
+        }
+        .top-header {
+            height: 56px;
+            background: var(--color-surface);
+            border-bottom: 1px solid var(--color-border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 var(--sp-6);
+            position: sticky; top: 0;
+            z-index: 100;
+        }
+        .header-left { display: flex; align-items: center; gap: var(--sp-3); }
+        .page-title {
+            font-size: var(--font-size-base);
+            font-weight: var(--fw-semibold);
+            color: var(--color-text);
+        }
+        .content-area {
+            flex: 1;
+            padding: var(--sp-6) var(--sp-8);
+        }
+        .board-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: var(--sp-6);
+            margin-top: var(--sp-6);
+        }
+        .board-card {
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-lg);
+            padding: var(--sp-5);
+            transition: all var(--t-fast);
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            min-height: 160px;
+            box-shadow: var(--shadow-sm);
+        }
+        .board-card:hover {
+            border-color: var(--color-primary);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+        .board-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 4px;
+            background: var(--color-primary);
+        }
+        .board-title {
+            font-size: var(--font-size-md);
+            font-weight: var(--fw-semibold);
+            color: var(--color-text);
+            margin-bottom: var(--sp-2);
+        }
+        .board-desc {
+            font-size: var(--font-size-sm);
+            color: var(--color-text-3);
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            flex-grow: 1;
+            margin-bottom: var(--sp-4);
+        }
+        .board-meta {
+            font-size: var(--font-size-xs);
+            color: var(--color-text-4);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-top: 1px solid var(--color-border);
+            padding-top: var(--sp-3);
+        }
+        .empty-state {
+            background: var(--color-surface);
+            border: 1px dashed var(--color-border-dark);
+            border-radius: var(--radius-xl);
+            padding: var(--sp-12);
+            text-align: center;
+            max-width: 500px;
+            margin: var(--sp-12) auto;
+        }
+        
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.5);
+            align-items: center; justify-content: center;
+            z-index: var(--z-modal);
+            padding: var(--sp-4);
+            backdrop-filter: blur(2px);
+        }
+        .modal.show { display: flex; }
+        .modal-content {
+            background: var(--color-surface);
+            border-radius: var(--radius-xl);
+            padding: var(--sp-6);
+            width: 100%;
+            max-width: 460px;
+            box-shadow: var(--shadow-lg);
+            animation: modalIn var(--t-base);
+        }
+        @keyframes modalIn {
+            from { transform: scale(0.95); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="operational-layout">
+        <!-- Sidebar dynamically imported/rendered inline to match other pages -->
+        <aside class="sidebar" id="sidebar" style="width: 240px; background: var(--sidebar-bg); border-right: 1px solid var(--sidebar-border); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: var(--z-sidebar);">
+            <div class="sidebar-header" style="padding: var(--sp-5); border-bottom: 1px solid var(--sidebar-border); display: flex; align-items: center; gap: var(--sp-3); min-height: 56px;">
+                <div class="sidebar-logo" style="width: 32px; height: 32px; border-radius: var(--radius-md); overflow: hidden;"><img src="/static/img/logo.png" alt="Logo" style="width:100%; height:100%; object-fit:cover;"></div>
+                <div class="sidebar-brand" style="font-size: var(--font-size-sm); font-weight: var(--fw-semibold); color: var(--color-text);">Brasileiros <span style="color: var(--color-primary);">no Atacama</span></div>
+            </div>
+            <nav class="sidebar-nav" style="flex: 1; padding: var(--sp-3) 0; overflow-y: auto; display: flex; flex-direction: column;">
+                <div class="nav-section" style="padding: var(--sp-1) var(--sp-4); margin-top: var(--sp-4);"><div class="nav-section-title" style="font-size: 10px; font-weight: var(--fw-semibold); text-transform: uppercase; color: var(--color-text-4);">Principal</div></div>
+                <a href="/dashboard" class="nav-item" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--sidebar-text); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2);"><span>Dashboard</span></a>
+                
+                <div class="nav-section" style="padding: var(--sp-1) var(--sp-4); margin-top: var(--sp-4);"><div class="nav-section-title" style="font-size: 10px; font-weight: var(--fw-semibold); text-transform: uppercase; color: var(--color-text-4);">CRM</div></div>
+                <a href="/leads" class="nav-item" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--sidebar-text); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2);"><span>Leads</span></a>
+                <a href="/pipeline" class="nav-item" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--sidebar-text); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2);"><span>Pipeline</span></a>
+                
+                <div class="nav-section" style="padding: var(--sp-1) var(--sp-4); margin-top: var(--sp-4);"><div class="nav-section-title" style="font-size: 10px; font-weight: var(--fw-semibold); text-transform: uppercase; color: var(--color-text-4);">BNA Operacional</div></div>
+                <a href="/operational/boards" class="nav-item active" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); background: var(--sidebar-active-bg); color: var(--sidebar-active-text); font-weight: var(--fw-semibold); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2);"><span>Esteira de Processos</span></a>
+                <a href="/operational/my-pending" class="nav-item" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--sidebar-text); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2);"><span>Minhas Pendências</span></a>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="top-header">
+                <div class="header-left">
+                    <h2 class="page-title">Esteira de Processos — Quadros Operacionais</h2>
+                </div>
+                <div class="header-right">
+                    <button class="btn btn-primary" id="newBoardBtn" style="display: none;">+ Novo Quadro</button>
+                </div>
+            </header>
+
+            <div class="content-area">
+                <div id="boardsList" class="board-grid">
+                    <!-- Loaded dynamically -->
+                    <div style="text-align: center; grid-column: 1/-1; padding: var(--sp-12); color: var(--color-text-3);">
+                        Carregando seus quadros operacionais...
+                    </div>
+                </div>
+                
+                <div id="emptyState" class="empty-state" style="display: none;">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-4)" stroke-width="2" style="margin: 0 auto var(--sp-4);"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+                    <h3 style="font-size: var(--font-size-lg); font-weight: var(--fw-semibold); color: var(--color-text); margin-bottom: var(--sp-2);">Nenhum Quadro Encontrado</h3>
+                    <p style="font-size: var(--font-size-sm); color: var(--color-text-3); margin-bottom: var(--sp-6);">Crie um novo quadro operacional para gerenciar o pós-vendas da agência.</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Create Board Modal -->
+    <div class="modal" id="createBoardModal">
+        <div class="modal-content">
+            <h3 style="font-size: var(--font-size-lg); font-weight: var(--fw-semibold); color: var(--color-text); margin-bottom: var(--sp-4);">Criar Novo Quadro Operacional</h3>
+            <form id="createBoardForm">
+                <div style="margin-bottom: var(--sp-4);">
+                    <label for="boardName" style="display: block; font-size: var(--font-size-xs); font-weight: var(--fw-semibold); color: var(--color-text-2); margin-bottom: var(--sp-2);">Nome do Quadro</label>
+                    <input type="text" id="boardName" class="form-input" style="width: 100%;" placeholder="Ex: Operações Chile 2026" required>
+                </div>
+                <div style="margin-bottom: var(--sp-6);">
+                    <label for="boardDesc" style="display: block; font-size: var(--font-size-xs); font-weight: var(--fw-semibold); color: var(--color-text-2); margin-bottom: var(--sp-2);">Descrição</label>
+                    <textarea id="boardDesc" class="form-input" style="width: 100%; min-height: 80px;" placeholder="Ex: Controle de passageiros e cotações locais"></textarea>
+                </div>
+                <div style="display: flex; gap: var(--sp-3); justify-content: flex-end;">
+                    <button type="button" class="btn" id="closeModalBtn" style="background: var(--color-bg); color: var(--color-text-2);">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Salvar Quadro</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // Check local credentials
+        let token = localStorage.getItem("token") || document.cookie.split('; ').find(row => row.startsWith('access_token='))?.split('=')[1];
+        if (!token) {
+            window.location.href = "/login";
+        }
+        
+        // Parse token payload to check if user is admin
+        let isAdmin = false;
+        try {
+            let base64Url = token.split('.')[1];
+            let base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+            let payload = JSON.parse(window.atob(base64));
+            isAdmin = payload.role === "admin";
+            if (isAdmin) {
+                document.getElementById("newBoardBtn").style.display = "block";
+            }
+        } catch (e) {
+            console.error("Token decoding failed", e);
+        }
+
+        const modal = document.getElementById("createBoardModal");
+        
+        document.getElementById("newBoardBtn").onclick = () => modal.classList.add("show");
+        document.getElementById("closeModalBtn").onclick = () => modal.classList.remove("show");
+
+        // Fetch boards on load
+        async function fetchBoards() {
+            try {
+                let response = await fetch("/api/operational/boards", {
+                    headers: { "Authorization": `Bearer ${token}` }
+                });
+                if (!response.ok) throw new Error();
+                let boards = await response.json();
+                renderBoards(boards);
+            } catch (e) {
+                document.getElementById("boardsList").innerHTML = `
+                    <div style="text-align: center; grid-column: 1/-1; padding: var(--sp-12); color: var(--color-error);">
+                        Erro ao conectar com a API. Verifique sua sessão.
+                    </div>
+                `;
+            }
+        }
+
+        function renderBoards(boards) {
+            const listDiv = document.getElementById("boardsList");
+            const emptyDiv = document.getElementById("emptyState");
+            
+            listDiv.innerHTML = "";
+            
+            if (boards.length === 0) {
+                emptyDiv.style.display = "block";
+                listDiv.style.display = "none";
+                return;
+            }
+            
+            emptyDiv.style.display = "none";
+            listDiv.style.display = "grid";
+            
+            boards.forEach(b => {
+                let card = document.createElement("div");
+                card.className = "board-card";
+                card.onclick = () => window.location.href = `/operational/boards/${b.id}`;
+                card.innerHTML = `
+                    <div>
+                        <div class="board-title">${b.name}</div>
+                        <div class="board-desc">${b.description || 'Sem descrição.'}</div>
+                    </div>
+                    <div class="board-meta">
+                        <span>Acessar Quadro &rarr;</span>
+                        <span>${new Date(b.created_at).toLocaleDateString('pt-BR')}</span>
+                    </div>
+                `;
+                listDiv.appendChild(card);
+            });
+        }
+
+        // Handle Create Board
+        document.getElementById("createBoardForm").onsubmit = async (e) => {
+            e.preventDefault();
+            let name = document.getElementById("boardName").value;
+            let description = document.getElementById("boardDesc").value;
+            
+            try {
+                let response = await fetch("/api/operational/boards", {
+                    method: "POST",
+                    headers: { 
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${token}` 
+                    },
+                    body: JSON.stringify({ name, description })
+                });
+                
+                if (response.ok) {
+                    modal.classList.remove("show");
+                    document.getElementById("createBoardForm").reset();
+                    fetchBoards();
+                } else {
+                    alert("Apenas administradores podem criar novos quadros operacionais!");
+                }
+            } catch (e) {
+                alert("Erro inesperado.");
+            }
+        };
+
+        fetchBoards();
+    </script>
+</body>
+</html>

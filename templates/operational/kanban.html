@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quadro Kanban — BNA CRM</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/variables.css?v=2">
+    <link rel="stylesheet" href="/static/css/base.css?v=2">
+    <link rel="stylesheet" href="/static/css/components.css?v=2">
+    <link rel="icon" href="/static/img/logo.png" type="image/png">
+    
+    <style>
+        .operational-layout {
+            display: flex;
+            min-height: 100vh;
+        }
+        .main-content {
+            flex: 1;
+            margin-left: 240px;
+            display: flex;
+            flex-direction: column;
+            background: var(--color-bg);
+        }
+        .top-header {
+            height: 56px;
+            background: var(--color-surface);
+            border-bottom: 1px solid var(--color-border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 var(--sp-6);
+            position: sticky; top: 0;
+            z-index: 100;
+        }
+        .header-left { display: flex; align-items: center; gap: var(--sp-3); }
+        .page-title {
+            font-size: var(--font-size-base);
+            font-weight: var(--fw-semibold);
+            color: var(--color-text);
+        }
+        .content-area {
+            flex: 1;
+            padding: var(--sp-6) var(--sp-8);
+            display: flex;
+            flex-direction: column;
+            overflow-x: auto;
+        }
+        
+        /* Kanban Board styling */
+        .kanban-container {
+            display: flex;
+            gap: var(--sp-4);
+            align-items: flex-start;
+            flex: 1;
+            min-height: 500px;
+        }
+        .kanban-column {
+            width: 280px;
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-lg);
+            display: flex;
+            flex-direction: column;
+            max-height: calc(100vh - 150px);
+            box-shadow: var(--shadow-xs);
+            flex-shrink: 0;
+        }
+        .column-header {
+            padding: var(--sp-3) var(--sp-4);
+            border-bottom: 1px solid var(--color-border);
+            font-weight: var(--fw-semibold);
+            font-size: var(--font-size-sm);
+            color: var(--color-text-2);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--sidebar-hover-bg);
+            border-top-left-radius: var(--radius-lg);
+            border-top-right-radius: var(--radius-lg);
+        }
+        .card-list {
+            padding: var(--sp-3);
+            display: flex;
+            flex-direction: column;
+            gap: var(--sp-3);
+            overflow-y: auto;
+            flex: 1;
+            min-height: 100px; /* needed for drag drop targets */
+        }
+        .kanban-card {
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-md);
+            padding: var(--sp-3);
+            box-shadow: var(--shadow-xs);
+            cursor: pointer;
+            transition: border-color var(--t-fast), transform var(--t-fast);
+            position: relative;
+        }
+        .kanban-card:hover {
+            border-color: var(--color-primary);
+            transform: translateY(-1px);
+        }
+        .card-title {
+            font-size: var(--font-size-sm);
+            font-weight: var(--fw-medium);
+            color: var(--color-text);
+            margin-bottom: var(--sp-1);
+        }
+        .card-desc {
+            font-size: var(--font-size-xs);
+            color: var(--color-text-3);
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            margin-bottom: var(--sp-3);
+        }
+        .card-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 10px;
+            color: var(--color-text-4);
+        }
+
+        /* Modal Rich Detail */
+        .rich-modal {
+            display: none;
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.55);
+            align-items: center; justify-content: center;
+            z-index: var(--z-modal);
+            padding: var(--sp-4);
+            backdrop-filter: blur(2px);
+        }
+        .rich-modal.show { display: flex; }
+        .rich-content {
+            background: var(--color-surface);
+            border-radius: var(--radius-xl);
+            width: 100%;
+            max-width: 800px;
+            height: 90%;
+            max-height: 680px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: var(--shadow-lg);
+            animation: modalIn var(--t-base);
+        }
+        .rich-header {
+            padding: var(--sp-4) var(--sp-6);
+            border-bottom: 1px solid var(--color-border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .rich-body {
+            padding: var(--sp-6);
+            overflow-y: auto;
+            flex: 1;
+            display: grid;
+            grid-template-columns: 1.7fr 1fr;
+            gap: var(--sp-6);
+        }
+        .rich-section {
+            margin-bottom: var(--sp-5);
+        }
+        .rich-section-title {
+            font-size: var(--font-size-sm);
+            font-weight: var(--fw-semibold);
+            color: var(--color-text-2);
+            margin-bottom: var(--sp-3);
+            border-bottom: 1px solid var(--color-border);
+            padding-bottom: 4px;
+        }
+        .tab-btn {
+            background: none; border: none;
+            padding: 6px 12px;
+            font-size: var(--font-size-sm);
+            color: var(--color-text-3);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all var(--t-fast);
+        }
+        .tab-btn.active {
+            color: var(--color-primary);
+            border-color: var(--color-primary);
+            font-weight: var(--fw-semibold);
+        }
+    </style>
+</head>
+<body>
+    <div class="operational-layout">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar" style="width: 240px; background: var(--sidebar-bg); border-right: 1px solid var(--sidebar-border); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: var(--z-sidebar);">
+            <div class="sidebar-header" style="padding: var(--sp-5); border-bottom: 1px solid var(--sidebar-border); display: flex; align-items: center; gap: var(--sp-3); min-height: 56px;">
+                <div class="sidebar-logo" style="width: 32px; height: 32px; border-radius: var(--radius-md); overflow: hidden;"><img src="/static/img/logo.png" alt="Logo" style="width:100%; height:100%; object-fit:cover;"></div>
+                <div class="sidebar-brand" style="font-size: var(--font-size-sm); font-weight: var(--fw-semibold); color: var(--color-text);">Brasileiros <span style="color: var(--color-primary);">no Atacama</span></div>
+            </div>
+            <nav class="sidebar-nav" style="flex: 1; padding: var(--sp-3) 0; overflow-y: auto; display: flex; flex-direction: column;">
+                <div class="nav-section" style="padding: var(--sp-1) var(--sp-4); margin-top: var(--sp-4);"><div class="nav-section-title" style="font-size: 10px; font-weight: var(--fw-semibold); text-transform: uppercase; color: var(--color-text-4);">Principal</div></div>
+                <a href="/dashboard" class="nav-item" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--sidebar-text); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2);"><span>Dashboard</span></a>
+                
+                <div class="nav-section" style="padding: var(--sp-1) var(--sp-4); margin-top: var(--sp-4);"><div class="nav-section-title" style="font-size: 10px; font-weight: var(--fw-semibold); text-transform: uppercase; color: var(--color-text-4);">CRM</div></div>
+                <a href="/leads" class="nav-item" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--sidebar-text); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2);"><span>Leads</span></a>
+                <a href="/pipeline" class="nav-item" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--sidebar-text); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2);"><span>Pipeline</span></a>
+                
+                <div class="nav-section" style="padding: var(--sp-1) var(--sp-4); margin-top: var(--sp-4);"><div class="nav-section-title" style="font-size: 10px; font-weight: var(--fw-semibold); text-transform: uppercase; color: var(--color-text-4);">BNA Operacional</div></div>
+                <a href="/operational/boards" class="nav-item active" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); background: var(--sidebar-active-bg); color: var(--sidebar-active-text); font-weight: var(--fw-semibold); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2);"><span>Esteira de Processos</span></a>
+                <a href="/operational/my-pending" class="nav-item" style="display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--sidebar-text); font-size: var(--font-size-sm); text-decoration: none; border-radius: var(--radius-md); margin: 1px var(--sp-2);"><span>Minhas Pendências</span></a>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="top-header">
+                <div class="header-left">
+                    <h2 class="page-title" id="boardTitle">Carregando quadro...</h2>
+                </div>
+                <div class="header-right" style="display: flex; gap: var(--sp-3);">
+                    <button class="btn" style="background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-text-2);" onclick="window.location.href='/operational/boards'">&larr; Voltar para Quadros</button>
+                    <button class="btn btn-primary" id="newCardBtn">+ Criar Card</button>
+                    <button class="btn btn-primary" id="newListBtn" style="display: none;">+ Nova Coluna</button>
+                </div>
+            </header>
+
+            <div class="content-area">
+                <div class="kanban-container" id="kanbanContainer">
+                    <!-- Loaded dynamically -->
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Create Card Modal -->
+    <div class="modal" id="createCardModal">
+        <div class="modal-content">
+            <h3 style="font-size: var(--font-size-lg); font-weight: var(--fw-semibold); color: var(--color-text); margin-bottom: var(--sp-4);">Criar Novo Card Operacional</h3>
+            <form id="createCardForm">
+                <div style="margin-bottom: var(--sp-4);">
+                    <label for="cardCol" style="display: block; font-size: var(--font-size-xs); font-weight: var(--fw-semibold); color: var(--color-text-2); margin-bottom: var(--sp-2);">Coluna</label>
+                    <select id="cardCol" class="form-input" style="width: 100%;" required></select>
+                </div>
+                <div style="margin-bottom: var(--sp-4);">
+                    <label for="cardTitle" style="display: block; font-size: var(--font-size-xs); font-weight: var(--fw-semibold); color: var(--color-text-2); margin-bottom: var(--sp-2);">Título do Card</label>
+                    <input type="text" id="cardTitle" class="form-input" style="width: 100%;" placeholder="Ex: Júlia Santos - Chile VIP" required>
+                </div>
+                <div style="margin-bottom: var(--sp-6);">
+                    <label for="cardDesc" style="display: block; font-size: var(--font-size-xs); font-weight: var(--fw-semibold); color: var(--color-text-2); margin-bottom: var(--sp-2);">Descrição</label>
+                    <textarea id="cardDesc" class="form-input" style="width: 100%; min-height: 80px;" placeholder="Detalhes do processo..."></textarea>
+                </div>
+                <div style="display: flex; gap: var(--sp-3); justify-content: flex-end;">
+                    <button type="button" class="btn" id="closeCardModalBtn" style="background: var(--color-bg); color: var(--color-text-2);">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Criar Card</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Create Column Modal -->
+    <div class="modal" id="createListModal">
+        <div class="modal-content">
+            <h3 style="font-size: var(--font-size-lg); font-weight: var(--fw-semibold); color: var(--color-text); margin-bottom: var(--sp-4);">Criar Nova Coluna</h3>
+            <form id="createListForm">
+                <div style="margin-bottom: var(--sp-6);">
+                    <label for="listName" style="display: block; font-size: var(--font-size-xs); font-weight: var(--fw-semibold); color: var(--color-text-2); margin-bottom: var(--sp-2);">Nome da Coluna</label>
+                    <input type="text" id="listName" class="form-input" style="width: 100%;" placeholder="Ex: Aguardando Vouchers" required>
+                </div>
+                <div style="display: flex; gap: var(--sp-3); justify-content: flex-end;">
+                    <button type="button" class="btn" id="closeListModalBtn" style="background: var(--color-bg); color: var(--color-text-2);">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Criar Coluna</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Rich Card Detail Modal -->
+    <div class="rich-modal" id="richCardModal">
+        <div class="rich-content">
+            <div class="rich-header">
+                <h3 id="richCardTitle" style="font-size: var(--font-size-lg); font-weight: var(--fw-semibold); color: var(--color-text);">Carregando card...</h3>
+                <div style="display: flex; gap: var(--sp-2);">
+                    <button class="btn" style="background: var(--color-error-bg); color: var(--color-error); padding: 4px 10px; font-size: 12px;" id="archiveCardBtn">Arquivar Card</button>
+                    <button class="btn" style="background: var(--color-bg); color: var(--color-text-2); padding: 4px 10px; font-size: 12px;" id="closeRichModalBtn">Fechar</button>
+                </div>
+            </div>
+            <div class="rich-body">
+                <!-- Left panel: Details, Checklists, Comments -->
+                <div style="display: flex; flex-direction: column; gap: var(--sp-5);">
+                    <div>
+                        <label style="font-size: 11px; font-weight: var(--fw-semibold); color: var(--color-text-3);">DESCRIÇÃO</label>
+                        <p id="richCardDesc" style="font-size: var(--font-size-sm); color: var(--color-text-2); background: var(--color-bg); padding: var(--sp-3); border-radius: var(--radius-md); margin-top: 4px; min-height: 50px;">Sem descrição.</p>
+                    </div>
+
+                    <!-- Checklists Section -->
+                    <div class="rich-section">
+                        <div class="rich-section-title" style="display:flex; justify-content:space-between; align-items:center;">
+                            <span>CHECKLISTS</span>
+                            <button class="tab-btn" style="padding:0; font-size:11px;" id="addChecklistBtn">+ Adicionar Lista</button>
+                        </div>
+                        <div id="checklistsContainer" style="display:flex; flex-direction:column; gap:var(--sp-4);"></div>
+                    </div>
+
+                    <!-- Comments Section -->
+                    <div class="rich-section">
+                        <div class="rich-section-title">COMENTÁRIOS DA EQUIPE</div>
+                        <div id="commentsContainer" style="display:flex; flex-direction:column; gap:var(--sp-3); max-height:160px; overflow-y:auto; margin-bottom:var(--sp-3);"></div>
+                        <form id="addCommentForm" style="display:flex; gap:var(--sp-2);">
+                            <input type="text" id="commentContent" class="form-input" style="flex:1;" placeholder="Digite um comentário... Use @ para mencionar alguém" required>
+                            <button type="submit" class="btn btn-primary" style="padding:0 var(--sp-4);">Enviar</button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Right panel: Assignees, Custom Fields, History -->
+                <div style="border-left: 1px solid var(--color-border); padding-left: var(--sp-6); display: flex; flex-direction: column; gap: var(--sp-5);">
+                    <!-- Assignees -->
+                    <div>
+                        <label style="font-size: 11px; font-weight: var(--fw-semibold); color: var(--color-text-3);">RESPONSÁVEIS DESIGNADOS</label>
+                        <div id="assigneesList" style="display:flex; flex-direction:column; gap:6px; margin-top:6px;"></div>
+                        <select id="addAssigneeSelect" class="form-input" style="width:100%; margin-top:6px; font-size:12px;">
+                            <option value="">+ Designar usuário...</option>
+                        </select>
+                    </div>
+
+                    <!-- Custom Fields -->
+                    <div>
+                        <label style="font-size: 11px; font-weight: var(--fw-semibold); color: var(--color-text-3);">CAMPOS PERSONALIZADOS DO QUADRO</label>
+                        <div id="customFieldsContainer" style="display:flex; flex-direction:column; gap:var(--sp-3); margin-top:6px;"></div>
+                    </div>
+
+                    <!-- History / Logs -->
+                    <div>
+                        <label style="font-size: 11px; font-weight: var(--fw-semibold); color: var(--color-text-3);">HISTÓRICO DO CARD</label>
+                        <div id="cardHistoryContainer" style="display:flex; flex-direction:column; gap:4px; max-height:120px; overflow-y:auto; font-size:11px; color:var(--color-text-3); margin-top:6px;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const boardId = {{ board_id }};
+        let token = localStorage.getItem("token") || document.cookie.split('; ').find(row => row.startsWith('access_token='))?.split('=')[1];
+        if (!token) window.location.href = "/login";
+
+        let lists = [];
+        let cards = [];
+        let activeCardId = null;
+        let usersList = [];
+        let fieldDefinitions = [];
+        let isAdmin = false;
+
+        // Parse token payload to check if user is admin
+        try {
+            let base64Url = token.split('.')[1];
+            let base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+            let payload = JSON.parse(window.atob(base64));
+            isAdmin = payload.role === "admin";
+            if (isAdmin) {
+                document.getElementById("newListBtn").style.display = "block";
+            }
+        } catch (e) {}
+
+        // Modal triggers
+        const cardModal = document.getElementById("createCardModal");
+        const listModal = document.getElementById("createListModal");
+        const richModal = document.getElementById("richCardModal");
+
+        document.getElementById("newCardBtn").onclick = () => {
+            const select = document.getElementById("cardCol");
+            select.innerHTML = "";
+            lists.forEach(l => {
+                select.innerHTML += `<option value="${l.id}">${l.name}</option>`;
+            });
+            cardModal.classList.add("show");
+        };
+        document.getElementById("closeCardModalBtn").onclick = () => cardModal.classList.remove("show");
+
+        document.getElementById("newListBtn").onclick = () => listModal.classList.add("show");
+        document.getElementById("closeListModalBtn").onclick = () => listModal.classList.remove("show");
+        document.getElementById("closeRichModalBtn").onclick = () => richModal.classList.remove("show");
+
+        // Fetch board details, lists, cards, users, field definitions
+        async function init() {
+            await fetchBoardInfo();
+            await fetchLists();
+            await fetchCards();
+            await fetchUsers();
+            await fetchFieldDefinitions();
+        }
+
+        async function fetchBoardInfo() {
+            let response = await fetch(`/api/operational/boards/${boardId}`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                let b = await response.json();
+                document.getElementById("boardTitle").innerText = b.name;
+            }
+        }
+
+        async function fetchLists() {
+            let response = await fetch(`/api/operational/boards/${boardId}/lists`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                lists = await response.json();
+            }
+        }
+
+        async function fetchCards() {
+            let response = await fetch(`/api/operational/boards/${boardId}/cards`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                cards = await response.json();
+                renderKanban();
+            }
+        }
+
+        async function fetchUsers() {
+            let response = await fetch("/api/users", {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                usersList = await response.json();
+                let select = document.getElementById("addAssigneeSelect");
+                usersList.forEach(u => {
+                    select.innerHTML += `<option value="${u.id}">${u.nome}</option>`;
+                });
+            }
+        }
+
+        async function fetchFieldDefinitions() {
+            let response = await fetch(`/api/operational/boards/${boardId}/field-definitions`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                fieldDefinitions = await response.json();
+            }
+        }
+
+        // Render Kanban Board
+        function renderKanban() {
+            const container = document.getElementById("kanbanContainer");
+            container.innerHTML = "";
+            
+            lists.forEach(l => {
+                let column = document.createElement("div");
+                column.className = "kanban-column";
+                column.innerHTML = `
+                    <div class="column-header">
+                        <span>${l.name}</span>
+                        <span style="font-size: 11px; background: var(--color-bg); padding: 2px 6px; border-radius: var(--radius-full);" id="col-count-${l.id}">0</span>
+                    </div>
+                    <div class="card-list" id="list-cards-${l.id}" ondragover="allowDrop(event)" ondrop="drop(event, ${l.id})"></div>
+                `;
+                container.appendChild(column);
+            });
+
+            // Populate cards into columns
+            let countMap = {};
+            cards.forEach(c => {
+                if (c.is_archived) return;
+                
+                let listDiv = document.getElementById(`list-cards-${c.list_id}`);
+                if (!listDiv) return;
+
+                countMap[c.list_id] = (countMap[c.list_id] || 0) + 1;
+                
+                let card = document.createElement("div");
+                card.className = "kanban-card";
+                card.draggable = true;
+                card.ondragstart = (e) => drag(e, c.id);
+                card.onclick = () => openCardDetails(c.id);
+                card.innerHTML = `
+                    <div class="card-title">${c.title}</div>
+                    <div class="card-desc">${c.description || 'Sem descrição.'}</div>
+                    <div class="card-footer">
+                        <span>Ver Detalhes &rarr;</span>
+                        <span>${c.due_date ? new Date(c.due_date).toLocaleDateString('pt-BR') : ''}</span>
+                    </div>
+                `;
+                listDiv.appendChild(card);
+            });
+
+            // Update column badges
+            lists.forEach(l => {
+                document.getElementById(`col-count-${l.id}`).innerText = countMap[l.id] || 0;
+            });
+        }
+
+        // Drag & Drop
+        function allowDrop(e) { e.preventDefault(); }
+        function drag(e, cardId) { e.dataTransfer.setData("text/plain", cardId); }
+        async function drop(e, toListId) {
+            e.preventDefault();
+            let cardId = e.dataTransfer.getData("text/plain");
+            
+            try {
+                let response = await fetch(`/api/operational/cards/${cardId}/move`, {
+                    method: "POST",
+                    headers: { 
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${token}` 
+                    },
+                    body: JSON.stringify({ to_list_id: toListId })
+                });
+                if (response.ok) {
+                    fetchCards();
+                }
+            } catch (err) {}
+        }
+
+        // Handle Create Card
+        document.getElementById("createCardForm").onsubmit = async (e) => {
+            e.preventDefault();
+            let list_id = document.getElementById("cardCol").value;
+            let title = document.getElementById("cardTitle").value;
+            let description = document.getElementById("cardDesc").value;
+            
+            try {
+                let response = await fetch("/api/operational/cards", {
+                    method: "POST",
+                    headers: { 
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${token}` 
+                    },
+                    body: JSON.stringify({ board_id: boardId, list_id, title, description })
+                });
+                
+                if (response.ok) {
+                    cardModal.classList.remove("show");
+                    document.getElementById("createCardForm").reset();
+                    fetchCards();
+                }
+            } catch (err) {}
+        };
+
+        // Handle Create List
+        document.getElementById("createListForm").onsubmit = async (e) => {
+            e.preventDefault();
+            let name = document.getElementById("listName").value;
+            
+            try {
+                let response = await fetch("/api/operational/lists", {
+                    method: "POST",
+                    headers: { 
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${token}` 
+                    },
+                    body: JSON.stringify({ board_id: boardId, name, position: lists.length })
+                });
+                
+                if (response.ok) {
+                    listModal.classList.remove("show");
+                    document.getElementById("createListForm").reset();
+                    await fetchLists();
+                    fetchCards();
+                }
+            } catch (err) {}
+        };
+
+        // Rich Card Details Logic
+        async function openCardDetails(cardId) {
+            activeCardId = cardId;
+            let response = await fetch(`/api/operational/cards/${cardId}`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                let c = await response.json();
+                document.getElementById("richCardTitle").innerText = c.title;
+                document.getElementById("richCardDesc").innerText = c.description || 'Sem descrição.';
+                
+                await fetchChecklists();
+                await fetchComments();
+                await fetchAssignees();
+                await fetchCustomFields();
+                await fetchHistory();
+
+                richModal.classList.add("show");
+            }
+        }
+
+        async function fetchChecklists() {
+            let response = await fetch(`/api/operational/cards/${activeCardId}/checklists`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                let lists = await response.json();
+                let container = document.getElementById("checklistsContainer");
+                container.innerHTML = "";
+                
+                lists.forEach(l => {
+                    let section = document.createElement("div");
+                    section.innerHTML = `
+                        <div style="font-weight: var(--fw-semibold); font-size:12px; color:var(--color-text); margin-bottom:6px; display:flex; justify-content:space-between;">
+                            <span>${l.name}</span>
+                            <button class="tab-btn" style="padding:0; font-size:10px;" onclick="addChecklistItem(${l.id})">+ Novo Item</button>
+                        </div>
+                        <div id="checklist-items-${l.id}" style="display:flex; flex-direction:column; gap:4px; padding-left:10px;"></div>
+                    `;
+                    container.appendChild(section);
+                    fetchChecklistItems(l.id);
+                });
+            }
+        }
+
+        async function fetchChecklistItems(checklistId) {
+            let response = await fetch(`/api/operational/checklists/${checklistId}/items`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                let items = await response.json();
+                let listDiv = document.getElementById(`checklist-items-${checklistId}`);
+                listDiv.innerHTML = "";
+                
+                items.forEach(i => {
+                    let div = document.createElement("div");
+                    div.style.display = "flex";
+                    div.style.alignItems = "center";
+                    div.style.gap = "8px";
+                    div.style.fontSize = "12px";
+                    div.innerHTML = `
+                        <input type="checkbox" ${i.is_checked ? 'checked' : ''} onclick="toggleChecklistItem(${i.id})">
+                        <span style="${i.is_checked ? 'text-decoration: line-through; color: var(--color-text-4);' : ''}">${i.name}</span>
+                    `;
+                    listDiv.appendChild(div);
+                });
+            }
+        }
+
+        async function toggleChecklistItem(itemId) {
+            let response = await fetch(`/api/operational/checklist-items/${itemId}/toggle`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                fetchChecklists();
+            }
+        }
+
+        async function addChecklistItem(checklistId) {
+            let name = prompt("Nome da nova tarefa:");
+            if (!name) return;
+            
+            let response = await fetch(`/api/operational/checklists/${checklistId}/items`, {
+                method: "POST",
+                headers: { 
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}` 
+                },
+                body: JSON.stringify({ name })
+            });
+            if (response.ok) {
+                fetchChecklists();
+            }
+        }
+
+        document.getElementById("addChecklistBtn").onclick = async () => {
+            let name = prompt("Nome da lista de verificação:");
+            if (!name) return;
+            
+            let response = await fetch(`/api/operational/cards/${activeCardId}/checklists`, {
+                method: "POST",
+                headers: { 
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}` 
+                },
+                body: JSON.stringify({ name })
+            });
+            if (response.ok) {
+                fetchChecklists();
+            }
+        };
+
+        // Comments
+        async function fetchComments() {
+            let response = await fetch(`/api/operational/cards/${activeCardId}/comments`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                let comments = await response.json();
+                let container = document.getElementById("commentsContainer");
+                container.innerHTML = "";
+                
+                comments.forEach(c => {
+                    let div = document.createElement("div");
+                    div.style.background = "var(--color-bg)";
+                    div.style.padding = "6px 10px";
+                    div.style.borderRadius = "6px";
+                    div.style.fontSize = "12px";
+                    div.innerHTML = `
+                        <div style="font-weight:var(--fw-semibold); font-size:11px; margin-bottom:2px;">User #${c.user_id}</div>
+                        <div>${c.content}</div>
+                    `;
+                    container.appendChild(div);
+                });
+            }
+        }
+
+        document.getElementById("addCommentForm").onsubmit = async (e) => {
+            e.preventDefault();
+            let content = document.getElementById("commentContent").value;
+            
+            let response = await fetch(`/api/operational/cards/${activeCardId}/comments`, {
+                method: "POST",
+                headers: { 
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}` 
+                },
+                body: JSON.stringify({ content })
+            });
+            
+            if (response.ok) {
+                document.getElementById("commentContent").value = "";
+                fetchComments();
+                fetchHistory(); // comments generate history too
+            }
+        };
+
+        // Assignees
+        async function fetchAssignees() {
+            let response = await fetch(`/api/operational/cards/${activeCardId}/assignees`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                let links = await response.json();
+                let container = document.getElementById("assigneesList");
+                container.innerHTML = "";
+                
+                links.forEach(l => {
+                    let u = usersList.find(user => user.id === l.user_id);
+                    let name = u ? u.nome : `User #${l.user_id}`;
+                    let div = document.createElement("div");
+                    div.style.display = "flex";
+                    div.style.justifyContent = "space-between";
+                    div.style.alignItems = "center";
+                    div.style.fontSize = "12px";
+                    div.innerHTML = `
+                        <span>👤 ${name}</span>
+                        <button style="background:none; border:none; color:var(--color-error); cursor:pointer; font-size:11px;" onclick="removeAssignee(${l.user_id})">Remover</button>
+                    `;
+                    container.appendChild(div);
+                });
+            }
+        }
+
+        document.getElementById("addAssigneeSelect").onchange = async (e) => {
+            let userId = e.target.value;
+            if (!userId) return;
+
+            let response = await fetch(`/api/operational/cards/${activeCardId}/assignees/${userId}`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                e.target.value = "";
+                fetchAssignees();
+                fetchHistory();
+            }
+        };
+
+        async function removeAssignee(userId) {
+            let response = await fetch(`/api/operational/cards/${activeCardId}/assignees/${userId}/remove`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                fetchAssignees();
+                fetchHistory();
+            }
+        }
+
+        // Custom Fields
+        async function fetchCustomFields() {
+            let response = await fetch(`/api/operational/cards/${activeCardId}/field-values`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            let values = [];
+            if (response.ok) {
+                values = await response.json();
+            }
+
+            let container = document.getElementById("customFieldsContainer");
+            container.innerHTML = "";
+
+            if (fieldDefinitions.length === 0) {
+                container.innerHTML = "<div style='font-size:11px; color:var(--color-text-3);'>Nenhum campo estruturado cadastrado no quadro.</div>";
+                return;
+            }
+
+            fieldDefinitions.forEach(def => {
+                let valObj = values.find(v => v.definition_id === def.id);
+                let currentVal = "";
+                if (valObj) {
+                    if (def.field_type === "boolean") currentVal = valObj.value_boolean;
+                    else if (def.field_type === "date") currentVal = valObj.value_date ? valObj.value_date.substring(0, 10) : "";
+                    else currentVal = valObj.value_text || "";
+                }
+
+                let div = document.createElement("div");
+                div.style.fontSize = "12px";
+                
+                let inputHtml = "";
+                if (def.field_type === "boolean") {
+                    inputHtml = `<input type="checkbox" id="field-${def.id}" ${currentVal ? 'checked' : ''} onchange="saveCustomField(${def.id}, 'boolean')">`;
+                } else if (def.field_type === "date") {
+                    inputHtml = `<input type="date" id="field-${def.id}" class="form-input" style="width:100%; padding:4px;" value="${currentVal}" onchange="saveCustomField(${def.id}, 'date')">`;
+                } else if (def.field_type === "select" && def.select_options) {
+                    let opts = def.select_options;
+                    inputHtml = `<select id="field-${def.id}" class="form-input" style="width:100%; padding:4px;" onchange="saveCustomField(${def.id}, 'select')">
+                        <option value="">Selecione...</option>
+                        ${opts.map(o => `<option value="${o}" ${o === currentVal ? 'selected' : ''}>${o}</option>`).join('')}
+                    </select>`;
+                } else {
+                    inputHtml = `<input type="text" id="field-${def.id}" class="form-input" style="width:100%; padding:4px;" value="${currentVal}" onblur="saveCustomField(${def.id}, 'text')">`;
+                }
+
+                div.innerHTML = `
+                    <div style="font-weight:var(--fw-medium); margin-bottom:2px; font-size:11px;">${def.name}</div>
+                    ${inputHtml}
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        async function saveCustomField(definitionId, type) {
+            let input = document.getElementById(`field-${definitionId}`);
+            let body = {};
+            
+            if (type === "boolean") body.value_boolean = input.checked;
+            else if (type === "date") body.value_date = input.value ? new Date(input.value) : null;
+            else body.value_text = input.value;
+
+            await fetch(`/api/operational/cards/${activeCardId}/field-values/${definitionId}`, {
+                method: "POST",
+                headers: { 
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}` 
+                },
+                body: JSON.stringify(body)
+            });
+        }
+
+        // History
+        async function fetchHistory() {
+            let response = await fetch(`/api/operational/cards/${activeCardId}/activity-logs`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                let logs = await response.json();
+                let container = document.getElementById("cardHistoryContainer");
+                container.innerHTML = "";
+                
+                logs.forEach(l => {
+                    let date = new Date(l.created_at).toLocaleString('pt-BR');
+                    container.innerHTML += `<div>[${date}] <strong>${l.action}</strong> por User #${l.user_id}</div>`;
+                });
+            }
+        }
+
+        // Archive Card
+        document.getElementById("archiveCardBtn").onclick = async () => {
+            if (!confirm("Deseja realmente arquivar este card operacional?")) return;
+            
+            let response = await fetch(`/api/operational/cards/${activeCardId}/archive`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                richModal.classList.remove("show");
+                fetchCards();
+            }
+        };
+
+        init();
+    </script>
+</body>
+</html>
