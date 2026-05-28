@@ -18,7 +18,7 @@ from app.schemas.segment import (
 )
 from app.schemas.lead import LeadResponse, LeadListResponse, LeadFunnelInfo
 from app.models.pipeline import Funnel
-from app.auth import get_current_user
+from app.auth import get_current_user, require_admin
 
 router = APIRouter(prefix="/api/segments", tags=["Segmentação"])
 
@@ -228,7 +228,7 @@ async def get_segment(
 @router.post("", response_model=SegmentResponse, status_code=201, summary="Criar lista de segmentação")
 async def create_segment(
     data: SegmentCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -270,7 +270,7 @@ async def create_segment(
 async def update_segment(
     segment_id: int,
     data: SegmentUpdate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     seg = db.query(Segment).filter(Segment.id == segment_id).first()
