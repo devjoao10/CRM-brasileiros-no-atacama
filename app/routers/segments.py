@@ -18,7 +18,7 @@ from app.schemas.segment import (
 )
 from app.schemas.lead import LeadResponse, LeadListResponse, LeadFunnelInfo
 from app.models.pipeline import Funnel
-from app.auth import get_current_user
+from app.auth import get_current_user, require_admin
 
 router = APIRouter(prefix="/api/segments", tags=["Segmentação"])
 
@@ -301,7 +301,7 @@ async def update_segment(
 @router.delete("/{segment_id}", summary="Excluir segmento")
 async def delete_segment(
     segment_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     seg = db.query(Segment).filter(Segment.id == segment_id).first()
