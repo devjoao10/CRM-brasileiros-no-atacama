@@ -68,8 +68,18 @@ class OperationalFlowService:
             }
         })
 
-        # TODO (OP-07): Adicionar aplicação de checklist template se a coluna de destino tiver regras automáticas de checklist
-        # TODO (OP-09): Gerar notificações em tempo real na central de alertas para os membros do card se houver menção/atribuição
+        # Gerar notificações na central de alertas para os membros atribuídos ao card
+        assignees = self.card_repo.list_assignees(card_id)
+        from app.services.operational_notification_service import OperationalNotificationService
+        notif_service = OperationalNotificationService(self.db)
+        for link in assignees:
+            if link.user_id != user_id:
+                notif_service.create_notification(
+                    user_id=link.user_id,
+                    card_id=card_id,
+                    event_type="movement",
+                    message="Um card no qual você está designado foi movido."
+                )
 
         self.db.commit()
         return movement

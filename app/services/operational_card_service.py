@@ -133,6 +133,16 @@ class OperationalCardService:
             "details": {"assigned_user_id": user_id}
         })
 
+        # Notificar o usuário atribuído
+        from app.services.operational_notification_service import OperationalNotificationService
+        notif_service = OperationalNotificationService(self.db)
+        notif_service.create_notification(
+            user_id=user_id,
+            card_id=card_id,
+            event_type="assignee",
+            message="Você foi designado para um card."
+        )
+
         self.db.commit()
         return assignee
 

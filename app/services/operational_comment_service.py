@@ -43,7 +43,7 @@ class OperationalCommentService:
         self.db.flush()  # Para obter o ID do comentário
 
         # Parse de menções @username
-        mentions = self._parse_and_create_mentions(comment.id, data["content"])
+        mentions = self._parse_and_create_mentions(comment.id, card_id, data["content"])
 
         # Log de atividade
         self.flow_repo.create_activity_log({
@@ -66,7 +66,7 @@ class OperationalCommentService:
             raise ValueError(f"Comentário com ID {comment_id} não encontrado")
         return self.comment_repo.list_mentions_by_comment(comment_id)
 
-    def _parse_and_create_mentions(self, comment_id: int, content: str) -> List[OperationalMention]:
+    def _parse_and_create_mentions(self, comment_id: int, card_id: int, content: str) -> List[OperationalMention]:
         # Encontra padrões do tipo @username (letras, números, underlines)
         tokens = re.findall(r"@(\w+)", content)
         created_mentions = []
@@ -86,6 +86,16 @@ class OperationalCommentService:
             if user:
                 mention = self.comment_repo.create_mention(comment_id, user.id)
                 created_mentions.append(mention)
+
+                # Cria a notificação de menção correspondente
+                from app.services.operational_notification_service import OperationalNotificationService
+                notif_service = OperationalNotificationService(self.db)
+                notif_service.create_notification(
+                    user_id=user.id,
+                    card_id=card_id,
+                    event_type="mention",
+                    message="Você foi mencionado em um comentário."
+                )
             else:
                 # Loga aviso ou registra no console da IA sobre a menção ignorada
                 # (usuário não encontrado) para segurança e conformidade de negócio.
