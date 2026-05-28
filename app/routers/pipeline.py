@@ -15,7 +15,7 @@ from app.schemas.pipeline import (
     HistoryResponse, HistoryListResponse,
 )
 from app.schemas.tag import TagResponse
-from app.auth import get_current_user
+from app.auth import get_current_user, require_admin
 
 router = APIRouter(prefix="/api/pipeline", tags=["Pipeline"])
 
@@ -86,7 +86,7 @@ async def get_funnel(
 @router.post("/funnels", response_model=FunnelResponse, status_code=201, summary="Criar funil")
 async def create_funnel(
     data: FunnelCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -127,7 +127,7 @@ async def create_funnel(
 async def update_funnel(
     funnel_id: int,
     data: FunnelUpdate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     funnel = db.query(Funnel).filter(Funnel.id == funnel_id).first()
