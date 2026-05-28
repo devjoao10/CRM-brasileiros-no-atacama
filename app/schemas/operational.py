@@ -240,6 +240,10 @@ class NotificationResponse(BaseModel):
         from_attributes = True
 
 
+class CardMoveRequest(BaseModel):
+    to_list_id: int = Field(..., description="ID da lista/coluna de destino")
+
+
 class CardMovementResponse(BaseModel):
     id: int
     card_id: int
