@@ -210,7 +210,7 @@ class ChecklistItemResponse(BaseModel):
 # ==============================================================================
 
 class CommentCreate(BaseModel):
-    card_id: int = Field(..., description="ID do card")
+    card_id: Optional[int] = Field(None, description="ID do card (opcional, fonte de verdade no path)")
     content: str = Field(..., min_length=1, description="Texto do comentário")
 
 
@@ -263,6 +263,16 @@ class ActivityLogResponse(BaseModel):
     user_id: int
     action: str
     details: Optional[dict]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class MentionResponse(BaseModel):
+    id: int
+    comment_id: int
+    user_id: int
     created_at: datetime
 
     class Config:
