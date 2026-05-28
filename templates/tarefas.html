@@ -1,53 +1,17 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tarefas — CRM Brasileiros no Atacama</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/variables.css?v=2">
-    <link rel="stylesheet" href="/static/css/base.css?v=2">
-    <link rel="stylesheet" href="/static/css/components.css?v=2">
-    <link rel="icon" href="/static/img/logo.png" type="image/png">
-    <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
-    <style>
-        .dashboard-layout { display: flex; min-height: 100vh; }
-                .sidebar { width: 240px; background: var(--sidebar-bg); border-right: 1px solid var(--sidebar-border); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: var(--z-sidebar); }
-        .sidebar-header { padding: var(--sp-5); display: flex; align-items: center; gap: var(--sp-3); border-bottom: 1px solid var(--sidebar-border); min-height: 56px; }
-        .sidebar-logo { width: 32px; height: 32px; border-radius: var(--radius-md); overflow: hidden; flex-shrink: 0; }
-        .sidebar-logo img { width: 100%; height: 100%; object-fit: cover; }
-        .sidebar-brand { font-size: var(--font-size-sm); font-weight: var(--fw-semibold); color: var(--color-text); line-height: 1.3; }
-        .sidebar-brand span { color: var(--color-primary); }
-        .sidebar-nav { flex: 1; padding: var(--sp-3) 0; overflow-y: auto; }
-        .nav-section { padding: var(--sp-1) var(--sp-4); margin-top: var(--sp-4); }
-        .nav-section-title { font-size: 10px; font-weight: var(--fw-semibold); text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-4); margin-bottom: var(--sp-1); }
-        .nav-item { display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--sidebar-text); font-size: var(--font-size-sm); font-weight: var(--fw-medium); transition: background var(--t-fast), color var(--t-fast); cursor: pointer; text-decoration: none; border-left: 2px solid transparent; margin: 1px var(--sp-2); border-radius: var(--radius-md); }
-        .nav-item:hover { background: var(--sidebar-hover-bg); color: var(--color-text); }
-        .nav-item.active { background: var(--sidebar-active-bg); color: var(--sidebar-active-text); font-weight: var(--fw-semibold); }
-        .nav-item .nav-icon { width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; opacity: 0.7; }
-        .nav-item.active .nav-icon { opacity: 1; }
-        .nav-item .nav-badge { margin-left: auto; background: var(--color-primary-light); color: var(--color-primary); font-size: var(--font-size-xs); padding: 1px 6px; border-radius: var(--radius-full); font-weight: var(--fw-semibold); }
-        .sidebar-footer { padding: var(--sp-3) var(--sp-2); border-top: 1px solid var(--sidebar-border); }
-        .main-content { flex: 1; margin-left: 240px; display: flex; flex-direction: column; }
-        .top-header { height: 56px; background: var(--color-surface); border-bottom: 1px solid var(--color-border); display: flex; align-items: center; justify-content: space-between; padding: 0 var(--sp-6); position: sticky; top: 0; z-index: 100; }
-        .header-left { display: flex; align-items: center; gap: var(--sp-3); }
-        .menu-toggle { display: none; background: none; border: none; cursor: pointer; padding: 6px; color: var(--color-text-3); border-radius: var(--radius-md); }
-        .menu-toggle:hover { background: var(--color-bg); }
-        .page-title { font-size: var(--font-size-base); font-weight: var(--fw-semibold); color: var(--color-text); }
-        .header-right { display: flex; align-items: center; gap: var(--sp-3); }
-        .user-info { display: flex; align-items: center; gap: var(--sp-2); padding: 5px var(--sp-3); border-radius: var(--radius-md); cursor: pointer; transition: background var(--t-fast); }
-        .user-info:hover { background: var(--color-bg); }
-        .user-avatar { width: 30px; height: 30px; border-radius: var(--radius-full); background: var(--color-primary); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: var(--fw-semibold); font-size: var(--font-size-xs); }
-        .user-name { font-size: var(--font-size-sm); font-weight: var(--fw-medium); color: var(--color-text); }
-        .user-role { font-size: var(--font-size-xs); color: var(--color-text-3); }
-        .content-area { flex: 1; padding: var(--sp-6) var(--sp-8); background: var(--color-bg); }
+{% extends "base.html" %}
+{% set page_title = "Tarefas" %}
+{% set active_nav = "tarefas" %}
 
+{% block extra_head %}
+    <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
+{% endblock %}
+
+{% block extra_css %}
+    <style>
         /* Tabs and Filters */
         .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-6); flex-wrap: wrap; gap: var(--space-4); }
         .page-header h1 { font-size: var(--font-size-2xl); font-weight: var(--font-weight-bold); }
-        
+
         .tabs-container {
             display: flex; gap: var(--space-2); margin-bottom: var(--space-6);
             border-bottom: 2px solid var(--color-dark-200); overflow-x: auto;
@@ -82,13 +46,13 @@
             border-left: 4px solid var(--color-dark-300); transition: all 0.2s;
         }
         .task-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
-        
+
         /* Status Colors */
         .task-card[data-status="pendente"] { border-left-color: var(--color-warning); }
         .task-card[data-status="em_andamento"] { border-left-color: var(--color-info); }
         .task-card[data-status="concluido"] { border-left-color: var(--color-success); opacity: 0.7; }
         .task-card[data-status="cancelado"] { border-left-color: var(--color-danger); opacity: 0.5; }
-        
+
         .task-card.is-overdue { border-left-color: var(--color-danger); background: #fff5f5; }
 
         .task-content { flex: 1; margin-right: var(--space-4); }
@@ -110,7 +74,7 @@
             border-left-color: #805AD5;
             background: #faf8ff;
         }
-        
+
         .task-actions { display: flex; align-items: center; gap: var(--space-2); }
         .task-actions button {
             background: none; border: none; font-size: var(--font-size-lg);
@@ -145,7 +109,7 @@
             transition: all 0.2s;
         }
         .view-toggle button.active { background: var(--color-white); color: var(--color-primary); box-shadow: var(--shadow-sm); }
-        
+
         /* Calendar Theme Adjustments */
         .fc { font-family: var(--font-family); background: white; border-radius: var(--radius-xl); overflow: hidden; }
         .fc-theme-standard td, .fc-theme-standard th { border-color: var(--color-dark-100); }
@@ -158,78 +122,10 @@
         .fc .fc-button-primary:not(:disabled).fc-button-active { background-color: var(--color-primary-dark) !important; }
         .fc-daygrid-day-number { color: var(--color-dark); font-weight: 500; font-size: 14px; padding: 8px !important; }
         .fc-day-today { background-color: rgba(43, 108, 176, 0.05) !important; }
-
-        @media (max-width: 1024px) {
-            .sidebar { transform: translateX(-100%); transition: transform var(--transition-base); }
-            .sidebar.open { transform: translateX(0); }
-            .main-content { margin-left: 0; }
-            .menu-toggle { display: block; }
-            .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: calc(var(--z-sidebar) - 1); }
-            .sidebar-overlay.show { display: block; }
-        }
     </style>
-</head>
-<body>
-    <div class="dashboard-layout">
-        <div class="sidebar-overlay" id="sidebarOverlay"></div>
-                <aside class="sidebar" id="sidebar">
-            <div class="sidebar-header">
-                <div class="sidebar-logo"><img src="/static/img/logo.png" alt="Logo"></div>
-                <div class="sidebar-brand">Brasileiros <span>no Atacama</span></div>
-            </div>
-            <nav class="sidebar-nav">
-                <div class="nav-section"><div class="nav-section-title">Principal</div></div>
-                <a href="/dashboard" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></span><span>Dashboard</span></a>
-                <div class="nav-section"><div class="nav-section-title">Inteligência</div></div>
-                <a href="/ai" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><circle cx="19" cy="5" r="3"/></svg></span><span>Assistente IA</span></a>
-                <div class="nav-section"><div class="nav-section-title">CRM</div></div>
-                <a href="/leads" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span><span>Leads</span></a>
-                <a href="/tags" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg></span><span>Tags</span></a>
-                <a href="/pipeline" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span><span>Pipeline</span></a>
-                <a href="/segmentacao" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span><span>Segmentação</span></a>
-                <a href="/tarefas" class="nav-item active"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><span>Tarefas</span></a>
-                <div class="nav-section">
-                    <div class="nav-section-title">BNA Operacional</div>
-                </div>
-                <a href="/operational/boards" class="nav-item">
-                    <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></span>
-                    <span>Esteira de Processos</span>
-                </a>
-                <a href="/operational/my-pending" class="nav-item">
-                    <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></span>
-                    <span>Minhas Pendências</span>
-                </a>
+{% endblock %}
 
-                <div class="nav-section"><div class="nav-section-title">Administração</div></div>
-                <a href="/relatorios" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span><span>Relatórios</span></a>
-                <a href="/equipe" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span><span>Equipe e Usuários</span></a>
-                <div class="nav-section"><div class="nav-section-title">Sistema</div></div>
-                <a href="/docs" class="nav-item" target="_blank"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span><span>API Docs</span></a>
-                <a href="https://n8n.crmbrasileirosnoatacama.cloud" class="nav-item" target="_blank"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span><span>Servidor n8n</span></a>
-            </nav>
-            <div class="sidebar-footer">
-                <a href="#" class="nav-item" id="logoutBtn"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></span><span>Sair</span></a>
-            </div>
-        </aside>
-
-        <main class="main-content">
-            <header class="top-header">
-                <div class="header-left">
-                    <button class="menu-toggle" id="menuToggle" aria-label="Menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
-                    <h2 class="page-title">Tarefas</h2>
-                </div>
-                <div class="header-right">
-                    <div class="user-info">
-                        <div class="user-avatar" id="userAvatar">A</div>
-                        <div>
-                            <div class="user-name" id="userName">Carregando...</div>
-                            <div class="user-role" id="userRole">—</div>
-                        </div>
-                    </div>
-                </div>
-            </header>
-
-            <div class="content-area">
+{% block content %}
                 <div class="page-header">
                     <h1>Gerenciar Tarefas</h1>
                     <div style="display:flex;gap:var(--space-4);align-items:center;flex-wrap:wrap;">
@@ -240,7 +136,7 @@
                         <button class="btn btn-primary btn-sm" onclick="openTaskModal()">+ Nova Tarefa</button>
                     </div>
                 </div>
-                
+
                 <div class="tabs-container" id="mainTabs">
                     <button class="tab-button active" data-tab="minhas">Minhas Tarefas</button>
                     <button class="tab-button" data-tab="equipe" id="equipeTab" style="display:none;">Todas (Equipe)</button>
@@ -266,9 +162,6 @@
                 <div id="calendarView" style="display:none; padding-bottom:20px;">
                     <div id="calendar"></div>
                 </div>
-            </div>
-        </main>
-    </div>
 
     <!-- Task Modal -->
     <div class="modal-overlay" id="taskModal">
@@ -332,8 +225,9 @@
             </div>
         </div>
     </div>
+{% endblock %}
 
-    <script src="/static/js/auth.js"></script>
+{% block scripts %}
     <script>
     let currentTab = 'minhas'; // minhas, equipe, automaticas
     let dateFilter = 'all'; // all, overdue, today, tomorrow
@@ -344,21 +238,9 @@
     document.addEventListener('DOMContentLoaded', () => {
         if (!Auth.requireAuth()) return;
         const user = Auth.getUser();
-        if (user) {
-            document.getElementById('userName').textContent = user.nome;
-            document.getElementById('userRole').textContent = user.role === 'admin' ? 'Administrador' : 'Usuário';
-            document.getElementById('userAvatar').textContent = user.nome.charAt(0).toUpperCase();
-            if (user.role === 'admin') {
-                document.getElementById('equipeTab').style.display = 'block';
-            }
+        if (user && user.role === 'admin') {
+            document.getElementById('equipeTab').style.display = 'block';
         }
-
-        // Sidebar interactions
-        document.getElementById('logoutBtn').addEventListener('click', e => { e.preventDefault(); Auth.logout(); });
-        const sidebar = document.getElementById('sidebar'), overlay = document.getElementById('sidebarOverlay');
-        document.getElementById('menuToggle').addEventListener('click', () => { sidebar.classList.toggle('open'); overlay.classList.toggle('show'); });
-        overlay.addEventListener('click', () => { sidebar.classList.remove('open'); overlay.classList.remove('show'); });
-        document.querySelectorAll('[data-coming-soon]').forEach(i => i.addEventListener('click', e => { e.preventDefault(); alert('Em desenvolvimento!'); }));
 
         // Tabs interactions
         document.querySelectorAll('.tab-button').forEach(btn => {
@@ -390,7 +272,7 @@
         if (!resp || !resp.ok) return;
         const data = await resp.json();
         const select = document.getElementById('taskResponsavel');
-        
+
         for (const u of data.users) {
             const opt = document.createElement('option');
             if (u.id === 0) {
@@ -458,7 +340,7 @@
     async function fetchTasks() {
         const list = document.getElementById('tasksList');
         list.innerHTML = '<div class="empty-state"><div class="empty-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div><p>Carregando tarefas...</p></div>';
-        
+
         let url = '/api/tasks?';
         if (currentTab === 'automaticas') {
             url += 'tipo=automatica';
@@ -484,14 +366,14 @@
 
     function updateCalendarEvents() {
         if (!calendar) return;
-        
+
         const colors = {
             'pendente': '#DD6B20',       // Warning/Orange
             'em_andamento': '#3182CE',   // Info/Blue
             'concluido': '#38A169',      // Success/Green
             'cancelado': '#E53E3E'       // Danger/Red
         };
-        
+
         const events = allTasks.map(t => ({
             id: t.id,
             title: (t.tipo === 'automatica' ? '[IA] ' : '') + t.titulo,
@@ -504,16 +386,16 @@
                 tipo: t.tipo
             }
         }));
-        
+
         calendar.removeAllEvents();
         calendar.addEventSource(events);
     }
 
     function renderTasks() {
         const list = document.getElementById('tasksList');
-        
+
         let filtered = allTasks;
-        
+
         const now = new Date();
         const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         const startOfTomorrow = new Date(startOfToday.getTime() + 86400000);
@@ -535,7 +417,7 @@
         list.innerHTML = filtered.map(t => {
             const isOverdue = t.data_vencimento && new Date(t.data_vencimento) < now && t.status !== 'concluido' && t.status !== 'cancelado';
             const dateStr = t.data_vencimento ? new Date(t.data_vencimento).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : 'Sem prazo';
-            
+
             return `
             <div class="task-card ${isOverdue ? 'is-overdue' : ''}" data-status="${t.status}" data-tipo="${t.tipo}">
                 <div class="task-content">
@@ -562,14 +444,14 @@
     function openTaskModal(task = null) {
         document.getElementById('taskModal').classList.add('show');
         document.getElementById('taskAlert').classList.add('hidden');
-        
+
         if (task) {
             document.getElementById('taskModalTitle').textContent = 'Editar Tarefa';
             document.getElementById('taskId').value = task.id;
             document.getElementById('taskTitulo').value = task.titulo;
             document.getElementById('taskDescricao').value = task.descricao || '';
             document.getElementById('taskStatus').value = task.status;
-            
+
             if (task.user_id === null) {
                 document.getElementById('taskResponsavel').value = 'null';
             } else if (task.user_id) {
@@ -586,7 +468,7 @@
             } else {
                 document.getElementById('taskData').value = '';
             }
-            
+
             document.getElementById('taskResultadoIA').value = task.resultado_ia || '';
         } else {
             document.getElementById('taskModalTitle').textContent = 'Nova Tarefa';
@@ -630,7 +512,7 @@
         const status = document.getElementById('taskStatus').value;
         const datestr = document.getElementById('taskData').value;
         const responsavel = document.getElementById('taskResponsavel').value;
-        
+
         if (!titulo) {
             document.getElementById('taskAlertMsg').textContent = 'Título é obrigatório';
             document.getElementById('taskAlert').classList.remove('hidden');
@@ -643,7 +525,7 @@
             status,
             tipo: 'manual' // Default para criações manuais (A IA via API passa automatica)
         };
-        
+
         if (responsavel === 'null') {
             body.user_id = null;
             const resultadoIA = document.getElementById('taskResultadoIA').value.trim();
@@ -651,14 +533,14 @@
         } else if (responsavel !== 'current') {
             body.user_id = parseInt(responsavel);
         }
-        
+
         if (datestr) {
             body.data_vencimento = new Date(datestr).toISOString();
         }
 
         const syncCalendar = document.getElementById('syncCalendar').checked;
         if (syncCalendar && !id) {
-            body.google_calendar_event_id = "pending_sync"; 
+            body.google_calendar_event_id = "pending_sync";
         }
 
         const url = id ? `/api/tasks/${id}` : '/api/tasks';
@@ -686,5 +568,4 @@
 
     function esc(str) { if (!str) return ''; const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
     </script>
-</body>
-</html>
+{% endblock %}
