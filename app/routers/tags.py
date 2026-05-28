@@ -14,7 +14,7 @@ from app.schemas.tag import (
     TagListResponse,
     LeadTagsUpdate,
 )
-from app.auth import get_current_user
+from app.auth import get_current_user, require_admin
 
 router = APIRouter(prefix="/api/tags", tags=["Tags"])
 
@@ -115,7 +115,7 @@ async def update_tag(
 @router.delete("/{tag_id}", summary="Excluir tag")
 async def delete_tag(
     tag_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """Exclui a tag e remove todas as associações com leads."""
