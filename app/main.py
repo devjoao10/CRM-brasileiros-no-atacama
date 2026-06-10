@@ -59,39 +59,9 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
     # Startup
     Base.metadata.create_all(bind=engine)
-    # Inline migration: add new columns that create_all won't add to existing tables
-    from sqlalchemy import text, inspect
-    inspector = inspect(engine)
-    if 'leads' in inspector.get_table_names():
-        existing_cols = [c['name'] for c in inspector.get_columns('leads')]
-        with engine.begin() as conn:
-            if 'dias_por_destino' not in existing_cols:
-                conn.execute(text("ALTER TABLE leads ADD COLUMN dias_por_destino JSON DEFAULT NULL"))
-                logger.info("✅ Migration: added 'dias_por_destino' column to leads table")
-            
-            # Allow tasks to be assigned to AI (user_id = NULL)
-            try:
-                conn.execute(text("ALTER TABLE tasks ALTER COLUMN user_id DROP NOT NULL"))
-            except Exception as e:
-                logger.warning(f"⚠️ Could not alter user_id in tasks: {e}")
-            
-            # Add resultado_ia column for AI task results
-            try:
-                conn.execute(text("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS resultado_ia TEXT DEFAULT NULL"))
-                logger.info("✅ Migration: resultado_ia column OK")
-            except Exception as e:
-                logger.warning(f"⚠️ Could not add resultado_ia: {e}")
-            
-            # Criando índices de performance com segurança (IF NOT EXISTS)
-            try:
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_leads_created_at ON leads (created_at)"))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_status ON tasks (status)"))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_user_id ON tasks (user_id)"))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_lead_id ON tasks (lead_id)"))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_data_vencimento ON tasks (data_vencimento)"))
-                logger.info("✅ Migration: Performance indexes verified/created")
-            except Exception as e:
-                logger.warning(f"⚠️ Index creation failed (might already exist): {e}")
+    # Schema drift de bancos JA EXISTENTES (ALTER TABLE / indices) foi movido para
+    # migrations manuais idempotentes em `migrations/` (DATA-01). NAO rodamos ALTER
+    # TABLE no startup. Bancos novos sao criados completos pelo create_all() acima.
     seed_database()  # Guarded internally by SEED_INITIAL_ADMIN config flag
     _cleanup_old_uploads(max_age_hours=24)
     yield
