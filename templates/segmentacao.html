@@ -624,6 +624,6 @@ function getDestinosHtml(destinos) {
         return `<span class="destino-badge ${cl}">${esc(d)}</span>`;
     }).join(' ');
 }
-function esc(s) { if(!s) return ''; const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+function esc(s) { if(!s) return ''; const d=document.createElement('div'); d.textContent=s; return d.innerHTML.replace(/\"/g, '&quot;').replace(/'/g, '&#39;'); }
 </script>
 {% endblock %}
