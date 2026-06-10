@@ -5,6 +5,8 @@
 {% block extra_head %}
     <!-- Marked.js for markdown rendering -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- SEC-XSS-01: DOMPurify sanitizes chat HTML before innerHTML (prompt-injection / stored XSS defense) -->
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.9/dist/purify.min.js"></script>
 {% endblock %}
 
 {% block extra_css %}
@@ -766,7 +768,10 @@
                 
                 const bubble = document.createElement('div');
                 bubble.className = 'chat-bubble';
-                bubble.innerHTML = isUser ? content.replace(/\n/g, '<br>') : marked.parse(content);
+                // SEC-XSS-01: sanitize all rendered chat content (user text + IA markdown) before innerHTML
+                bubble.innerHTML = isUser
+                    ? DOMPurify.sanitize(content.replace(/\n/g, '<br>'), { ALLOWED_TAGS: ['br'] })
+                    : DOMPurify.sanitize(marked.parse(content));
                 
                 div.appendChild(avatar);
                 div.appendChild(bubble);
