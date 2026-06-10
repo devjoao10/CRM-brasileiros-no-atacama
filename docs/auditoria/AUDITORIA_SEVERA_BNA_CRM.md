@@ -22,7 +22,7 @@ _(nenhum achado de severidade crítica não-mitigada no estado local atual)_
 | ID | Área | Arquivo | Evidência | Impacto | Status |
 |---|---|---|---|---|---|
 | **SEC-XSS-01** | Segurança/FE | `templates/ai.html:769` | chat renderizava `marked.parse(content)`/user via `innerHTML` **sem DOMPurify** | prompt-injection → stored XSS → roubo de JWT | ✅ **CORRIGIDO** (DOMPurify user+IA) |
-| **SEC-XSS-02** | Segurança/FE | `leads.html`, `tags.html`, `segmentacao.html` | `esc()` não escapa aspas simples em handlers `onclick` (FRONT-03 do doc 12) | stored XSS via nome/cor | WP-SEC-02 (não corrigir junto do UX) |
+| **SEC-XSS-02** | Segurança/FE | 10 templates (`leads`, `tags`, `segmentacao`, `pipeline`, `equipes`, `tarefas`, `ai`, operacionais) | `esc()`/`escapeHtml()` não escapava aspas em `onclick` (FRONT-03 do doc 12) | stored XSS via nome/cor | ✅ **CORRIGIDO** (escapa `'` e `"`) |
 | **SEC-RL-01** | Segurança | `app/routers/auth.py:19` | `Limiter` próprio, **separado** do `app.state.limiter` de `main.py` | `5/minute` no login pode **não** ser aplicado → brute force | WP-SEC-03 (verificar + unificar) |
 | **SEC-AUTH-01** | Segurança | `static/js/auth.js` | JWT em `localStorage` **além** do cookie httponly (DEC-01) | qualquer XSS exfiltra token (8h) | WP-SEC-01 (migrar p/ cookie-only) |
 | **ARCH-01** | Arquitetura | `routers/leads.py` (~659), `ai.py` (~521), `pipeline.py` (~429) | regra de negócio + queries nos routers (god routers) | manutenção/teste difíceis | WP-ARCH-01/02 (services) |
@@ -49,12 +49,14 @@ _(nenhum achado de severidade crítica não-mitigada no estado local atual)_
 ### DATA-01 (especial)
 | ID | Área | Evidência | Status |
 |---|---|---|---|
-| **DATA-01** | Banco/DevOps | `app/main.py` +15: `ALTER TABLE leads ADD COLUMN` (5 colunas) no startup | Schema-drift remediation. **Segregado**, não commitado com UX. Ver `WP_DATA_01_SCHEMA_LEADS.md` |
+| **DATA-01** | Banco/DevOps | `app/main.py`: `ALTER TABLE` inline no startup | ✅ **RESOLVIDO**: bloco removido do `lifespan`; migration idempotente `migrations/m001_schema_drift_leads_tasks.py` (provada em SQLite). Aplicar em prod exige backup (ver `WP_DATA_01_SCHEMA_LEADS.md`) |
 
 ## 3. Correções aplicadas nesta auditoria (local, sem deploy)
-1. **SEC-XSS-01** — DOMPurify no chat da IA (`ai.html`), sanitizando ramo do usuário (`ALLOWED_TAGS:['br']`) e ramo da IA (`marked.parse`). Render test verde.
-2. **WP-AUDIT-00** — estabilização do Git: `scratch/` gitignorado, EOF corrigido, WP-UX-01.1 frontend commitado isolado (`7fd8cc5`), `app/main.py` segregado.
-3. **TEST-01 (parcial)** — `tests/test_render_templates.py` rastreado (render smoke + assert de sanitização do chat).
+1. **SEC-XSS-01** (`d0db79c`) — DOMPurify no chat da IA (`ai.html`), sanitizando ramo do usuário (`ALLOWED_TAGS:['br']`) e ramo da IA (`marked.parse`). Render test verde.
+2. **SEC-XSS-02** (`cb13514`) — `esc()`/`escapeHtml()` em 10 templates passam a escapar `'` e `"` → fecha o FRONT-03 (quebra de literal em `onclick`).
+3. **DATA-01** (`8064782`) — `ALTER TABLE` inline removido do `lifespan`; migration idempotente versionada (`migrations/m001`), provada em SQLite (add-path + idempotente). `app/main.py` limpo.
+4. **WP-AUDIT-00** — estabilização do Git: `scratch/` gitignorado, EOF corrigido, WP-UX-01.1 frontend commitado isolado (`7fd8cc5`).
+5. **TEST-01 (parcial)** (`f7c08ba`) — `tests/test_render_templates.py` rastreado (render smoke + assert de sanitização do chat).
 
 ## 4. Não corrigido (e por quê)
 - **SEC-XSS-02 / SEC-RL-01 / SEC-AUTH-01 / SEC-CSP-01**: mexem em auth/segurança de forma sensível ou exigem mudança coordenada (cookie-only, unificar limiter, CSP vs inline JS) → WP-SEC com teste antes.

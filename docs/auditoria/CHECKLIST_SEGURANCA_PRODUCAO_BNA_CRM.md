@@ -8,12 +8,12 @@ Estado: ✅ ok · ⚠️ parcial/atenção · ❌ pendente (WP)
 - ✅ `require_admin` aplicado (36 ocorrências em routers).
 - ✅ API Keys (n8n) armazenadas como SHA-256 (nunca em claro).
 - ⚠️ **SEC-AUTH-01**: JWT também em `localStorage` → exfiltrável por XSS. Migrar para cookie-only + CSRF (WP-SEC-01).
-- ⚠️ **SEC-RL-01**: login tem `@limiter.limit("5/minute")` mas com `Limiter` separado do `app.state.limiter` → confirmar se é aplicado; unificar (WP-SEC-03).
+- ⚠️ **SEC-RL-01 (WP-SEC-03)**: `auth.py` cria um `Limiter` **separado** do registrado em `main.py` (`app.state.limiter`). Diagnóstico: login `5/minute` é aplicado pelo decorator por-rota (provável OK), mas o limite **global `200/minute` NÃO é aplicado** — falta `SlowAPIMiddleware` em `main.py`. Correção (testar em runtime antes): unificar em `app/limiter.py` único + adicionar `SlowAPIMiddleware`. Não alterado nesta sessão (caminho de auth, exige smoke).
 - ⚠️ `email_verified` comentado no login (`auth.py:42-46`) — intencional? documentar.
 
 ## XSS / Frontend
 - ✅ **SEC-XSS-01 corrigido**: chat IA sanitizado com DOMPurify (user + markdown).
-- ❌ **SEC-XSS-02**: `esc()` não escapa `'` em `onclick` (leads/tags/segmentacao) — WP-SEC-02.
+- ✅ **SEC-XSS-02 corrigido**: `esc()`/`escapeHtml()` em 10 templates passam a escapar `'` e `"` (fecha quebra de literal em `onclick`).
 - ❌ **SEC-XSS-03**: `marked.min.js` sem versão fixa + sem SRI — WP-SEC-02.
 - ❌ **SEC-CSP-01**: sem `Content-Security-Policy` (amplifica XSS) — WP-SEC-02 (cuidado com inline JS).
 - ✅ Jinja2 autoescape ativo no SSR.
