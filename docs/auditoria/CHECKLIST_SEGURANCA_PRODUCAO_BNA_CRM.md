@@ -8,7 +8,7 @@ Estado: ✅ ok · ⚠️ parcial/atenção · ❌ pendente (WP)
 - ✅ `require_admin` aplicado (36 ocorrências em routers).
 - ✅ API Keys (n8n) armazenadas como SHA-256 (nunca em claro).
 - ⚠️ **SEC-AUTH-01**: JWT também em `localStorage` → exfiltrável por XSS. Migrar para cookie-only + CSRF (WP-SEC-01).
-- ⚠️ **SEC-RL-01 (WP-SEC-03)**: `auth.py` cria um `Limiter` **separado** do registrado em `main.py` (`app.state.limiter`). Diagnóstico: login `5/minute` é aplicado pelo decorator por-rota (provável OK), mas o limite **global `200/minute` NÃO é aplicado** — falta `SlowAPIMiddleware` em `main.py`. Correção (testar em runtime antes): unificar em `app/limiter.py` único + adicionar `SlowAPIMiddleware`. Não alterado nesta sessão (caminho de auth, exige smoke).
+- ✅ **SEC-RL-01 corrigido (WP-SEC-03, `d065628`)**: instância única em `app/limiter.py` usada por `main.py` e `auth.py`; `SlowAPIMiddleware` adicionado (aplica o teto global `200/min` por IP); login `5/minute` preservado. **Provado** com TestClient (`tests/test_rate_limit.py`): login válido=200 e 429 após exceder 5/min. Nota de produção: o teto global de 200/min/IP passa a valer para todas as rotas — monitorar e ajustar se o frontend gerar muitas chamadas por minuto.
 - ⚠️ `email_verified` comentado no login (`auth.py:42-46`) — intencional? documentar.
 
 ## XSS / Frontend
