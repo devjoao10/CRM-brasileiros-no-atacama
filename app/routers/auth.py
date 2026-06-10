@@ -1,7 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
 import os
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -15,8 +13,9 @@ from app.auth import (
     hash_password,
 )
 
+from app.limiter import limiter  # instância única (WP-SEC-03)
+
 router = APIRouter(prefix="/api/auth", tags=["Autenticação"])
-limiter = Limiter(key_func=get_remote_address)
 
 
 @router.post("/login", response_model=TokenResponse, summary="Login com email e senha")

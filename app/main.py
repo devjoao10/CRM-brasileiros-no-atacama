@@ -8,12 +8,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.config import PROJECT_NAME, VERSION, DESCRIPTION, API_PREFIX, ENVIRONMENT
 from app.database import engine, Base
+from app.limiter import limiter
 from app.routers import auth, users, leads, tags, pipeline, segments, teams, pages, tasks, analytics, ai
 from app.routers import operational_boards, operational_cards, operational_flow, operational_checklists, operational_comments, operational_notifications, operational_pending, operational_pages
 from app.models.lead import Lead  # noqa: F401
@@ -77,10 +78,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Rate Limiter
-limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
+# Rate Limiter — instância única em app/limiter.py (WP-SEC-03)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# SlowAPIMiddleware aplica o default_limits global (200/minute por IP) a todas as rotas.
+# Limites por rota (ex.: login 5/minute) continuam via @limiter.limit no router.
+app.add_middleware(SlowAPIMiddleware)
 
 # CORS — Restrito em produção, aberto em dev
 _allowed_origins = ["*"] if ENVIRONMENT == "development" else [
