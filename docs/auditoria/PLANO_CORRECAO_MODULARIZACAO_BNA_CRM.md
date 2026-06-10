@@ -2,13 +2,27 @@
 
 Derivado da auditoria severa. Cada WP = branch própria, commits pequenos, **sem deploy sem backup/aprovação**.
 
-## Já executado nesta sessão (local)
+## Já executado (local, sem deploy/push)
 | WP | Descrição | Commit |
 |---|---|---|
-| WP-AUDIT-00 | Estabilizar Git (gitignore `scratch/`, EOF, segregar `app/main.py`) | `7fd8cc5` (UX-01.1) + ajustes |
-| SEC-XSS-01 | DOMPurify no chat da IA | (commit desta auditoria) |
-| WP-QA-01 (parcial) | `tests/test_render_templates.py` rastreado | (commit desta auditoria) |
-| Documentação | 6 relatórios em `docs/auditoria/` | (commit desta auditoria) |
+| WP-AUDIT-00 | Estabilizar Git (gitignore `scratch/`, EOF, segregar `app/main.py`) | `7fd8cc5` |
+| SEC-XSS-01 | DOMPurify no chat da IA | `d0db79c` |
+| SEC-XSS-02 | `esc()` escapa aspas em 10 templates | `cb13514` |
+| DATA-01 | ALTER inline → migration idempotente `migrations/m001` | `8064782` |
+| SEC-RL-01 (WP-SEC-03) | limiter unificado + `SlowAPIMiddleware`; 429 provado | `d065628` |
+| WP-OPS-01 | compose só-Traefik + healthcheck; `scripts/backup_postgres.sh` | `6b6bd08` |
+| SEC-XSS-03 (parcial) | `marked@12.0.0` fixado | `9f3b9d0` |
+| WP-QA-01 | 3 testes rastreados (render, rate-limit, security-greps) + README | `f7c08ba`, `bb2e2da` |
+| Documentação | relatórios em `docs/auditoria/` | `c9a7797`, `7f5c97d`, `3774aba`, este |
+
+## Ordem recomendada dos próximos WPs
+1. **WP-SEC-02 follow-up** — SRI do `marked` (hash em CI) + avaliar CSP com nonces.
+2. **WP-SEC-01** — JWT cookie-only + CSRF (auth profundo → exige smoke + aprovação).
+3. **WP-OPS-02** — Dockerfile non-root; backup automático (cron + offsite B2/S3); healthcheck `conversas`.
+4. **WP-DATA-01 (deploy)** — aplicar `m001` em prod **com backup** (gate humano).
+5. **WP-ARCH-01/02** — RM-01 (AIToolsContextManager) + RM-02 (LeadQueryService).
+6. **WP-FE-02/03** — design system (centralizar `esc()`, chips) + acessibilidade (com smoke visual).
+7. **WP-QA-01 fase 2** — testes de auth/IDOR/HMAC.
 
 ## WPs recomendados (prioridade)
 

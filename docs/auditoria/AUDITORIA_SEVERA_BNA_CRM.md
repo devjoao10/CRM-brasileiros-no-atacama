@@ -30,13 +30,13 @@ _(nenhum achado de severidade crítica não-mitigada no estado local atual)_
 ### MÉDIO
 | ID | Área | Evidência | Status |
 |---|---|---|---|
-| **SEC-CSP-01** | Segurança | sem `Content-Security-Policy` em `main.py` (FRONT-06) | WP-SEC-02 (cuidado: muito inline JS) |
-| **SEC-XSS-03** | Segurança | `ai.html:7` `marked.min.js` sem versão fixa nem SRI (FRONT-05) | WP-SEC-02 (pin + SRI) |
-| **DEVOPS-01** | DevOps | `docker-compose.yml:39` CRM publica `8000:8000` no host **além** do Traefik | WP-OPS-01 (remover port mapping; só Traefik) |
+| **SEC-CSP-01** | Segurança | sem `Content-Security-Policy` em `main.py` (FRONT-06) | WP-SEC-02 (não aplicável agora: muito inline JS quebraria; exige nonces) |
+| **SEC-XSS-03** | Segurança | `ai.html` `marked.min.js` sem versão fixa nem SRI (FRONT-05) | ⚠️ **PARCIAL**: versão fixada (`marked@12.0.0`); SRI pendente (hash em CI) |
+| **DEVOPS-01** | DevOps | `docker-compose.yml` CRM publicava `8000:8000` no host (bypass do TLS) | ✅ **CORRIGIDO** (`expose` só + healthcheck; valida no deploy) |
 | **DATA-02** | Banco | migrations inline no `lifespan` (sem Alembic, RM-12) | WP-DATA-02 |
 | **ARCH-02** | Arquitetura | `_build_lead_response`/`_json_list_contains` duplicados em `leads.py`+`segments.py` | WP-ARCH-02 (RM-02 LeadQueryService) |
 | **ARCH-04** | Segurança/Arch | `ai_tools.py` global mutável `_current_user_api_key` (RM-01) | WP-ARCH-02 (context var) |
-| **TEST-01** | QA | sem suíte de testes; só render smoke | ✅ parcial: render test rastreado adicionado; WP-QA-01 p/ auth/API |
+| **TEST-01** | QA | sem suíte de testes; só render smoke | ✅ **3 testes rastreados** (render, rate-limit, security-greps); WP-QA-01 fase 2 p/ auth/IDOR/HMAC |
 
 ### BAIXO
 | ID | Área | Evidência | Status |
@@ -56,7 +56,15 @@ _(nenhum achado de severidade crítica não-mitigada no estado local atual)_
 2. **SEC-XSS-02** (`cb13514`) — `esc()`/`escapeHtml()` em 10 templates passam a escapar `'` e `"` → fecha o FRONT-03 (quebra de literal em `onclick`).
 3. **DATA-01** (`8064782`) — `ALTER TABLE` inline removido do `lifespan`; migration idempotente versionada (`migrations/m001`), provada em SQLite (add-path + idempotente). `app/main.py` limpo.
 4. **WP-AUDIT-00** — estabilização do Git: `scratch/` gitignorado, EOF corrigido, WP-UX-01.1 frontend commitado isolado (`7fd8cc5`).
-5. **TEST-01 (parcial)** (`f7c08ba`) — `tests/test_render_templates.py` rastreado (render smoke + assert de sanitização do chat).
+5. **TEST-01** (`f7c08ba` + `bb2e2da`) — 3 testes rastreados: render, **rate-limit (429 provado)**, **security-greps** + `tests/README.md`.
+6. **SEC-RL-01** (`d065628`) — limiter unificado (`app/limiter.py`) + `SlowAPIMiddleware`; login `5/min` provado (429). Ver WP-SEC-03.
+7. **DEVOPS-01** (`6b6bd08`) — compose: CRM só via Traefik (`expose`, sem `8000:8000`) + healthcheck; `scripts/backup_postgres.sh` versionado (DB-03).
+8. **SEC-XSS-03 (parcial)** (`9f3b9d0`) — `marked` fixado em `@12.0.0` (supply-chain); SRI pendente.
+
+### Batch WP-FE-02 / WP-ARCH-00 — auditado, **não** alterado (sem smoke de browser)
+- **WP-FE-02/03 (backlog, BAIXO/MÉDIO):** centralizar `esc()` em util JS compartilhado; migrar usos locais de chip → `.chip` global; `aria-label` em botões-ícone; focus-trap + `Esc` nos modais; contraste WCAG AA. **Não aplicado**: exige validação visual/console em browser (não-provável localmente) → regressão de risco se editado às cegas.
+- **WP-ARCH-00 (backlog, ALTO/MÉDIO):** god routers (`leads.py`/`ai.py`/`pipeline.py`) → services (RM-01/02); `LeadQueryService` (duplicação leads/segments); domínio Gestão Interna inexistente. **Sem refator** nesta sessão (mudança ampla = WP dedicado, docs 108/109).
+- **DevOps residual:** Dockerfile roda como `root` (sem `USER`) → WP-OPS-02 (precisa testar build/uploads); `n8n N8N_RESTRICT_ENVIRONMENT_VARIABLES_ACCESS=false`; backup automático/offsite (cron + B2/S3); healthcheck do `conversas`.
 
 ## 4. Não corrigido (e por quê)
 - **SEC-XSS-02 / SEC-RL-01 / SEC-AUTH-01 / SEC-CSP-01**: mexem em auth/segurança de forma sensível ou exigem mudança coordenada (cookie-only, unificar limiter, CSP vs inline JS) → WP-SEC com teste antes.
