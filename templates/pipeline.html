@@ -1,11 +1,12 @@
 {% extends "base.html" %}
 {% set page_title = "Pipeline" %}
 {% set active_nav = "pipeline" %}
+{% set viewport_locked = true %}
 
 {% block extra_css %}
     <style>
         /* ===== Pipeline ===== */
-        .pipeline-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-4); flex-wrap: wrap; gap: var(--space-3); }
+        .pipeline-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-4); flex-wrap: wrap; gap: var(--space-3); flex-shrink: 0; }
         .pipeline-header h1 { font-size: var(--font-size-2xl); font-weight: var(--font-weight-bold); }
         .pipeline-actions { display: flex; gap: var(--space-2); }
 
@@ -40,8 +41,8 @@
         .filter-count { font-size: var(--font-size-xs); color: var(--color-dark-400); margin-left: auto; padding: var(--space-1); align-self: flex-end; white-space: nowrap; }
 
         /* Kanban Board */
-        .kanban-board { display: flex; gap: var(--space-4); flex: 1; overflow-x: auto; padding-bottom: var(--space-4); align-items: flex-start; }
-        .kanban-column { min-width: 280px; max-width: 320px; flex: 1; background: var(--color-white); border-radius: var(--radius-xl); box-shadow: var(--shadow-sm); display: flex; flex-direction: column; max-height: calc(100vh - 280px); }
+        .kanban-board { display: flex; gap: var(--space-4); flex: 1; overflow-x: auto; padding-bottom: var(--space-4); align-items: flex-start; min-height: 0; }
+        .kanban-column { min-width: 280px; max-width: 320px; flex: 1; background: var(--color-white); border-radius: var(--radius-xl); box-shadow: var(--shadow-sm); display: flex; flex-direction: column; max-height: 100%; }
         .column-header { padding: var(--space-4); border-bottom: 1px solid var(--color-dark-100); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
         .column-title { font-size: var(--font-size-sm); font-weight: var(--font-weight-bold); color: var(--color-dark); }
         .column-count { background: var(--color-dark-100); color: var(--color-dark-500); font-size: 11px; font-weight: var(--font-weight-bold); padding: 2px 8px; border-radius: var(--radius-full); }
@@ -55,17 +56,7 @@
         .lead-card-name { font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); color: var(--color-dark); margin-bottom: 4px; }
         .lead-card-info { font-size: 11px; color: var(--color-dark-400); margin-bottom: 4px; }
         .lead-card-tags { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 6px; }
-        .lead-card-tag { display: inline-flex; padding: 1px 7px; border-radius: var(--radius-full); font-size: 10px; font-weight: var(--font-weight-semibold); color: #fff; }
-        .lead-card-destino { display: inline-flex; align-items: center; gap: 2px; padding: 1px 7px; border-radius: var(--radius-full); font-size: 10px; font-weight: var(--font-weight-semibold); }
-        .lead-card-destino.atacama { background: rgba(192,86,33,0.1); color: var(--color-secondary); }
-        .lead-card-destino.uyuni { background: rgba(43,108,176,0.1); color: var(--color-primary); }
-        .lead-card-destino.santiago { background: rgba(56,161,105,0.1); color: var(--color-success); }
-        .lead-card-destino.outro { background: rgba(113,128,150,0.1); color: var(--color-dark-500); }
         .lead-card-resp { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; color: var(--color-dark-400); margin-top: 4px; }
-        .lead-card-days { display: inline-flex; align-items: center; gap: 3px; padding: 1px 7px; border-radius: var(--radius-full); font-size: 10px; font-weight: var(--font-weight-bold); margin-top: 6px; }
-        .lead-card-days.future { background: rgba(56,161,105,0.1); color: var(--color-success); }
-        .lead-card-days.today { background: rgba(214,158,46,0.1); color: #B7791F; border: 1px solid rgba(214,158,46,0.3); }
-        .lead-card-days.past { background: rgba(113,128,150,0.1); color: var(--color-dark-400); }
         .empty-column { text-align: center; color: var(--color-dark-300); font-size: var(--font-size-xs); padding: var(--space-6) var(--space-2); }
 
         /* ===== Lead Detail Panel ===== */
@@ -84,7 +75,7 @@
         .detail-field-label { color: var(--color-dark-400); font-weight: var(--font-weight-medium); }
         .detail-field-value { color: var(--color-dark); font-weight: var(--font-weight-semibold); text-align: right; max-width: 60%; }
         .detail-tags { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-        .detail-tag { display: inline-flex; padding: 3px 10px; border-radius: var(--radius-full); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); color: #fff; }
+
 
         /* History timeline */
         .history-timeline { position: relative; padding-left: 20px; }
@@ -709,10 +700,10 @@
     function renderLeadCard(lead) {
         const destinos = lead.destinos || [];
         const destinoBadges = destinos.map(d =>
-            `<span class="lead-card-destino ${getDestinoClass(d)}">${getDestinoIcon(d)} ${esc(d)}</span>`
+            `<span class="lead-card-destino chip chip-sm chip-destination ${getDestinoClass(d)}">${getDestinoIcon(d)} ${esc(d)}</span>`
         ).join(' ');
         const tags = (lead.tags || []).map(t =>
-            `<span class="lead-card-tag" style="background:${esc(t.cor)}">${esc(t.nome)}</span>`
+            `<span class="lead-card-tag chip chip-sm chip-tag" style="background:${esc(t.cor)}">${esc(t.nome)}</span>`
         ).join('');
 
         let daysBadge = '';
@@ -724,11 +715,11 @@
             const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
             if (diffDays > 0) {
-                daysBadge = `<div class="lead-card-days future">Chega em ${diffDays} dia${diffDays > 1 ? 's' : ''}</div>`;
+                daysBadge = `<div class="lead-card-days chip chip-sm chip-days future">Chega em ${diffDays} dia${diffDays > 1 ? 's' : ''}</div>`;
             } else if (diffDays === 0) {
-                daysBadge = `<div class="lead-card-days today">Chega hoje</div>`;
+                daysBadge = `<div class="lead-card-days chip chip-sm chip-days today">Chega hoje</div>`;
             } else {
-                daysBadge = `<div class="lead-card-days past">Chegou há ${Math.abs(diffDays)} dia${Math.abs(diffDays) > 1 ? 's' : ''}</div>`;
+                daysBadge = `<div class="lead-card-days chip chip-sm chip-days past">Chegou há ${Math.abs(diffDays)} dia${Math.abs(diffDays) > 1 ? 's' : ''}</div>`;
             }
         }
 
@@ -863,7 +854,7 @@
 
         // Tags
         const tagsHtml = (lead.tags || []).length > 0
-            ? lead.tags.map(t => `<span class="detail-tag" style="background:${esc(t.cor)}">${esc(t.nome)}</span>`).join('')
+            ? lead.tags.map(t => `<span class="detail-tag chip chip-tag" style="background:${esc(t.cor)}">${esc(t.nome)}</span>`).join('')
             : '<span style="color:var(--color-dark-300);font-size:var(--font-size-sm)">Nenhuma tag</span>';
         document.getElementById('detailTags').innerHTML = tagsHtml;
 

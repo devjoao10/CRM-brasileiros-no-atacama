@@ -70,12 +70,7 @@
             background: var(--color-light); border-radius: var(--radius-lg);
             text-align: center;
         }
-        .tag-preview-chip {
-            display: inline-flex; align-items: center; gap: 4px;
-            padding: 4px 14px; border-radius: var(--radius-full);
-            font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold);
-            color: var(--color-white);
-        }
+
 
         @media (max-width: 640px) { .tags-grid { grid-template-columns: 1fr; } }
     </style>
@@ -113,7 +108,7 @@
                 </div>
                 <div class="tag-preview">
                     <span>Preview: </span>
-                    <span class="tag-preview-chip" id="tagPreview">Tag</span>
+                    <span class="chip chip-tag" id="tagPreview">Tag</span>
                 </div>
             </div>
             <div class="modal-footer">

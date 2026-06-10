@@ -36,8 +36,8 @@
     {% block extra_head %}{% endblock %}
     {% block extra_css %}{% endblock %}
 </head>
-<body>
-    <div class="dashboard-layout">
+<body class="{% if viewport_locked %}viewport-locked{% endif %}">
+    <div class="dashboard-layout{% if viewport_locked %} viewport-locked{% endif %}">
         <!-- Sidebar Overlay (mobile) -->
         <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
