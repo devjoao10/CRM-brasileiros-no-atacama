@@ -36,8 +36,15 @@ services:
     build: .
     container_name: crm_app
     restart: always
-    ports:
-      - "8000:8000"
+    # WP-OPS-01: sem port mapping no host — acesso SOMENTE via Traefik (rede Docker).
+    # Remove o bypass do TLS que existia ao publicar 8000 direto no host.
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health').status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
     depends_on:
       postgres:
         condition: service_healthy
