@@ -32,15 +32,23 @@ def render(name: str) -> str:
     return _env().get_template(name).render(**CONTEXT)
 
 
+# WP-OP-UI-02: paginas full-screen (sem sidebar; volta via botao proprio no header)
+FULLSCREEN = {"operational/kanban.html"}
+
+
 def test_all_templates_render():
     env = _env()
     for name in MIGRATED:
         html = env.get_template(name).render(**CONTEXT)
         assert "<!DOCTYPE html>" in html, f"{name}: sem DOCTYPE (base.html nao resolveu)"
         assert "{% " not in html, f"{name}: tag Jinja nao resolvida"
-        assert 'class="sidebar"' in html, f"{name}: sidebar ausente"
         assert 'class="top-header"' in html, f"{name}: topbar ausente"
-        assert html.count('class="nav-item active"') == 1, f"{name}: item ativo != 1"
+        if name in FULLSCREEN:
+            assert html.count('class="sidebar"') == 0, f"{name}: fullscreen nao deve ter sidebar"
+            assert "Voltar para Quadros" in html, f"{name}: fullscreen sem botao de volta"
+        else:
+            assert 'class="sidebar"' in html, f"{name}: sidebar ausente"
+            assert html.count('class="nav-item active"') == 1, f"{name}: item ativo != 1"
         assert "localhost:5678" not in html, f"{name}: link localhost:5678 reintroduzido"
 
 
@@ -71,7 +79,8 @@ def test_sector_sidebar_isolation():
     env = _env()
     for name, sector in SECTOR_OF.items():
         html = env.get_template(name).render(**CONTEXT)
-        assert 'href="/hub"' in html, f"{name}: link de volta ao Hub ausente"
+        if name not in FULLSCREEN:
+            assert 'href="/hub"' in html, f"{name}: link de volta ao Hub ausente"
         for bad in FORBIDDEN_LINKS[sector]:
             assert bad not in html, f"{name} ({sector}): vazou link de outro setor: {bad}"
 

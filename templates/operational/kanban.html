@@ -3,6 +3,10 @@
 {% set active_nav = "operational-boards" %}
 {% set sector = "operacional" %}
 
+{# WP-OP-UI-02: board full-screen — sem sidebar, main ocupa toda a largura.
+   Volta via botão "Voltar para Quadros" no header do próprio board. #}
+{% block sidebar %}{% endblock %}
+
 {% block extra_css %}
     <style>
         /* Ajuste do layout para manter o cabeçalho no topo e scroll horizontal correto */
@@ -13,6 +17,7 @@
             height: 100vh;
             display: flex;
             flex-direction: column;
+            margin-left: 0; /* full-screen: sem sidebar (WP-OP-UI-02) */
         }
         .content-area {
             padding: 0 !important;
@@ -190,6 +195,22 @@
             from { transform: scale(0.95); opacity: 0; }
             to { transform: scale(1); opacity: 1; }
         }
+
+        /* WP-OP-UI-04: estado vazio (sem colunas) + botão condicional */
+        .board-empty {
+            margin: auto;
+            text-align: center;
+            color: var(--color-text-3);
+            font-size: var(--font-size-sm);
+            display: flex; flex-direction: column; gap: var(--sp-2);
+            align-items: center;
+        }
+        .board-empty-icon { font-size: 2.5rem; }
+        .board-empty-hint { font-size: var(--font-size-xs); color: var(--color-text-4); }
+        #newCardBtn:disabled { opacity: .55; cursor: not-allowed; }
+
+        /* WP-OP-UI-03: prazo do card com destaque de atraso */
+        .kanban-due.overdue { color: var(--color-error); font-weight: var(--fw-semibold); }
     </style>
 {% endblock %}
 
@@ -348,11 +369,24 @@
         const listModal = document.getElementById("createListModal");
         const richModal = document.getElementById("richCardModal");
 
+        // WP-OP-UI-04: nao permitir criar card sem coluna (botao condicional)
+        const NO_LISTS_MSG = "Crie uma coluna antes de criar um card.";
+        function updateCreateCardState() {
+            const btn = document.getElementById("newCardBtn");
+            const empty = lists.length === 0;
+            btn.disabled = empty;
+            btn.title = empty ? NO_LISTS_MSG : "";
+        }
+
         document.getElementById("newCardBtn").onclick = () => {
+            if (lists.length === 0) {
+                alert(NO_LISTS_MSG);
+                return;
+            }
             const select = document.getElementById("cardCol");
             select.innerHTML = "";
             lists.forEach(l => {
-                select.innerHTML += `<option value="${l.id}">${l.name}</option>`;
+                select.innerHTML += `<option value="${l.id}">${esc(l.name)}</option>`;
             });
             cardModal.classList.add("show");
         };
@@ -387,6 +421,7 @@
             });
             if (response.ok) {
                 lists = await response.json();
+                updateCreateCardState();
             }
         }
 
@@ -426,7 +461,23 @@
         function renderKanban() {
             const container = document.getElementById("kanbanContainer");
             container.innerHTML = "";
-            
+
+            // WP-OP-UI-04: estado vazio elegante quando o quadro nao tem colunas
+            if (lists.length === 0) {
+                const emptyBox = document.createElement("div");
+                emptyBox.className = "board-empty";
+                emptyBox.innerHTML = `
+                    <div class="board-empty-icon">📋</div>
+                    <p><strong>Este quadro ainda não tem colunas.</strong></p>
+                    <p>${NO_LISTS_MSG}</p>
+                    ${isAdmin
+                        ? '<p class="board-empty-hint">Use o botão "+ Nova Coluna" no topo para começar.</p>'
+                        : '<p class="board-empty-hint">Peça a um administrador para criar as colunas deste quadro.</p>'}
+                `;
+                container.appendChild(emptyBox);
+                return;
+            }
+
             lists.forEach(l => {
                 let column = document.createElement("div");
                 column.className = "kanban-column";
@@ -460,7 +511,7 @@
                     <div class="card-desc">${esc(c.description || 'Sem descrição.')}</div>
                     <div class="card-footer">
                         <span>Ver Detalhes &rarr;</span>
-                        <span>${c.due_date ? new Date(c.due_date).toLocaleDateString('pt-BR') : ''}</span>
+                        <span class="kanban-due${c.due_date && new Date(c.due_date) < new Date() ? ' overdue' : ''}">${c.due_date ? new Date(c.due_date).toLocaleDateString('pt-BR') : ''}</span>
                     </div>
                 `;
                 listDiv.appendChild(card);
