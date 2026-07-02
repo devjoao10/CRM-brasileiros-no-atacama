@@ -470,6 +470,19 @@
         if (resp && resp.ok) {
             loadChat(activeConversation.id);
             loadConversations();
+        } else {
+            // CONV-08: o envio falhou. O backend NAO marca a mensagem como 'sent' e a
+            // persiste como 'failed'. Recarrega o chat para exibir o status de falha
+            // (X vermelho) e avisa o operador com uma mensagem segura (sem segredos).
+            let detail = 'Falha ao enviar a mensagem. Tente novamente.';
+            try {
+                if (resp) {
+                    const err = await resp.json();
+                    if (err && err.detail) detail = err.detail;
+                }
+            } catch (_) { /* resposta sem corpo JSON */ }
+            showToast(detail);
+            loadChat(activeConversation.id);
         }
     }
 
@@ -608,7 +621,7 @@
         let content = escapeHtml(msg.content);
 
         if (msg.msg_type === 'image' && msg.media_url) {
-            content = `<img src="${msg.media_url}" style="max-width:100%; border-radius:8px; margin-bottom:4px;"><br>${content}`;
+            content = `<img src="${escapeHtml(msg.media_url)}" style="max-width:100%; border-radius:8px; margin-bottom:4px;"><br>${content}`;
         } else if (msg.msg_type === 'template') {
             content = `<div style="font-size:10px; color:var(--primary); font-weight:600; margin-bottom:4px; display:flex; align-items:center; gap:4px;"><svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>Template</div>${content}`;
         } else if (msg.msg_type === 'audio') {
@@ -619,6 +632,8 @@
             content = '<em>Video</em>';
         }
 
+        // SEC-CONV-01: `content` e `media_url` ja passaram por escapeHtml; o restante
+        // e template estatico gerado pela app (time/statusIcon). Seguro por construcao.
         bubble.innerHTML = `
             <div class="message-content">${content}</div>
             <div class="message-meta">
@@ -699,10 +714,12 @@
     }
 
     function escapeHtml(text) {
-        if (!text) return '';
+        // SEC-CONV-01: escapa tambem aspas simples/duplas (protege contexto de atributo).
+        // Toda interpolacao de dado nao-confiavel em innerHTML DEVE passar por aqui.
+        if (text === null || text === undefined) return '';
         const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        div.textContent = String(text);
+        return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     function showToast(message) {
