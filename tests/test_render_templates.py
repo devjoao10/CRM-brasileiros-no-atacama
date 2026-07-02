@@ -16,6 +16,7 @@ MIGRATED = [
     "dashboard.html", "tags.html", "relatorios.html", "segmentacao.html",
     "tarefas.html", "leads.html", "pipeline.html", "ai.html", "equipes.html",
     "operational/boards.html", "operational/pending.html", "operational/kanban.html",
+    "gestao/pendencias.html",
 ]
 
 CONTEXT = {"board_id": 1, "page_title": "Test", "active_nav": "dashboard",
@@ -66,6 +67,7 @@ SECTOR_OF = {
     "tarefas.html": "comercial", "relatorios.html": "comercial",
     "operational/boards.html": "operacional", "operational/kanban.html": "operacional",
     "operational/pending.html": "gestao", "equipes.html": "gestao",
+    "gestao/pendencias.html": "gestao",
 }
 FORBIDDEN_LINKS = {
     # links de sidebar que NAO podem aparecer fora do proprio setor

@@ -1,0 +1,312 @@
+{% extends "base.html" %}
+{% set page_title = "Pendências Internas" %}
+{% set active_nav = "gi-pendencias" %}
+{% set sector = "gestao" %}
+
+{% block extra_css %}
+    <style>
+        .gi-header { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:var(--sp-4); margin-bottom:var(--sp-5); }
+        .gi-header h1 { font-size:var(--font-size-2xl); font-weight:var(--fw-bold); color:var(--color-text); }
+        .gi-summary { display:flex; gap:var(--sp-2); align-items:center; }
+
+        /* Navegação horizontal por responsável (§8.3) — dinâmica */
+        .gi-tabs { display:flex; gap:var(--sp-2); overflow-x:auto; padding-bottom:var(--sp-2); margin-bottom:var(--sp-5); }
+        .gi-tab {
+            display:inline-flex; align-items:center; gap:6px; white-space:nowrap;
+            padding:6px 14px; border-radius:var(--radius-full);
+            border:1px solid var(--color-border); background:var(--color-surface);
+            font-size:var(--font-size-sm); font-weight:var(--fw-medium);
+            color:var(--color-text-2); cursor:pointer; transition:all var(--t-fast);
+        }
+        .gi-tab:hover { border-color:var(--color-primary); color:var(--color-primary); }
+        .gi-tab.active { background:var(--color-primary); border-color:var(--color-primary); color:#fff; }
+        .gi-tab .gi-tab-count {
+            font-size:10px; font-weight:var(--fw-bold);
+            background:rgba(0,0,0,0.12); padding:1px 7px; border-radius:var(--radius-full);
+        }
+        .gi-tab.active .gi-tab-count { background:rgba(255,255,255,0.25); }
+
+        /* Cards de pendência — borda por estado (§8.2) */
+        .gi-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:var(--sp-4); }
+        .gi-card {
+            background:var(--color-surface); border:1px solid var(--color-border);
+            border-left:4px solid var(--color-warning);
+            border-radius:var(--radius-lg); padding:var(--sp-4);
+            display:flex; flex-direction:column; gap:var(--sp-2);
+            box-shadow:var(--shadow-xs); transition:box-shadow var(--t-fast), transform var(--t-fast);
+        }
+        .gi-card:hover { box-shadow:var(--shadow-md); transform:translateY(-1px); }
+        .gi-card.atrasada { border-left-color:var(--color-error); box-shadow:0 0 0 1px rgba(229,62,62,.15); }
+        .gi-card.concluida { border-left-color:var(--color-success); opacity:.75; }
+        .gi-card-top { display:flex; justify-content:space-between; align-items:flex-start; gap:var(--sp-2); }
+        .gi-card-title { font-size:var(--font-size-sm); font-weight:var(--fw-semibold); color:var(--color-text); }
+        .gi-card-desc { font-size:var(--font-size-xs); color:var(--color-text-3); line-height:1.5; white-space:pre-line; }
+        .gi-card-meta { display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:var(--font-size-xs); color:var(--color-text-3); }
+        .gi-card-actions { display:flex; gap:var(--sp-2); justify-content:flex-end; margin-top:var(--sp-1); }
+        .gi-card-actions button {
+            border:none; cursor:pointer; font-size:var(--font-size-xs); font-weight:var(--fw-semibold);
+            padding:5px 12px; border-radius:var(--radius-md); transition:filter var(--t-fast);
+        }
+        .gi-card-actions button:hover { filter:brightness(.93); }
+        .gi-btn-done { background:var(--color-success-bg); color:var(--color-success); }
+        .gi-btn-archive { background:var(--color-bg); color:var(--color-text-3); }
+
+        .gi-status-chip { font-size:10px; font-weight:var(--fw-bold); padding:2px 8px; border-radius:var(--radius-full); text-transform:uppercase; letter-spacing:.04em; }
+        .gi-status-chip.pendente { background:var(--color-warning-bg); color:var(--color-warning); }
+        .gi-status-chip.atrasada { background:var(--color-error-bg); color:var(--color-error); }
+        .gi-status-chip.concluida { background:var(--color-success-bg); color:var(--color-success); }
+
+        .empty-state { grid-column:1/-1; text-align:center; padding:var(--sp-8); color:var(--color-text-3); font-size:var(--font-size-sm); }
+        .empty-state .empty-icon { font-size:2.5rem; margin-bottom:var(--sp-3); }
+
+        /* Modal de criação */
+        .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:var(--z-modal); align-items:center; justify-content:center; backdrop-filter:blur(3px); }
+        .modal-overlay.show { display:flex; }
+        .gi-modal { background:var(--color-surface); border-radius:var(--radius-xl); width:92%; max-width:480px; box-shadow:var(--shadow-lg); padding:var(--sp-6); max-height:92vh; overflow-y:auto; }
+        .gi-modal h3 { font-size:var(--font-size-lg); font-weight:var(--fw-semibold); margin-bottom:var(--sp-4); color:var(--color-text); }
+        .gi-field { margin-bottom:var(--sp-4); }
+        .gi-field label { display:block; font-size:var(--font-size-xs); font-weight:var(--fw-semibold); color:var(--color-text-2); margin-bottom:4px; }
+        .gi-row { display:grid; grid-template-columns:1fr 1fr; gap:var(--sp-3); }
+
+        @media (max-width:640px) { .gi-grid { grid-template-columns:1fr; } .gi-row { grid-template-columns:1fr; } }
+    </style>
+{% endblock %}
+
+{% block content %}
+    <div class="gi-header">
+        <h1>Pendências Internas</h1>
+        <div class="gi-summary">
+            <span class="gi-status-chip atrasada hidden" id="lateCounter"></span>
+            <span class="gi-status-chip pendente" id="openCounter">—</span>
+            <button class="btn btn-primary btn-sm" id="newTaskBtn">+ Nova Pendência</button>
+        </div>
+    </div>
+
+    <div class="gi-tabs" id="giTabs"><!-- tabs dinâmicas por responsável --></div>
+
+    <div class="gi-grid" id="giGrid">
+        <div class="empty-state"><div class="empty-icon">⏳</div>Carregando pendências...</div>
+    </div>
+
+    <!-- Modal Nova Pendência -->
+    <div class="modal-overlay" id="taskModal">
+        <div class="gi-modal">
+            <h3>Nova Pendência Interna</h3>
+            <form id="taskForm">
+                <div class="gi-field">
+                    <label for="tTitle">Título *</label>
+                    <input type="text" id="tTitle" class="form-input" style="width:100%;" maxlength="200" required>
+                </div>
+                <div class="gi-field">
+                    <label for="tDesc">Descrição</label>
+                    <textarea id="tDesc" class="form-input" style="width:100%; min-height:90px;" placeholder="Detalhes da pendência..."></textarea>
+                </div>
+                <div class="gi-row">
+                    <div class="gi-field">
+                        <label for="tAssignee">Responsável *</label>
+                        <select id="tAssignee" class="form-input" style="width:100%;" required></select>
+                    </div>
+                    <div class="gi-field">
+                        <label for="tDue">Data</label>
+                        <input type="date" id="tDue" class="form-input" style="width:100%;">
+                    </div>
+                </div>
+                <div class="gi-row">
+                    <div class="gi-field">
+                        <label for="tType">Tipo</label>
+                        <select id="tType" class="form-input" style="width:100%;">
+                            <option value="pontual">Pontual</option>
+                            <option value="recorrente">Recorrente</option>
+                        </select>
+                    </div>
+                    <div class="gi-field hidden" id="recurrenceField">
+                        <label for="tRecurrence">Recorrência</label>
+                        <select id="tRecurrence" class="form-input" style="width:100%;">
+                            <option value="diaria">Diária</option>
+                            <option value="semanal">Semanal</option>
+                            <option value="mensal">Mensal</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="gi-field">
+                    <label for="tPriority">Prioridade</label>
+                    <select id="tPriority" class="form-input" style="width:100%;">
+                        <option value="">Sem prioridade</option>
+                        <option value="baixa">Baixa</option>
+                        <option value="media">Média</option>
+                        <option value="alta">Alta</option>
+                    </select>
+                </div>
+                <div id="taskAlert" class="alert alert-error hidden" style="margin-bottom:var(--sp-3);"><span id="taskAlertMsg"></span></div>
+                <div style="display:flex; gap:var(--sp-3); justify-content:flex-end;">
+                    <button type="button" class="btn" id="closeTaskModal" style="background:var(--color-bg); color:var(--color-text-2);">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Criar Pendência</button>
+                </div>
+            </form>
+        </div>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+    <script>
+    let users = [];
+    let allTasks = [];
+    let currentFilter = null;   // null = Todos; senão assignee_id
+    const me = Auth.getUser();
+
+    function esc(str) { if (!str) return ''; const d = document.createElement('div'); d.textContent = str; return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        if (!Auth.requireAuth()) return;
+        document.getElementById('newTaskBtn').onclick = openModal;
+        document.getElementById('closeTaskModal').onclick = closeModal;
+        document.getElementById('tType').onchange = (e) =>
+            document.getElementById('recurrenceField').classList.toggle('hidden', e.target.value !== 'recorrente');
+        document.getElementById('taskForm').onsubmit = submitTask;
+        init();
+    });
+
+    async function init() {
+        await loadUsers();
+        await loadTasks();
+    }
+
+    // §8.3: responsáveis dinâmicos — novo usuário aparece sem editar HTML
+    async function loadUsers() {
+        const r = await Auth.apiRequest('/api/users/for-select');
+        if (!r || !r.ok) return;
+        const d = await r.json();
+        users = (d.users || []).filter(u => u.id !== 0);   // IA não é responsável de pendência interna
+        const sel = document.getElementById('tAssignee');
+        sel.innerHTML = '';
+        users.forEach(u => { sel.innerHTML += `<option value="${u.id}">${esc(u.nome)}</option>`; });
+    }
+
+    async function loadTasks() {
+        const r = await Auth.apiRequest('/api/internal/tasks');
+        if (!r || !r.ok) return;
+        allTasks = await r.json();
+        renderTabs();
+        renderGrid();
+        renderCounters();
+    }
+
+    function openCount(list) { return list.filter(t => t.effective_status !== 'concluida').length; }
+
+    function renderTabs() {
+        const tabs = document.getElementById('giTabs');
+        tabs.innerHTML = '';
+        const mk = (label, id, count) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'gi-tab' + ((id === currentFilter) ? ' active' : '');
+            b.innerHTML = `${esc(label)} <span class="gi-tab-count">${count}</span>`;
+            b.onclick = () => { currentFilter = id; renderTabs(); renderGrid(); };
+            return b;
+        };
+        tabs.appendChild(mk('Todos', null, openCount(allTasks)));
+        users.forEach(u => {
+            const mine = allTasks.filter(t => t.assignee_id === u.id);
+            tabs.appendChild(mk(u.nome, u.id, openCount(mine)));
+        });
+    }
+
+    function renderCounters() {
+        const open = allTasks.filter(t => t.effective_status === 'pendente').length;
+        const late = allTasks.filter(t => t.effective_status === 'atrasada').length;
+        document.getElementById('openCounter').textContent = `${open} pendente${open === 1 ? '' : 's'}`;
+        const lateEl = document.getElementById('lateCounter');
+        lateEl.textContent = `${late} atrasada${late === 1 ? '' : 's'}`;
+        lateEl.classList.toggle('hidden', late === 0);
+    }
+
+    const PRIORITY_LABEL = { baixa: 'Baixa', media: 'Média', alta: 'Alta' };
+    const REC_LABEL = { diaria: 'Diária', semanal: 'Semanal', mensal: 'Mensal' };
+
+    function renderGrid() {
+        const grid = document.getElementById('giGrid');
+        grid.innerHTML = '';
+        const list = currentFilter === null ? allTasks : allTasks.filter(t => t.assignee_id === currentFilter);
+
+        if (!list.length) {
+            grid.innerHTML = `<div class="empty-state"><div class="empty-icon">🎉</div>Nenhuma pendência por aqui.<br><span style="font-size:var(--font-size-xs);">Crie uma com "+ Nova Pendência".</span></div>`;
+            return;
+        }
+
+        list.forEach(t => {
+            const card = document.createElement('div');
+            card.className = `gi-card ${t.effective_status}`;
+            const canArchive = me && (me.role === 'admin' || me.id === t.created_by);
+            const due = t.due_date ? new Date(t.due_date + 'T00:00:00').toLocaleDateString('pt-BR') : 'Sem data';
+            card.innerHTML = `
+                <div class="gi-card-top">
+                    <div class="gi-card-title">${esc(t.title)}</div>
+                    <span class="gi-status-chip ${t.effective_status}">${t.effective_status}</span>
+                </div>
+                ${t.description ? `<div class="gi-card-desc">${esc(t.description)}</div>` : ''}
+                <div class="gi-card-meta">
+                    <span>👤 ${esc(t.assignee_nome || '—')}</span>
+                    <span>📅 ${due}</span>
+                    ${t.task_type === 'recorrente' ? `<span class="chip chip-sm chip-info">${REC_LABEL[t.recurrence] || 'Recorrente'}</span>` : ''}
+                    ${t.priority ? `<span class="chip chip-sm ${t.priority === 'alta' ? 'chip-danger' : t.priority === 'media' ? 'chip-warning' : 'chip-neutral'}">${PRIORITY_LABEL[t.priority]}</span>` : ''}
+                </div>
+                <div class="gi-card-meta" style="font-size:10px;">criada por ${esc(t.creator_nome || '—')}</div>
+                <div class="gi-card-actions">
+                    ${t.effective_status !== 'concluida' ? `<button type="button" class="gi-btn-done" data-done="${t.id}">✓ Concluir</button>` : ''}
+                    ${canArchive ? `<button type="button" class="gi-btn-archive" data-archive="${t.id}">Arquivar</button>` : ''}
+                </div>
+            `;
+            grid.appendChild(card);
+        });
+
+        grid.querySelectorAll('[data-done]').forEach(b => b.onclick = () => completeTask(parseInt(b.dataset.done)));
+        grid.querySelectorAll('[data-archive]').forEach(b => b.onclick = () => archiveTask(parseInt(b.dataset.archive)));
+    }
+
+    async function completeTask(id) {
+        const r = await Auth.apiRequest(`/api/internal/tasks/${id}/complete`, { method: 'POST' });
+        if (r && r.ok) loadTasks();
+        else if (r) alert((await r.json()).detail || 'Não foi possível concluir.');
+    }
+
+    async function archiveTask(id) {
+        if (!confirm('Arquivar esta pendência?')) return;
+        const r = await Auth.apiRequest(`/api/internal/tasks/${id}/archive`, { method: 'POST' });
+        if (r && r.ok) loadTasks();
+        else if (r) alert((await r.json()).detail || 'Não foi possível arquivar.');
+    }
+
+    function openModal() {
+        document.getElementById('taskAlert').classList.add('hidden');
+        document.getElementById('taskForm').reset();
+        document.getElementById('recurrenceField').classList.add('hidden');
+        document.getElementById('taskModal').classList.add('show');
+    }
+    function closeModal() { document.getElementById('taskModal').classList.remove('show'); }
+
+    async function submitTask(e) {
+        e.preventDefault();
+        const type = document.getElementById('tType').value;
+        const body = {
+            title: document.getElementById('tTitle').value.trim(),
+            description: document.getElementById('tDesc').value.trim() || null,
+            assignee_id: parseInt(document.getElementById('tAssignee').value),
+            task_type: type,
+            recurrence: type === 'recorrente' ? document.getElementById('tRecurrence').value : null,
+            due_date: document.getElementById('tDue').value || null,
+            priority: document.getElementById('tPriority').value || null,
+        };
+        const r = await Auth.apiRequest('/api/internal/tasks', { method: 'POST', body: JSON.stringify(body) });
+        if (!r) return;
+        if (!r.ok) {
+            const err = await r.json();
+            const msg = typeof err.detail === 'string' ? err.detail : 'Erro ao criar pendência';
+            document.getElementById('taskAlertMsg').textContent = msg;
+            document.getElementById('taskAlert').classList.remove('hidden');
+            return;
+        }
+        closeModal();
+        loadTasks();
+    }
+    </script>
+{% endblock %}
