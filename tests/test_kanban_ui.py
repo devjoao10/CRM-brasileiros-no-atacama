@@ -54,8 +54,24 @@ def test_kanban_due_chip():
     assert "kanban-due" in html and "overdue" in html, "chip de prazo/atraso ausente"
 
 
+def test_kanban_trello_ui():
+    """Redesign Trello + fix dos modais (regressao do smoke visual)."""
+    html = _render()
+    # fix critico: modais como overlay (CSS de .modal se perdeu na migracao)
+    assert ".modal.show { display: flex; }" in html, "modal sem CSS de overlay (bug do smoke)"
+    assert "position: fixed; inset: 0;" in html, "modal nao cobre a tela"
+    # §7.2: botao de adicionar card NA coluna + pre-selecao da coluna
+    assert "kanban-add-card" in html and "Adicionar um card" in html, "botao por coluna ausente"
+    assert "openCreateCardModal" in html and "select.value = String(preListId)" in html
+    # coluna-fantasma para criar listas (admin)
+    assert "kanban-add-list" in html and "Adicionar outra lista" in html, "coluna-fantasma ausente"
+    # visual de arraste
+    assert 'classList.add("dragging")' in html, "feedback visual de drag ausente"
+
+
 if __name__ == "__main__":
     test_kanban_fullscreen()
     test_kanban_conditional_buttons_contract()
     test_kanban_due_chip()
-    print("OK: kanban full-screen + botoes condicionais + prazo")
+    test_kanban_trello_ui()
+    print("OK: kanban full-screen + botoes condicionais + prazo + trello-ui/modais")
