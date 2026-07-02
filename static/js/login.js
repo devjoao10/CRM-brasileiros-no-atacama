@@ -10,7 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }).then(res => {
             if (res.ok) {
                 const next = new URLSearchParams(window.location.search).get('next');
-                window.location.href = next || '/dashboard';
+                window.location.href = next || '/hub';
             } else {
                 // Token expirado ou inválido — limpa e fica no login
                 Auth.clearAuth();
@@ -83,7 +83,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Redirect after brief delay for feedback
             setTimeout(() => {
                 const next = new URLSearchParams(window.location.search).get('next');
-                window.location.href = next || '/dashboard';
+                window.location.href = next || '/hub';
             }, 500);
 
         } catch (err) {
