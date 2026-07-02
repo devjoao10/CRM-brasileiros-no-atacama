@@ -51,7 +51,33 @@ def test_ai_chat_is_sanitized():
     assert "DOMPurify.sanitize(marked.parse(content))" in html, "ai.html: IA sem sanitize"
 
 
+# WP-UX-03 — sidebars contextuais: cada pagina renderiza SO a navegacao do seu setor.
+SECTOR_OF = {
+    "dashboard.html": "comercial", "ai.html": "comercial", "leads.html": "comercial",
+    "tags.html": "comercial", "pipeline.html": "comercial", "segmentacao.html": "comercial",
+    "tarefas.html": "comercial", "relatorios.html": "comercial",
+    "operational/boards.html": "operacional", "operational/kanban.html": "operacional",
+    "operational/pending.html": "gestao", "equipes.html": "gestao",
+}
+FORBIDDEN_LINKS = {
+    # links de sidebar que NAO podem aparecer fora do proprio setor
+    "comercial": ['href="/operational/boards"', 'href="/operational/my-pending"', 'href="/equipe"'],
+    "operacional": ['href="/leads"', 'href="/pipeline"', 'href="/tags"'],
+    "gestao": ['href="/leads"', 'href="/pipeline"', 'href="/tags"'],
+}
+
+
+def test_sector_sidebar_isolation():
+    env = _env()
+    for name, sector in SECTOR_OF.items():
+        html = env.get_template(name).render(**CONTEXT)
+        assert 'href="/hub"' in html, f"{name}: link de volta ao Hub ausente"
+        for bad in FORBIDDEN_LINKS[sector]:
+            assert bad not in html, f"{name} ({sector}): vazou link de outro setor: {bad}"
+
+
 if __name__ == "__main__":
     test_all_templates_render()
     test_ai_chat_is_sanitized()
+    test_sector_sidebar_isolation()
     print("OK: todos os render smoke tests passaram")
