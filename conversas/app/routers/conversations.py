@@ -434,10 +434,20 @@ async def send_message(
             conversation.whatsapp, data.msg_type, data.media_url, data.content, db
         )
 
+    # CONV-08: distinguir sucesso real de falha da API.
+    # As funcoes send_* retornam:
+    #   - dict com "messages"  -> aceito pela Meta (sucesso real)
+    #   - dict {"simulated": True} -> sem credenciais (modo dev; nao houve envio real)
+    #   - None                 -> falha real da API (HTTP error / excecao)
+    # NUNCA marcar como 'sent' quando o envio falhou (wa_response is None).
+    send_failed = wa_response is None
+
     if wa_response and "messages" in wa_response:
         wa_msg_id = wa_response["messages"][0].get("id")
 
-    # Save message in DB
+    # Save message in DB — status reflete o resultado real do envio.
+    # OBS (gap documentado): o modelo Message nao possui coluna de erro nem
+    # contador de retentativas; nao ha reenvio automatico. Ver CRITICAL_STABILIZATION_TRACKER (CONV-08).
     message = Message(
         conversation_id=conversation.id,
         direction="outbound",
@@ -445,16 +455,29 @@ async def send_message(
         msg_type=data.msg_type,
         media_url=data.media_url,
         whatsapp_msg_id=wa_msg_id,
-        status="sent",
+        status="failed" if send_failed else "sent",
     )
     db.add(message)
 
-    # Update conversation preview
-    conversation.ultimo_msg = data.content[:200]
-    conversation.unread_count = 0
+    # Atualiza o preview apenas quando o envio foi aceito.
+    if not send_failed:
+        conversation.ultimo_msg = data.content[:200]
+        conversation.unread_count = 0
 
     db.commit()
     db.refresh(message)
+
+    if send_failed:
+        # Log seguro: sem token, sem payload sensivel. Detalhes ficam nos logs
+        # internos de whatsapp.send_* (que ja omitem segredos).
+        logger.warning(
+            f"Falha ao enviar mensagem para conversa {conversation.id} "
+            f"(msg_type={data.msg_type}); persistida como 'failed'."
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Nao foi possivel enviar a mensagem pelo WhatsApp. Tente novamente.",
+        )
 
     logger.info(f"Mensagem enviada para {conversation.nome} ({conversation.whatsapp})")
     return MessageResponse.model_validate(message)
