@@ -34,7 +34,7 @@ def test_hub_renders_without_sidebar():
     assert 'class="top-header"' in html, "hub mantem topbar global"
     assert 'href="/dashboard"' in html, "card Comercial ausente"
     assert 'href="/operational/boards"' in html, "card Operacional ausente"
-    assert 'href="/operational/my-pending"' in html, "card Gestao Interna ausente"
+    assert 'href="/gestao/pendencias"' in html, "card Gestao Interna ausente"
     assert 'id="logoutBtn"' in html, "hub precisa de logout"
     assert html.index("/static/js/auth.js") < html.index("/static/js/layout.js")
     assert "localhost:5678" not in html
