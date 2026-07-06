@@ -33,3 +33,12 @@ META_APP_SECRET = os.getenv("META_APP_SECRET", "")  # App Secret — valida X-Hu
 # ─── N8N Integration ─────────────────────────────
 N8N_BASE_URL = os.getenv("N8N_BASE_URL", "http://127.0.0.1:5678")
 N8N_AGENT_ENABLED = os.getenv("N8N_AGENT_ENABLED", "false").lower() == "true"
+
+# ─── Media storage (CONV-02) ─────────────────────
+# Espelho local dos binarios de midia (media_assets.local_path e RELATIVO a este dir).
+# Default fica sob conversas/uploads/ (ja coberto pelo .gitignore). Em producao:
+# apontar CONVERSAS_MEDIA_DIR para um volume Docker persistente.
+MEDIA_STORAGE_DIR = os.getenv(
+    "CONVERSAS_MEDIA_DIR",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads", "media"),
+)

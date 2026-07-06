@@ -487,6 +487,31 @@
         }
     }
 
+    // CONV-02: abre a midia de um asset via fetch autenticado (baixa da Meta se preciso)
+    window._openMedia = async function (assetId, btn) {
+        const id = Number(assetId);
+        if (btn) { btn.disabled = true; btn.textContent = 'Carregando...'; }
+        try {
+            let resp = await Auth.apiRequest(`/api/media/${id}`);
+            if (resp && resp.status === 409) {
+                // ainda nao espelhada — pede o download da Meta
+                const f = await Auth.apiRequest(`/api/media/${id}/fetch`, { method: 'POST' });
+                if (!f || !f.ok) {
+                    let detail = 'Falha ao baixar a mídia.';
+                    try { const e = await f.json(); if (e && e.detail) detail = e.detail; } catch (_) { }
+                    showToast(detail);
+                    return;
+                }
+                resp = await Auth.apiRequest(`/api/media/${id}`);
+            }
+            if (!resp || !resp.ok) { showToast('Mídia indisponível.'); return; }
+            const blob = await resp.blob();
+            window.open(URL.createObjectURL(blob), '_blank');
+        } finally {
+            if (btn) { btn.disabled = false; btn.innerHTML = '&#128206; Ver mídia'; }
+        }
+    };
+
     // CONV-08b: reenvio manual de mensagem outbound com falha
     window._retryMessage = async function (msgId) {
         if (!activeConversation) return;
@@ -660,6 +685,11 @@
             content = '<em>Documento</em>';
         } else if (msg.msg_type === 'video') {
             content = '<em>Video</em>';
+        }
+
+        // CONV-02: preview autenticado da midia espelhada (id numerico do banco)
+        if (msg.media_asset && msg.media_asset.id) {
+            content += `<div style="margin-top:4px;"><button class="media-preview-btn" onclick="window._openMedia(${Number(msg.media_asset.id)}, this)" style="background:none; border:1px solid var(--dark-300); border-radius:6px; cursor:pointer; font-size:11px; padding:2px 8px; color:var(--dark-500);">&#128206; Ver m&iacute;dia</button></div>`;
         }
 
         // SEC-CONV-01: `content` e `media_url` ja passaram por escapeHtml; o restante
