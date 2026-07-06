@@ -242,6 +242,17 @@
         // Send message
         document.getElementById('btnSend').addEventListener('click', sendMessage);
 
+        // CONV-03: anexo de midia
+        document.getElementById('btnAttach').addEventListener('click', () => {
+            if (!activeConversation) { showToast('Abra uma conversa primeiro'); return; }
+            document.getElementById('mediaFileInput').click();
+        });
+        document.getElementById('mediaFileInput').addEventListener('change', async function () {
+            const file = this.files && this.files[0];
+            this.value = ''; // permite reanexar o mesmo arquivo
+            if (file) await sendMediaFile(file);
+        });
+
         // Textarea: Enter to send, Shift+Enter for newline
         document.getElementById('msgInput').addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -487,6 +498,60 @@
         }
     }
 
+    // CONV-03: envio de midia por upload (multipart). Nao usa Auth.apiRequest
+    // porque ele fixa Content-Type: application/json — FormData exige que o
+    // browser defina o boundary sozinho. O Bearer vai manualmente.
+    async function sendMediaFile(file) {
+        if (!activeConversation || !file) return;
+        const fd = new FormData();
+        fd.append('file', file, file.name);
+        fd.append('caption', '');
+        showToast('Enviando mídia...');
+        const resp = await fetch(`/api/conversations/${activeConversation.id}/messages/media`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${Auth.getToken()}` },
+            body: fd,
+        });
+        if (resp.ok) {
+            showToast('Mídia enviada');
+        } else {
+            let detail = 'Falha ao enviar a mídia.';
+            try { const e = await resp.json(); if (e && e.detail) detail = e.detail; } catch (_) { }
+            showToast(detail);
+        }
+        loadChat(activeConversation.id);
+        loadConversations();
+    }
+
+    // CONV-03: player de audio embutido via blob autenticado
+    window._playAudio = async function (assetId, btn) {
+        const id = Number(assetId);
+        if (btn) { btn.disabled = true; btn.textContent = 'Carregando...'; }
+        try {
+            let resp = await Auth.apiRequest(`/api/media/${id}`);
+            if (resp && resp.status === 409) {
+                const f = await Auth.apiRequest(`/api/media/${id}/fetch`, { method: 'POST' });
+                if (!f || !f.ok) {
+                    let detail = 'Falha ao baixar o áudio.';
+                    try { const e = await f.json(); if (e && e.detail) detail = e.detail; } catch (_) { }
+                    showToast(detail);
+                    return;
+                }
+                resp = await Auth.apiRequest(`/api/media/${id}`);
+            }
+            if (!resp || !resp.ok) { showToast('Áudio indisponível.'); return; }
+            const blob = await resp.blob();
+            const audio = document.createElement('audio');
+            audio.controls = true;
+            audio.src = URL.createObjectURL(blob);
+            audio.style.maxWidth = '220px';
+            if (btn && btn.parentNode) btn.parentNode.replaceChild(audio, btn);
+            audio.play().catch(() => { /* autoplay bloqueado: usuario aperta play */ });
+        } finally {
+            if (btn && btn.isConnected) { btn.disabled = false; btn.innerHTML = '&#9654; Ouvir'; }
+        }
+    };
+
     // CONV-02: abre a midia de um asset via fetch autenticado (baixa da Meta se preciso)
     window._openMedia = async function (assetId, btn) {
         const id = Number(assetId);
@@ -680,7 +745,12 @@
         } else if (msg.msg_type === 'template') {
             content = `<div style="font-size:10px; color:var(--primary); font-weight:600; margin-bottom:4px; display:flex; align-items:center; gap:4px;"><svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>Template</div>${content}`;
         } else if (msg.msg_type === 'audio') {
-            content = '<em>Audio</em>';
+            // CONV-03: player sob demanda quando ha asset persistido
+            if (msg.media_asset && msg.media_asset.id) {
+                content = `<button class="audio-play-btn" onclick="window._playAudio(${Number(msg.media_asset.id)}, this)" style="background:var(--dark-100); border:1px solid var(--dark-300); border-radius:16px; cursor:pointer; font-size:12px; padding:6px 14px; color:var(--dark-600);">&#9654; Ouvir</button>` + (msg.content && msg.content !== '[AUDIO]' ? `<br>${content}` : '');
+            } else {
+                content = '<em>Audio</em>';
+            }
         } else if (msg.msg_type === 'document') {
             content = '<em>Documento</em>';
         } else if (msg.msg_type === 'video') {

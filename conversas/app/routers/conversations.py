@@ -6,7 +6,7 @@ Includes responsavel (owner) management and CRM integration.
 import logging
 from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
@@ -25,7 +25,12 @@ from app.schemas.conversation import (
 )
 from app.services import whatsapp
 from app.services import crm as crm_service
-from app.services.outbound import record_outbound_message, classify_wa_response
+from app.services.outbound import (
+    record_outbound_message,
+    classify_wa_response,
+    send_media_upload,
+    MediaRejection,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/conversations", tags=["Conversas"])
@@ -445,6 +450,51 @@ async def send_message(
     return MessageResponse.model_validate(message)
 
 
+@router.post("/{conversation_id}/messages/media", response_model=MessageResponse)
+async def send_media_message_upload(
+    conversation_id: int,
+    file: UploadFile = File(...),
+    caption: str = Form(""),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    CONV-03: envio outbound de midia por upload (multipart).
+    Rota fina: valida conversa -> delega a outbound.send_media_upload
+    (politica -> upload Meta -> send por media_id -> integridade CONV-08b).
+    Politica rejeita com 415/413 SEM persistir nada; falha de provider
+    persiste 'failed' (retry possivel) e responde 502 seguro.
+    """
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id
+    ).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Arquivo vazio")
+
+    try:
+        message, _asset = await send_media_upload(
+            db, conversation,
+            content=content,
+            mime_type=file.content_type or "",
+            caption=caption or "",
+            filename=file.filename,
+        )
+    except MediaRejection as e:
+        raise HTTPException(status_code=e.status_code, detail=e.reason)
+
+    if message.status == "failed":
+        raise HTTPException(
+            status_code=502,
+            detail="Nao foi possivel enviar a midia pelo WhatsApp. Tente novamente.",
+        )
+    logger.info(f"Midia enviada para {conversation.nome} ({conversation.whatsapp})")
+    return MessageResponse.model_validate(message)
+
+
 @router.post("/{conversation_id}/messages/{message_id}/retry", response_model=MessageResponse)
 async def retry_message(
     conversation_id: int,
@@ -483,10 +533,33 @@ async def retry_message(
 
     if message.msg_type == "text":
         wa_response = await whatsapp.send_text_message(conversation.whatsapp, message.content, db)
-    elif message.msg_type in ("image", "audio", "document", "video") and message.media_url:
-        wa_response = await whatsapp.send_media_message(
-            conversation.whatsapp, message.msg_type, message.media_url, message.content, db
-        )
+    elif message.msg_type in ("image", "audio", "document", "video"):
+        # CONV-03: midia com espelho local (upload do operador) -> re-upload + send
+        from app.services import media_storage
+        asset = message.media_asset
+        local = media_storage.resolve_local_file(asset) if asset else None
+        if local is not None:
+            up = await whatsapp.upload_media(local.read_bytes(), asset.meta_mime_type or "application/octet-stream", db)
+            if not isinstance(up, dict) or up.get("error"):
+                wa_response = {
+                    "error": True,
+                    "summary": (up.get("summary") if isinstance(up, dict) else None)
+                    or "falha no re-upload da midia",
+                }
+            elif up.get("simulated"):
+                wa_response = {"simulated": True}
+            else:
+                asset.meta_media_id = up.get("id")
+                wa_response = await whatsapp.send_media_message(
+                    conversation.whatsapp, message.msg_type,
+                    caption=message.content or "", db=db, media_id=up.get("id"),
+                )
+        elif message.media_url:
+            wa_response = await whatsapp.send_media_message(
+                conversation.whatsapp, message.msg_type, message.media_url, message.content, db
+            )
+        else:
+            raise HTTPException(status_code=400, detail="Reenvio nao suportado para este tipo de mensagem")
     else:
         raise HTTPException(status_code=400, detail="Reenvio nao suportado para este tipo de mensagem")
 

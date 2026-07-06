@@ -19,8 +19,17 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.models.conversation import Conversation, Message
+from app.models.media_asset import MediaAsset
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_filename(filename: Optional[str]) -> Optional[str]:
+    """Filename e METADADO (nunca vira path) — mas sanitizamos mesmo assim."""
+    if not filename:
+        return None
+    base = filename.replace("\\", "/").split("/")[-1].strip()
+    return base[:255] or None
 
 
 def classify_wa_response(wa_response) -> dict:
@@ -119,3 +128,83 @@ def record_outbound_message(
         db.commit()
         db.refresh(message)
     return message
+
+
+class MediaRejection(Exception):
+    """CONV-03: upload rejeitado pela politica ANTES de qualquer persistencia."""
+
+    def __init__(self, status_code: int, reason: str):
+        self.status_code = status_code  # 415 (tipo) ou 413 (tamanho)
+        self.reason = reason
+        super().__init__(reason)
+
+
+async def send_media_upload(
+    db: Session,
+    conversation: Conversation,
+    *,
+    content: bytes,
+    mime_type: str,
+    caption: str = "",
+    filename: Optional[str] = None,
+):
+    """
+    CONV-03 — envio outbound de midia por upload (generico: audio/imagem/video/
+    documento; a UI decide o que aceitar por pacote).
+
+    Fluxo: politica -> upload a Meta -> send por media_id -> record_outbound_message
+    (integridade CONV-08b: nunca 'sent' sem aceite) -> MediaAsset com espelho
+    local do arquivo do operador (permite retry e preview imediato).
+
+    Politica REJEITA antes de persistir qualquer coisa (MediaRejection ->
+    415/413); falha de provider PERSISTE Message 'failed' + asset com espelho
+    local (retry possivel).
+    Retorna (message, asset).
+    """
+    from app.services import whatsapp, media_policy, media_storage
+
+    kind = media_policy.classify_mime(mime_type)
+    if kind is None or kind == "sticker":
+        raise MediaRejection(415, f"tipo de midia nao suportado: {mime_type or '(vazio)'}")
+    ok, reason = media_policy.validate(kind, mime_type, len(content))
+    if not ok:
+        status = 413 if "limite" in (reason or "") or "tamanho" in (reason or "") else 415
+        raise MediaRejection(status, reason or "midia rejeitada pela politica")
+
+    # 1) upload a Meta
+    up = await whatsapp.upload_media(content, mime_type, db)
+    media_id = up.get("id") if isinstance(up, dict) else None
+
+    # 2) send por media_id (upload falho/simulado propaga como resposta do send)
+    if not isinstance(up, dict) or up.get("error"):
+        wa_response = {
+            "error": True,
+            "summary": (up.get("summary") if isinstance(up, dict) else None)
+            or "falha no upload da midia a Meta",
+        }
+    elif up.get("simulated"):
+        wa_response = {"simulated": True}
+    else:
+        wa_response = await whatsapp.send_media_message(
+            conversation.whatsapp, kind, caption=caption or "", db=db, media_id=media_id
+        )
+
+    message = record_outbound_message(
+        db, conversation, caption or f"[{kind.upper()}]", kind, wa_response,
+        media_url=None, update_preview=True, reset_unread=True,
+    )
+
+    # 3) asset com espelho LOCAL do arquivo do operador (preview + retry)
+    asset = MediaAsset(
+        message_id=message.id,
+        meta_media_id=media_id,
+        meta_mime_type=mime_type,
+        filename=_sanitize_filename(filename),
+        status="referenced",
+    )
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+    media_storage.store_bytes(asset, content, mime_type, db)  # -> 'downloaded'
+
+    return message, asset
