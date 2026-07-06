@@ -11,6 +11,23 @@ class MessageCreate(BaseModel):
     template_name: Optional[str] = None
 
 
+class MediaAssetResponse(BaseModel):
+    """CONV-01 — referencia de midia (metadados publicos Meta + espelho local futuro)."""
+    id: int
+    meta_media_id: Optional[str] = None
+    meta_mime_type: Optional[str] = None
+    meta_sha256: Optional[str] = None
+    filename: Optional[str] = None
+    status: str
+    local_path: Optional[str] = None
+    local_size_bytes: Optional[int] = None
+    downloaded_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
 class MessageResponse(BaseModel):
     id: int
     conversation_id: int
@@ -25,6 +42,9 @@ class MessageResponse(BaseModel):
     last_error: Optional[str] = None
     send_attempts: Optional[int] = 0
     last_attempt_at: Optional[datetime] = None
+    # CONV-01 — referencia de midia (None para mensagens sem midia; campo aditivo,
+    # o frontend atual ignora chaves desconhecidas)
+    media_asset: Optional[MediaAssetResponse] = None
 
     class Config:
         from_attributes = True

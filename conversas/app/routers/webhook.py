@@ -23,6 +23,7 @@ from app.models.api_config import ApiConfig
 from app.services import whatsapp
 from app.services import crm as crm_service
 from app.services.outbound import record_outbound_message
+from app.models.media_asset import MediaAsset
 
 logger = logging.getLogger(__name__)
 
@@ -240,6 +241,7 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
     # Extract content based on message type
     content = ""
     media_url = None
+    media_meta = None  # CONV-01: metadados Meta p/ media_assets (so tipos de midia)
 
     if msg_type == "text":
         content = msg.get("text", {}).get("body", "")
@@ -247,6 +249,14 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
         media_data = msg.get(msg_type, {})
         content = media_data.get("caption", f"[{msg_type.upper()}]")
         media_url = media_data.get("id")  # Media ID (needs download via Graph API)
+        # CONV-01: o payload da Meta JA traz metadados publicos — capturar em vez
+        # de descartar (mime_type/sha256 sempre; filename so em document).
+        media_meta = {
+            "meta_media_id": media_data.get("id"),
+            "meta_mime_type": media_data.get("mime_type"),
+            "meta_sha256": media_data.get("sha256"),
+            "filename": media_data.get("filename"),
+        }
     elif msg_type == "location":
         loc = msg.get("location", {})
         content = f"Localização: {loc.get('latitude', '')}, {loc.get('longitude', '')}"
@@ -323,6 +333,25 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
     )
     db.add(message)
     db.commit()
+
+    # CONV-01: persiste a referencia de midia em transacao PROPRIA — uma falha
+    # aqui nunca pode desfazer/perder a mensagem inbound ja commitada.
+    if media_meta and media_meta.get("meta_media_id"):
+        try:
+            db.add(MediaAsset(
+                message_id=message.id,
+                meta_media_id=media_meta["meta_media_id"],
+                meta_mime_type=media_meta["meta_mime_type"],
+                meta_sha256=media_meta["meta_sha256"],
+                filename=media_meta["filename"],
+                status="referenced",
+            ))
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.warning(
+                f"Falha ao registrar media_asset da mensagem {message.id}: {type(e).__name__}"
+            )
 
     logger.info(f"Mensagem recebida de {sender_name} ({whatsapp_number}): {content[:50]}")
 

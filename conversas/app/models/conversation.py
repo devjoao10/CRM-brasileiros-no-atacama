@@ -58,6 +58,13 @@ class Message(Base):
 
     # Relationships
     conversation = relationship("Conversation", back_populates="messages")
+    # CONV-01: 1:1 com media_assets (so mensagens de midia possuem asset)
+    media_asset = relationship(
+        "MediaAsset",
+        back_populates="message",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self):
         return f"<Message(id={self.id}, direction='{self.direction}', type='{self.msg_type}')>"
