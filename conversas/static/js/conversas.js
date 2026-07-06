@@ -471,6 +471,7 @@
             loadChat(activeConversation.id);
             loadConversations();
         } else {
+            // (CONV-08b: mensagens 'failed' persistidas exibem botao de reenvio no chat)
             // CONV-08: o envio falhou. O backend NAO marca a mensagem como 'sent' e a
             // persiste como 'failed'. Recarrega o chat para exibir o status de falha
             // (X vermelho) e avisa o operador com uma mensagem segura (sem segredos).
@@ -485,6 +486,29 @@
             loadChat(activeConversation.id);
         }
     }
+
+    // CONV-08b: reenvio manual de mensagem outbound com falha
+    window._retryMessage = async function (msgId) {
+        if (!activeConversation) return;
+        const resp = await Auth.apiRequest(
+            `/api/conversations/${activeConversation.id}/messages/${Number(msgId)}/retry`,
+            { method: 'POST' }
+        );
+        if (resp && resp.ok) {
+            showToast('Mensagem reenviada');
+        } else {
+            let detail = 'Falha ao reenviar a mensagem.';
+            try {
+                if (resp) {
+                    const err = await resp.json();
+                    if (err && err.detail) detail = err.detail;
+                }
+            } catch (_) { /* resposta sem corpo JSON */ }
+            showToast(detail);
+        }
+        loadChat(activeConversation.id);
+        loadConversations();
+    };
 
     // ─── Rendering ──────────────────────────────
     function renderConversationList() {
@@ -615,7 +639,13 @@
             else if (msg.status === 'sent') statusIcon = '<span class="message-status">&#10003;</span>';
             else if (msg.status === 'delivered') statusIcon = '<span class="message-status delivered">&#10003;&#10003;</span>';
             else if (msg.status === 'read') statusIcon = '<span class="message-status read">&#10003;&#10003;</span>';
-            else if (msg.status === 'failed') statusIcon = '<span class="message-status" style="color:var(--error)">&#10007;</span>';
+            else if (msg.status === 'failed') {
+                statusIcon = '<span class="message-status" style="color:var(--error)" title="Falha no envio">&#10007;</span>';
+                // CONV-08b: reenvio manual — so para mensagens persistidas (com id do banco)
+                if (msg.id) {
+                    statusIcon += `<button class="msg-retry-btn" onclick="window._retryMessage(${Number(msg.id)})" title="Reenviar mensagem" style="background:none; border:none; cursor:pointer; color:var(--error); font-size:13px; padding:0 2px; vertical-align:middle;">&#8635;</button>`;
+                }
+            }
         }
 
         let content = escapeHtml(msg.content);

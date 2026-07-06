@@ -41,6 +41,29 @@ def is_configured(db: Optional[Session] = None) -> bool:
     return bool(token and phone_id)
 
 
+def _error_result(status_code: Optional[int], summary: str) -> dict:
+    """
+    CONV-08b: resultado padronizado de falha de envio.
+    `summary` deve ser SEGURO: nunca incluir token, headers, phone_number_id
+    ou payload bruto. Callers persistem isso em Message.last_error.
+    """
+    return {"error": True, "status_code": status_code, "summary": summary[:300]}
+
+
+def _http_error_summary(e: httpx.HTTPStatusError) -> dict:
+    """Extrai um resumo seguro de um erro HTTP da Meta (status + error.message/code)."""
+    summary = f"HTTP {e.response.status_code}"
+    try:
+        err = e.response.json().get("error", {})
+        if err.get("message"):
+            summary += f": {err['message']}"
+        if err.get("code") is not None:
+            summary += f" (code {err['code']})"
+    except Exception:
+        pass
+    return _error_result(e.response.status_code, summary)
+
+
 async def send_text_message(to: str, text: str, db: Optional[Session] = None) -> Optional[dict]:
     """
     Send a text message via WhatsApp Cloud API.
@@ -80,10 +103,10 @@ async def send_text_message(to: str, text: str, db: Optional[Session] = None) ->
             return data
     except httpx.HTTPStatusError as e:
         logger.error(f"Erro HTTP ao enviar mensagem: {e.response.status_code} - {e.response.text}")
-        return None
+        return _http_error_summary(e)
     except Exception as e:
         logger.error(f"Erro ao enviar mensagem: {e}")
-        return None
+        return _error_result(None, f"Erro de rede/cliente: {type(e).__name__}")
 
 
 async def send_media_message(
@@ -132,9 +155,12 @@ async def send_media_message(
             data = response.json()
             logger.info(f"Mídia ({media_type}) enviada para {to}")
             return data
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Erro HTTP ao enviar mídia: {e.response.status_code} - {e.response.text}")
+        return _http_error_summary(e)
     except Exception as e:
         logger.error(f"Erro ao enviar mídia: {e}")
-        return None
+        return _error_result(None, f"Erro de rede/cliente: {type(e).__name__}")
 
 
 async def mark_as_read(message_id: str, db: Optional[Session] = None) -> bool:
@@ -210,10 +236,10 @@ async def send_template_message(
             return data
     except httpx.HTTPStatusError as e:
         logger.error(f"Erro HTTP ao enviar template: {e.response.status_code} - {e.response.text}")
-        return None
+        return _http_error_summary(e)
     except Exception as e:
         logger.error(f"Erro ao enviar template: {e}")
-        return None
+        return _error_result(None, f"Erro de rede/cliente: {type(e).__name__}")
 
 
 async def send_reaction(

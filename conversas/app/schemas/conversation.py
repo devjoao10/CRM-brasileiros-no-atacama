@@ -21,6 +21,10 @@ class MessageResponse(BaseModel):
     whatsapp_msg_id: Optional[str] = None
     status: str
     created_at: datetime
+    # CONV-08b — metadados de integridade de envio (outbound)
+    last_error: Optional[str] = None
+    send_attempts: Optional[int] = 0
+    last_attempt_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

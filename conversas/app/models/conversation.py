@@ -50,6 +50,12 @@ class Message(Base):
     status = Column(String(20), default="sent", nullable=False)  # sent, delivered, read, failed
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    # CONV-08b — integridade de outbound (base para retry).
+    # Bancos existentes: aplicar migrations/m003_conversas_message_error_fields.py.
+    last_error = Column(Text, nullable=True)          # resumo SEGURO da ultima falha (sem token/payload)
+    send_attempts = Column(Integer, default=0, nullable=False)  # tentativas de envio (outbound)
+    last_attempt_at = Column(DateTime(timezone=True), nullable=True)  # ultima tentativa de envio
+
     # Relationships
     conversation = relationship("Conversation", back_populates="messages")
 

@@ -4,6 +4,7 @@ Includes responsavel (owner) management and CRM integration.
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -24,6 +25,7 @@ from app.schemas.conversation import (
 )
 from app.services import whatsapp
 from app.services import crm as crm_service
+from app.services.outbound import record_outbound_message, classify_wa_response
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/conversations", tags=["Conversas"])
@@ -45,8 +47,13 @@ async def send_notification(
     """
     result = await whatsapp.send_text_message(data.to, data.message, db)
 
-    if result is None:
-        raise HTTPException(status_code=502, detail="Falha ao enviar mensagem via WhatsApp")
+    # CONV-08b: falha real agora vem como dict {"error": True, "summary": <seguro>}
+    if result is None or (isinstance(result, dict) and result.get("error")):
+        summary = result.get("summary") if isinstance(result, dict) else None
+        detail = "Falha ao enviar mensagem via WhatsApp"
+        if summary:
+            detail += f": {summary}"
+        raise HTTPException(status_code=502, detail=detail)
 
     # Simulated mode (API not configured)
     if result.get("simulated"):
@@ -142,24 +149,15 @@ async def initiate_conversation(
                 db=db,
             )
 
-            wa_msg_id = None
-            if wa_response and 'messages' in wa_response:
-                wa_msg_id = wa_response['messages'][0].get('id')
-
-            # Salva a mensagem na conversa
-            msg = Message(
-                conversation_id=conversation.id,
-                direction='outbound',
-                content=body_text,
-                msg_type='template',
-                whatsapp_msg_id=wa_msg_id,
-                status='sent',
+            # CONV-08b: persiste com status fiel ao resultado (nunca 'sent' em falha);
+            # preview so e atualizado em sucesso (dentro do helper).
+            msg = record_outbound_message(
+                db, conversation, body_text, 'template', wa_response,
+                update_preview=True,
             )
-            db.add(msg)
-            conversation.ultimo_msg = body_text[:200]
-            db.commit()
-            message_sent = True
-            logger.info(f"Template '{data.template_name}' enviado para {wpp_clean}")
+            message_sent = (msg.status == 'sent')
+            if message_sent:
+                logger.info(f"Template '{data.template_name}' enviado para {wpp_clean}")
         except Exception as e:
             logger.error(f"Erro ao enviar template para {wpp_clean}: {e}")
 
@@ -310,16 +308,12 @@ async def update_conversation(
             AutoReply.is_active == True,
         ).first()
         if reply and reply.message and reply.message.strip():
-            await whatsapp.send_text_message(conversation.whatsapp, reply.message, db)
-            msg = Message(
-                conversation_id=conversation.id,
-                direction="outbound",
-                content=reply.message,
-                msg_type="text",
-                status="sent",
+            # CONV-08b: status fiel ao resultado do envio (nunca 'sent' em falha).
+            wa_response = await whatsapp.send_text_message(conversation.whatsapp, reply.message, db)
+            record_outbound_message(
+                db, conversation, reply.message, "text", wa_response,
+                update_preview=False,
             )
-            db.add(msg)
-            db.commit()
 
     return ConversationResponse.model_validate(conversation)
 
@@ -413,7 +407,6 @@ async def send_message(
 
     # Send via WhatsApp API
     wa_response = None
-    wa_msg_id = None
 
     if data.msg_type == "text":
         wa_response = await whatsapp.send_text_message(conversation.whatsapp, data.content, db)
@@ -434,46 +427,15 @@ async def send_message(
             conversation.whatsapp, data.msg_type, data.media_url, data.content, db
         )
 
-    # CONV-08: distinguir sucesso real de falha da API.
-    # As funcoes send_* retornam:
-    #   - dict com "messages"  -> aceito pela Meta (sucesso real)
-    #   - dict {"simulated": True} -> sem credenciais (modo dev; nao houve envio real)
-    #   - None                 -> falha real da API (HTTP error / excecao)
-    # NUNCA marcar como 'sent' quando o envio falhou (wa_response is None).
-    send_failed = wa_response is None
-
-    if wa_response and "messages" in wa_response:
-        wa_msg_id = wa_response["messages"][0].get("id")
-
-    # Save message in DB — status reflete o resultado real do envio.
-    # OBS (gap documentado): o modelo Message nao possui coluna de erro nem
-    # contador de retentativas; nao ha reenvio automatico. Ver CRITICAL_STABILIZATION_TRACKER (CONV-08).
-    message = Message(
-        conversation_id=conversation.id,
-        direction="outbound",
-        content=data.content,
-        msg_type=data.msg_type,
-        media_url=data.media_url,
-        whatsapp_msg_id=wa_msg_id,
-        status="failed" if send_failed else "sent",
+    # CONV-08/CONV-08b: persistencia centralizada com status fiel ao resultado.
+    # Sucesso -> 'sent' + wamid + preview/unread; falha -> 'failed' + last_error
+    # seguro, preview intacto; simulado (dev) -> 'sent' explicito sem wamid.
+    message = record_outbound_message(
+        db, conversation, data.content, data.msg_type, wa_response,
+        media_url=data.media_url, update_preview=True, reset_unread=True,
     )
-    db.add(message)
 
-    # Atualiza o preview apenas quando o envio foi aceito.
-    if not send_failed:
-        conversation.ultimo_msg = data.content[:200]
-        conversation.unread_count = 0
-
-    db.commit()
-    db.refresh(message)
-
-    if send_failed:
-        # Log seguro: sem token, sem payload sensivel. Detalhes ficam nos logs
-        # internos de whatsapp.send_* (que ja omitem segredos).
-        logger.warning(
-            f"Falha ao enviar mensagem para conversa {conversation.id} "
-            f"(msg_type={data.msg_type}); persistida como 'failed'."
-        )
+    if message.status == "failed":
         raise HTTPException(
             status_code=502,
             detail="Nao foi possivel enviar a mensagem pelo WhatsApp. Tente novamente.",
@@ -481,6 +443,76 @@ async def send_message(
 
     logger.info(f"Mensagem enviada para {conversation.nome} ({conversation.whatsapp})")
     return MessageResponse.model_validate(message)
+
+
+@router.post("/{conversation_id}/messages/{message_id}/retry", response_model=MessageResponse)
+async def retry_message(
+    conversation_id: int,
+    message_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    CONV-08b: reenvio MANUAL de uma mensagem outbound que falhou.
+
+    Regras estritas:
+    - so mensagens outbound;
+    - so status 'failed' (nunca reenvia 'sent'/'delivered'/'read' — sem duplicar);
+    - so texto ou midia com media_url (template nao e reenviavel: o conteudo
+      salvo e o corpo renderizado, nao os parametros do template).
+    Atualiza a MESMA linha (sem duplicar mensagem), incrementa send_attempts
+    e last_attempt_at, e limpa/atualiza last_error conforme o resultado.
+    """
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id
+    ).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+
+    message = db.query(Message).filter(
+        Message.id == message_id,
+        Message.conversation_id == conversation_id,
+    ).first()
+    if not message:
+        raise HTTPException(status_code=404, detail="Mensagem nao encontrada")
+
+    if message.direction != "outbound":
+        raise HTTPException(status_code=400, detail="Apenas mensagens enviadas podem ser reenviadas")
+    if message.status != "failed":
+        raise HTTPException(status_code=409, detail="Apenas mensagens com falha podem ser reenviadas")
+
+    if message.msg_type == "text":
+        wa_response = await whatsapp.send_text_message(conversation.whatsapp, message.content, db)
+    elif message.msg_type in ("image", "audio", "document", "video") and message.media_url:
+        wa_response = await whatsapp.send_media_message(
+            conversation.whatsapp, message.msg_type, message.media_url, message.content, db
+        )
+    else:
+        raise HTTPException(status_code=400, detail="Reenvio nao suportado para este tipo de mensagem")
+
+    r = classify_wa_response(wa_response)
+    message.send_attempts = (message.send_attempts or 0) + 1
+    message.last_attempt_at = datetime.now(timezone.utc)
+
+    if r["ok"]:
+        message.status = "sent"
+        message.whatsapp_msg_id = r["wamid"]
+        message.last_error = None
+        conversation.ultimo_msg = (message.content or "")[:200]
+        db.commit()
+        db.refresh(message)
+        logger.info(f"Reenvio OK da mensagem {message.id} (conversa {conversation.id})")
+        return MessageResponse.model_validate(message)
+
+    message.last_error = r["error_summary"]
+    db.commit()
+    logger.warning(
+        f"Reenvio FALHOU da mensagem {message.id} (conversa {conversation.id}): {r['error_summary']}"
+    )
+    raise HTTPException(
+        status_code=502,
+        detail="Reenvio falhou. Tente novamente.",
+    )
 
 
 @router.post("/{conversation_id}/auto-link")
