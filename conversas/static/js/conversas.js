@@ -22,6 +22,11 @@
         ? 'http://localhost:8000'
         : 'https://crm.crmbrasileirosnoatacama.cloud';
 
+    // CONV-HOTFIX-POSTDEPLOY-01: o codigo antigo aceitava qualquer status no
+    // PUT, entao podem existir linhas LEGADAS com status='aguardando'
+    // persistido — contam como abertas (mesma tolerancia do backend).
+    const isOpenStatus = (s) => s === 'aberta' || s === 'aguardando';
+
     // ─── Init ───────────────────────────────────
     document.addEventListener('DOMContentLoaded', () => {
         if (!Auth.requireAuth()) return;
@@ -787,7 +792,7 @@
         const btn = document.getElementById('btnClaim');
         if (!btn) return;
         const me = Auth.getUser() || {};
-        if (conv.status !== 'aberta') {
+        if (!isOpenStatus(conv.status)) {
             btn.style.display = 'none';
             return;
         }
@@ -1061,11 +1066,13 @@
 
         if (activeFilter === 'aguardando') {
             // CONV-06: fila = derivado (aberta + sem atendente)
-            filtered = filtered.filter(c => c.status === 'aberta' && !c.atendente_id);
+            filtered = filtered.filter(c => isOpenStatus(c.status) && !c.atendente_id);
         } else if (activeFilter === 'minhas') {
             // CONV-07: atribuidas a mim
             const me = Auth.getUser() || {};
             filtered = filtered.filter(c => c.atendente_id === me.id);
+        } else if (activeFilter === 'aberta') {
+            filtered = filtered.filter(c => isOpenStatus(c.status));
         } else if (activeFilter !== 'all') {
             filtered = filtered.filter(c => c.status === activeFilter);
         }
@@ -1078,7 +1085,7 @@
         }
 
         // Update badge
-        const openCount = conversations.filter(c => c.status === 'aberta' && c.unread_count > 0).length;
+        const openCount = conversations.filter(c => isOpenStatus(c.status) && c.unread_count > 0).length;
         const badge = document.getElementById('badgeAberta');
         if (openCount > 0) {
             badge.textContent = openCount;
@@ -1110,7 +1117,7 @@
                      data-id="${conv.id}" onclick="window._openConv(${conv.id})">
                     <div class="conv-avatar">
                         ${initials}
-                        ${conv.status === 'aberta' ? '<div class="online-dot"></div>' : ''}
+                        ${isOpenStatus(conv.status) ? '<div class="online-dot"></div>' : ''}
                     </div>
                     <div class="conv-info">
                         <div class="conv-info-top">

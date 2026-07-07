@@ -13,7 +13,7 @@ authentication overhead and is more reliable.
 import logging
 from typing import Optional
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from app.models.conversation import Conversation
@@ -346,6 +346,35 @@ async def auto_link_conversation(conversation: Conversation, db: Session) -> boo
         f"({lead_data.get('nome', '?')})"
     )
     return True
+
+
+def get_leads_responsaveis(lead_ids: list, db: Session) -> Optional[dict]:
+    """
+    CONV-HOTFIX-POSTDEPLOY-01: busca em LOTE o responsavel dos leads no CRM
+    (fonte de verdade para conversas vinculadas). UMA query parametrizada
+    leads LEFT JOIN users (so usuarios ativos ganham nome).
+
+    Retorna {lead_id: {"responsavel_id": int|None, "responsavel_nome": str|None}}
+    ou None se o CRM estiver inacessivel (dev isolado sem tabelas CRM) —
+    o caller segue com o cache local, como o tag sync faz.
+    """
+    if not lead_ids:
+        return {}
+    try:
+        stmt = text(
+            "SELECT l.id AS lead_id, l.responsavel_id AS responsavel_id, u.nome AS nome "
+            "FROM leads l "
+            "LEFT JOIN users u ON u.id = l.responsavel_id AND u.is_active "
+            "WHERE l.id IN :ids"
+        ).bindparams(bindparam("ids", expanding=True))
+        rows = db.execute(stmt, {"ids": list(lead_ids)}).fetchall()
+        return {
+            r.lead_id: {"responsavel_id": r.responsavel_id, "responsavel_nome": r.nome}
+            for r in rows
+        }
+    except Exception:
+        db.rollback()  # limpa a transacao abortada (dev sem tabelas CRM)
+        return None
 
 
 async def get_users_list(db: Session) -> list:
