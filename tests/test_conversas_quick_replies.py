@@ -106,8 +106,10 @@ css = (CONVERSAS_DIR / "static" / "css" / "conversas.css").read_text(encoding="u
 # markup + estilo
 check('id="qrPalette"' in html and 'role="listbox"' in html, "markup da paleta presente (listbox)")
 check(".qr-palette" in css and ".qr-palette-item" in css, "CSS da paleta presente")
-check("conversas.js?v=conv-quick-replies-01" in html, "cache-bust do JS atualizado")
-check("conversas.css?v=conv-quick-replies-01" in html, "cache-bust do CSS atualizado")
+# cache-bust: exige referencia VERSIONADA (nao pinna o valor — pacotes
+# futuros bumpam a versao; o guard de valor exato quebrava a cada bump)
+check("conversas.js?v=" in html, "cache-bust do JS presente")
+check("conversas.css?v=" in html, "cache-bust do CSS presente")
 
 # secao da paleta no JS
 start = js.find("CONV-HOTFIX-QUICK-REPLIES-01: paleta")
