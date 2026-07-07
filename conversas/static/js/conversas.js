@@ -204,6 +204,47 @@
     }
     // ─── fim CONV-NOTIFICATIONS-01 ───
 
+    // ─── CONV-MOBILE-PWA-01: fluxo mobile (lista -> chat -> voltar) ───
+    // Completa o padrao off-canvas PRE-EXISTENTE (.conv-sidebar vira drawer
+    // no breakpoint 640px e #mobileBack ja tinha handler que o reabre):
+    // em telas pequenas a LISTA abre primeiro em tela cheia; tocar numa
+    // conversa fecha o drawer (chat em tela cheia); voltar reabre a lista.
+    // Sem dependencias, sem keydown global; falha aqui nunca quebra o chat.
+    const mobileLayoutQuery = window.matchMedia('(max-width: 640px)');
+
+    function isMobileLayout() {
+        return mobileLayoutQuery.matches;
+    }
+
+    function setupMobileLayout() {
+        try {
+            if (isMobileLayout()) {
+                // mobile comeca pela lista (drawer aberto em tela cheia)
+                document.getElementById('convSidebar').classList.add('open');
+            }
+            // redimensionar desktop -> mobile sem conversa aberta: mostra a
+            // lista (senao o usuario ficaria preso no estado vazio do chat)
+            if (mobileLayoutQuery.addEventListener) {
+                mobileLayoutQuery.addEventListener('change', (e) => {
+                    try {
+                        if (e.matches && !activeConversation) {
+                            document.getElementById('convSidebar').classList.add('open');
+                        }
+                    } catch (_) { /* no-op */ }
+                });
+            }
+        } catch (_) { /* layout mobile nunca derruba o app */ }
+    }
+
+    function closeMobileDrawerForChat() {
+        try {
+            if (isMobileLayout()) {
+                document.getElementById('convSidebar').classList.remove('open');
+            }
+        } catch (_) { /* no-op */ }
+    }
+    // ─── fim CONV-MOBILE-PWA-01 ───
+
     // ─── Init ───────────────────────────────────
     document.addEventListener('DOMContentLoaded', () => {
         if (!Auth.requireAuth()) return;
@@ -211,6 +252,7 @@
         loadUsers();
         setupEventListeners();
         setupConvNotificationControls();  // CONV-NOTIFICATIONS-01
+        setupMobileLayout();              // CONV-MOBILE-PWA-01: lista primeiro
         loadTags();          // CONV-05
         loadConversations();
 
@@ -664,6 +706,10 @@
         chatActive.style.display = 'flex';
         chatActive.style.flexDirection = 'column';
         document.getElementById('leadPanel').style.display = 'flex';
+
+        // CONV-MOBILE-PWA-01: no mobile, abrir a conversa fecha o drawer da
+        // lista (chat em tela cheia); #mobileBack reabre (handler existente)
+        closeMobileDrawerForChat();
 
         // Highlight in list
         document.querySelectorAll('.conv-item').forEach(el => el.classList.remove('active'));

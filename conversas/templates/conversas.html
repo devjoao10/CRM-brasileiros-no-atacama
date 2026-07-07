@@ -5,7 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Conversas — Brasileiros no Atacama</title>
     <meta name="description" content="Plataforma de conversas WhatsApp integrada ao CRM">
-    <link rel="stylesheet" href="/static/css/conversas.css?v=conv-notifications-01">
+    <!-- CONV-MOBILE-PWA-01: fundacao PWA (manifest + theme-color; SEM service worker) -->
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#366B85">
+    <link rel="stylesheet" href="/static/css/conversas.css?v=conv-mobile-pwa-01">
 </head>
 <body>
     <div class="app-layout" id="appLayout">
@@ -274,6 +277,6 @@
     </div>
 
     <script src="/static/js/auth.js"></script>
-    <script src="/static/js/conversas.js?v=conv-notifications-01"></script>
+    <script src="/static/js/conversas.js?v=conv-mobile-pwa-01"></script>
 </body>
 </html>
