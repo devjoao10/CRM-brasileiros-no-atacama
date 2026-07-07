@@ -37,6 +37,7 @@
                 <button class="active" data-filter="all">Todas</button>
                 <button data-filter="aberta">Abertas <span class="badge" id="badgeAberta" style="display:none">0</span></button>
                 <button data-filter="aguardando">Aguardando</button>
+                <button data-filter="minhas">Minhas</button>
                 <button data-filter="encerrada">Encerradas</button>
             </div>
 
@@ -154,6 +155,23 @@
                         <span class="lead-info-label">Mensagens</span>
                         <span class="lead-info-value" id="leadMsgCount">—</span>
                     </div>
+                </div>
+
+                <!-- CONV-07: atendente (quem esta atendendo agora — handoff) -->
+                <div class="lead-section">
+                    <div class="lead-section-title">Atendente</div>
+                    <select id="selectAtendente" style="width:100%; padding:8px 12px; border:1px solid var(--dark-200); border-radius:var(--radius-md); font-size:13px; font-family:var(--font); background:var(--white); color:var(--dark); outline:none;">
+                        <option value="0">Sem atendente (fila)</option>
+                    </select>
+                </div>
+
+                <!-- CONV-07: notas internas -->
+                <div class="lead-section">
+                    <div class="lead-section-title">Notas internas</div>
+                    <div id="notesList" style="display:flex; flex-direction:column; gap:6px; margin-bottom:8px; max-height:180px; overflow-y:auto;"></div>
+                    <textarea id="noteInput" rows="2" placeholder="Nota visível só para a equipe..." style="width:100%; padding:8px 10px; border:1px solid var(--dark-200); border-radius:var(--radius-md); font-size:12px; font-family:var(--font); resize:vertical; outline:none;"></textarea>
+                    <button id="btnAddNote" style="margin-top:6px; width:100%; padding:7px; border:1px solid var(--primary); background:var(--white); color:var(--primary); border-radius:var(--radius-md); font-size:12px; font-weight:600; cursor:pointer;">Adicionar nota</button>
+                    <div style="font-size:10px; color:var(--dark-400); margin-top:4px;">Notas internas NUNCA são enviadas ao WhatsApp.</div>
                 </div>
 
                 <div class="lead-section">

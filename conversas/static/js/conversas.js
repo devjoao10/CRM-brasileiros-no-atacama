@@ -59,12 +59,19 @@
 
         // Populate filter dropdown
         const filterSelect = document.getElementById('filterResponsavel');
+        const atendenteSelect = document.getElementById('selectAtendente'); // CONV-07
         // Keep first two options (Todos / Agente IA)
         usersCache.forEach(u => {
             const opt = document.createElement('option');
             opt.value = u.id;
             opt.textContent = u.nome;
             filterSelect.appendChild(opt);
+            if (atendenteSelect) {
+                const opt2 = document.createElement('option');
+                opt2.value = u.id;
+                opt2.textContent = u.nome;   // textContent = seguro
+                atendenteSelect.appendChild(opt2);
+            }
         });
 
         // Populate responsavel select in panel
@@ -283,6 +290,12 @@
 
         // CONV-06: assumir/liberar conversa
         document.getElementById('btnClaim').addEventListener('click', claimOrRelease);
+
+        // CONV-07: atribuicao dirigida + notas internas
+        document.getElementById('selectAtendente').addEventListener('change', (e) => {
+            assignTo(e.target.value);
+        });
+        document.getElementById('btnAddNote').addEventListener('click', addNote);
 
         // CONV-03: anexo de midia
         document.getElementById('btnAttach').addEventListener('click', () => {
@@ -540,6 +553,76 @@
             } catch (_) { /* resposta sem corpo JSON */ }
             showToast(detail);
             loadChat(activeConversation.id);
+        }
+    }
+
+    // ─── CONV-07: Atribuicao dirigida + notas ────
+    async function assignTo(userId) {
+        if (!activeConversation) return;
+        const id = Number(userId);
+        const url = id === 0
+            ? `/api/conversations/${activeConversation.id}/release`
+            : `/api/conversations/${activeConversation.id}/assign`;
+        const opts = id === 0
+            ? { method: 'POST' }
+            : { method: 'POST', body: JSON.stringify({ user_id: id }) };
+        const resp = await Auth.apiRequest(url, opts);
+        if (resp && resp.ok) {
+            const updated = await resp.json();
+            activeConversation.atendente_id = updated.atendente_id;
+            updateClaimButton(activeConversation);
+            showToast(id === 0 ? 'Conversa devolvida à fila' : 'Conversa atribuída');
+            loadConversations();
+        } else {
+            let detail = 'Falha ao atribuir.';
+            try { const e = await resp.json(); if (e && e.detail) detail = e.detail; } catch (_) { }
+            showToast(detail);
+        }
+    }
+
+    // Notas internas: conteudo e autor SEMPRE escapados; nunca vao ao WhatsApp.
+    async function loadNotes() {
+        const box = document.getElementById('notesList');
+        if (!activeConversation) { box.innerHTML = ''; return; }
+        const resp = await Auth.apiRequest(`/api/conversations/${activeConversation.id}/notes`);
+        if (!resp || !resp.ok) { box.innerHTML = ''; return; }
+        const notes = await resp.json();
+        const me = Auth.getUser() || {};
+        box.innerHTML = notes.length ? notes.map(n => {
+            const when = new Date(n.created_at).toLocaleString('pt-BR',
+                { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+            const del = n.user_id === me.id
+                ? ` <span onclick="window._deleteNote(${Number(n.id)})" style="cursor:pointer; color:var(--error); font-weight:700;">&times;</span>`
+                : '';
+            return `<div style="background:#FEF9C3; border:1px solid #FDE047; border-radius:6px; padding:6px 8px; font-size:11px;">
+                <div style="color:var(--dark-400); font-size:10px;">${escapeHtml(n.user_nome || 'Equipe')} · ${when}${del}</div>
+                <div style="white-space:pre-wrap;">${escapeHtml(n.content)}</div>
+            </div>`;
+        }).join('') : '<span style="font-size:11px; color:var(--dark-400);">Sem notas</span>';
+    }
+
+    window._deleteNote = async function (noteId) {
+        if (!activeConversation) return;
+        const resp = await Auth.apiRequest(
+            `/api/conversations/${activeConversation.id}/notes/${Number(noteId)}`, { method: 'DELETE' });
+        if (resp && (resp.ok || resp.status === 204)) loadNotes();
+        else showToast('Falha ao remover a nota.');
+    };
+
+    async function addNote() {
+        if (!activeConversation) return;
+        const input = document.getElementById('noteInput');
+        const content = (input.value || '').trim();
+        if (!content) return;
+        const resp = await Auth.apiRequest(`/api/conversations/${activeConversation.id}/notes`, {
+            method: 'POST',
+            body: JSON.stringify({ content: content }),
+        });
+        if (resp && resp.ok) {
+            input.value = '';
+            loadNotes();
+        } else {
+            showToast('Falha ao salvar a nota.');
         }
     }
 
@@ -823,6 +906,10 @@
         if (activeFilter === 'aguardando') {
             // CONV-06: fila = derivado (aberta + sem atendente)
             filtered = filtered.filter(c => c.status === 'aberta' && !c.atendente_id);
+        } else if (activeFilter === 'minhas') {
+            // CONV-07: atribuidas a mim
+            const me = Auth.getUser() || {};
+            filtered = filtered.filter(c => c.atendente_id === me.id);
         } else if (activeFilter !== 'all') {
             filtered = filtered.filter(c => c.status === activeFilter);
         }
@@ -1021,6 +1108,9 @@
         const conv = activeConversation;
 
         renderConvTags();  // CONV-05
+        loadNotes();       // CONV-07
+        const atSel = document.getElementById('selectAtendente');
+        if (atSel) atSel.value = String(conv.atendente_id || 0);  // CONV-07
 
         document.getElementById('leadAvatar').textContent = getInitials(conv.nome);
         document.getElementById('leadName').textContent = conv.nome || conv.whatsapp;

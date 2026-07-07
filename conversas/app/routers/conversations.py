@@ -22,6 +22,7 @@ from app.schemas.conversation import (
     MessageResponse,
     NotificationCreate,
     InitiateConversation,
+    AssignRequest,
 )
 from app.services import whatsapp
 from app.services import crm as crm_service
@@ -183,6 +184,7 @@ async def list_conversations(
     responsavel_id: Optional[int] = Query(None, description="Filtrar por responsavel (0 = Agente IA)"),
     tag_id: Optional[int] = Query(None, description="CONV-05: filtrar por tag aplicada"),
     queue: Optional[str] = Query(None, description="CONV-06: 'fila' (aberta sem atendente, mais antiga primeiro) | 'em_atendimento'"),
+    atendente_id: Optional[int] = Query(None, description="CONV-07: filtrar por atendente (0 = sem atendente)"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -211,6 +213,13 @@ async def list_conversations(
         # CONV-05: join no link table N:N
         from app.models.tag import ConversationTag
         query = query.filter(Conversation.tags.any(ConversationTag.id == tag_id))
+
+    if atendente_id is not None:
+        # CONV-07: filtro por atendente ("minhas" = frontend passa o proprio id)
+        if atendente_id == 0:
+            query = query.filter(Conversation.atendente_id.is_(None))
+        else:
+            query = query.filter(Conversation.atendente_id == atendente_id)
 
     # CONV-06: fila e ESTADO DERIVADO (fonte unica: status + atendente_id).
     # 'aguardando' nao existe como valor persistido — elimina ambiguidade.
@@ -506,6 +515,37 @@ async def claim_conversation(
     db.commit()
     db.refresh(conversation)
     logger.info(f"Conversa {conversation_id} assumida pelo usuario {current_user.id}")
+    return ConversationResponse.model_validate(conversation)
+
+
+@router.post("/{conversation_id}/assign", response_model=ConversationResponse)
+async def assign_conversation(
+    conversation_id: int,
+    data: AssignRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    CONV-07: atribuicao dirigida/handoff — atribui a QUALQUER usuario ativo
+    (diferente do claim, que atribui a si mesmo com trava). Reatribuicao e
+    permitida por design (handoff entre atendentes).
+    """
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id
+    ).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+    if conversation.status != "aberta":
+        raise HTTPException(status_code=409, detail="Conversa encerrada — reabra antes de atribuir")
+    target = db.query(User).filter(User.id == data.user_id, User.is_active == True).first()  # noqa: E712
+    if not target:
+        raise HTTPException(status_code=404, detail="Usuario nao encontrado ou inativo")
+    conversation.atendente_id = target.id
+    db.commit()
+    db.refresh(conversation)
+    logger.info(
+        f"Conversa {conversation_id} atribuida ao usuario {target.id} por {current_user.id} (handoff)"
+    )
     return ConversationResponse.model_validate(conversation)
 
 

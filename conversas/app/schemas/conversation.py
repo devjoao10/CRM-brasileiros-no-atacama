@@ -11,6 +11,28 @@ class MessageCreate(BaseModel):
     template_name: Optional[str] = None
 
 
+class NoteCreate(BaseModel):
+    """CONV-07 — nota interna (NUNCA enviada ao WhatsApp)."""
+    content: str = Field(..., min_length=1, max_length=5000)
+
+
+class NoteResponse(BaseModel):
+    id: int
+    conversation_id: int
+    user_id: int
+    user_nome: Optional[str] = None
+    content: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AssignRequest(BaseModel):
+    """CONV-07 — atribuicao dirigida/handoff."""
+    user_id: int = Field(..., ge=1)
+
+
 class TagResponse(BaseModel):
     """CONV-05 — tag de conversa (cor validada ^#hex6$ na rota)."""
     id: int

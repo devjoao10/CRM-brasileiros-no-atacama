@@ -37,6 +37,13 @@ class Conversation(Base):
         secondary="conversation_tag_links",
         back_populates="conversations",
     )
+    # CONV-07: notas internas (nunca enviadas ao WhatsApp)
+    notes = relationship(
+        "ConversationNote",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="ConversationNote.created_at",
+    )
 
     def __repr__(self):
         return f"<Conversation(id={self.id}, lead_id={self.lead_id}, nome='{self.nome}')>"
