@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy.orm.attributes import set_committed_value
+from sqlalchemy import desc, update as sa_update
 
 from app.database import get_db
 from app.auth import get_current_user, User
@@ -35,6 +36,34 @@ from app.services.outbound import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/conversations", tags=["Conversas"])
+
+# CONV-HOTFIX-POSTDEPLOY-01: o codigo antigo (pre-CONV-06) aceitava qualquer
+# valor no PUT de status, entao podem existir linhas LEGADAS com
+# status='aguardando' persistido. Ate a normalizacao (m007, opcional), essas
+# linhas sao tratadas como ABERTAS em todos os filtros derivados.
+LEGACY_OPEN_STATUSES = ("aberta", "aguardando")
+
+
+def _repair_responsavel_cache(db: Session, conversation: Conversation, lead_resp: dict) -> bool:
+    """
+    CONV-HOTFIX-POSTDEPLOY-01: read-repair do snapshot responsavel_id/nome da
+    conversa a partir do lead (CRM e a fonte de verdade para vinculadas).
+    UPDATE com updated_at explicito preserva a ordenacao da lista (nao dispara
+    o onupdate); set_committed_value reflete no objeto em memoria sem sujar a
+    sessao (evita um 2o UPDATE no commit). Retorna True se houve divergencia.
+    """
+    rid = lead_resp.get("responsavel_id")
+    rnome = lead_resp.get("responsavel_nome")
+    if conversation.responsavel_id == rid and conversation.responsavel_nome == rnome:
+        return False
+    db.execute(
+        sa_update(Conversation)
+        .where(Conversation.id == conversation.id)
+        .values(responsavel_id=rid, responsavel_nome=rnome, updated_at=conversation.updated_at)
+    )
+    set_committed_value(conversation, "responsavel_id", rid)
+    set_committed_value(conversation, "responsavel_nome", rnome)
+    return True
 
 
 # ─── N8N Integration: Send Notification ──────────────────────────────
@@ -194,7 +223,11 @@ async def list_conversations(
     query = db.query(Conversation)
 
     if status:
-        query = query.filter(Conversation.status == status)
+        if status == "aberta":
+            # tolerancia a legado: 'aguardando' persistido conta como aberta
+            query = query.filter(Conversation.status.in_(LEGACY_OPEN_STATUSES))
+        else:
+            query = query.filter(Conversation.status == status)
 
     if search:
         search_term = f"%{search}%"
@@ -222,18 +255,19 @@ async def list_conversations(
             query = query.filter(Conversation.atendente_id == atendente_id)
 
     # CONV-06: fila e ESTADO DERIVADO (fonte unica: status + atendente_id).
-    # 'aguardando' nao existe como valor persistido — elimina ambiguidade.
+    # 'aguardando' novo NUNCA e persistido (whitelist no PUT); linhas legadas
+    # pre-whitelist contam como abertas ate a normalizacao (m007, opcional).
     order_clause = desc(Conversation.updated_at)
     if queue == "fila":
         query = query.filter(
-            Conversation.status == "aberta",
+            Conversation.status.in_(LEGACY_OPEN_STATUSES),
             Conversation.atendente_id.is_(None),
         )
         # quem espera ha mais tempo primeiro
         order_clause = Conversation.last_customer_msg_at.asc()
     elif queue == "em_atendimento":
         query = query.filter(
-            Conversation.status == "aberta",
+            Conversation.status.in_(LEGACY_OPEN_STATUSES),
             Conversation.atendente_id.isnot(None),
         )
     elif queue is not None:
@@ -242,10 +276,30 @@ async def list_conversations(
     total = query.count()
     conversations = query.order_by(order_clause).offset(offset).limit(limit).all()
 
-    return ConversationListResponse(
+    # CONV-HOTFIX-POSTDEPLOY-01: para conversas vinculadas o responsavel do
+    # lead no CRM e a fonte de verdade — UMA query em lote por pagina +
+    # read-repair do cache quando divergente. Roda DEPOIS de filtros/count/
+    # paginacao para nao alterar o resultado da pagina; CRM inacessivel
+    # (dev isolado) -> segue com o cache, como o tag sync.
+    repaired = False
+    lead_ids = {c.lead_id for c in conversations if c.lead_id and c.lead_id > 0}
+    if lead_ids:
+        responsaveis = crm_service.get_leads_responsaveis(sorted(lead_ids), db)
+        if responsaveis:
+            for conv in conversations:
+                info = responsaveis.get(conv.lead_id)
+                if info is not None:
+                    repaired = _repair_responsavel_cache(db, conv, info) or repaired
+
+    payload = ConversationListResponse(
         conversations=[ConversationResponse.model_validate(c) for c in conversations],
         total=total,
     )
+    if repaired:
+        # commit depois da serializacao: o expire do commit nao forca um
+        # re-SELECT por conversa da pagina (caminho quente da UI)
+        db.commit()
+    return payload
 
 
 @router.get("/by-lead/{lead_id}", response_model=Optional[ConversationResponse])
@@ -292,6 +346,16 @@ async def get_conversation(
     # CONV-TAGS-SYNC-01: espelha as tags do lead (CRM) ao abrir a conversa
     # (read-repair; no-op se conversa sem lead ou CRM inacessivel em dev)
     crm_service.sync_lead_tags_to_conversation(conversation, db)
+
+    # CONV-HOTFIX-POSTDEPLOY-01: read-repair do responsavel a partir do lead
+    # (mesmo padrao do espelho de tags; no-op sem lead ou CRM inacessivel).
+    # Persistido pelo commit logo abaixo.
+    if conversation.lead_id and conversation.lead_id > 0:
+        responsaveis = crm_service.get_leads_responsaveis([conversation.lead_id], db)
+        if responsaveis:
+            info = responsaveis.get(conversation.lead_id)
+            if info is not None:
+                _repair_responsavel_cache(db, conversation, info)
 
     # Mark as read
     conversation.unread_count = 0
@@ -511,7 +575,7 @@ async def claim_conversation(
     ).first()
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversa nao encontrada")
-    if conversation.status != "aberta":
+    if conversation.status not in LEGACY_OPEN_STATUSES:
         raise HTTPException(status_code=409, detail="Conversa encerrada — reabra antes de assumir")
     if conversation.atendente_id and conversation.atendente_id != current_user.id:
         raise HTTPException(status_code=409, detail="Conversa ja esta em atendimento por outro usuario")
@@ -539,7 +603,7 @@ async def assign_conversation(
     ).first()
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversa nao encontrada")
-    if conversation.status != "aberta":
+    if conversation.status not in LEGACY_OPEN_STATUSES:
         raise HTTPException(status_code=409, detail="Conversa encerrada — reabra antes de atribuir")
     target = db.query(User).filter(User.id == data.user_id, User.is_active == True).first()  # noqa: E712
     if not target:
