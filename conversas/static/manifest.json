@@ -1,0 +1,18 @@
+{
+  "name": "BNA Conversas",
+  "short_name": "Conversas",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F9F8F7",
+  "theme_color": "#366B85",
+  "description": "Plataforma de conversas WhatsApp integrada ao CRM Brasileiros no Atacama",
+  "icons": [
+    {
+      "src": "/static/img/logo.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
