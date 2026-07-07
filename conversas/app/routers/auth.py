@@ -61,29 +61,48 @@ def _create_token(email: str) -> str:
 import httpx
 import os
 
+from app.seed import CONVERSAS_SEED_DEV_DATA
+
 CRM_BASE_URL = os.getenv("CRM_BASE_URL", "http://crm:8000")
 
+
 @router.post("/login")
-async def login(data: LoginRequest):
+async def login(data: LoginRequest, db: Session = Depends(get_db)):
     """
-    Login em produção: Repassa a requisição para a API do CRM.
+    CONV-BF-AUTH-01:
+    - DEV LOCAL (CONVERSAS_SEED_DEV_DATA=true): autentica na tabela `users`
+      LOCAL do Conversas — sem chamar o CRM (era o bug: o proxy sempre rodava
+      e devolvia 503 sem o CRM de pe, tornando o app intestavel isolado).
+    - PRODUCAO (flag false): comportamento ORIGINAL preservado — proxy ao CRM.
+    Nunca logar senha/token; 401 uniforme (nao revela se o email existe).
     """
+    if CONVERSAS_SEED_DEV_DATA:
+        # ── Autenticacao LOCAL (dev) — nao toca CRM_BASE_URL ──
+        user = db.query(User).filter(User.email == data.email).first()
+        if not user or not user.is_active or not _verify_password(data.password, user.hashed_password):
+            # detail uniforme: inexistente, inativo e senha errada respondem igual
+            raise HTTPException(status_code=401, detail="Email ou senha incorretos")
+        return TokenResponse(
+            access_token=_create_token(user.email),
+            user=UserResponse.model_validate(user),
+        )
+
+    # ── Producao: repassa a requisicao para a API do CRM (inalterado) ──
     async with httpx.AsyncClient() as client:
         try:
-            # Envia para a rota de login do CRM
             response = await client.post(
                 f"{CRM_BASE_URL}/api/auth/login",
                 json={"email": data.email, "password": data.password},
                 timeout=10.0
             )
-            
+
             if response.status_code != 200:
                 # Repassa o erro do CRM
                 detail = response.json().get("detail", "Email ou senha incorretos")
                 raise HTTPException(status_code=response.status_code, detail=detail)
-                
+
             return response.json()
-            
+
         except httpx.RequestError:
             raise HTTPException(
                 status_code=503,
