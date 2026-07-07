@@ -289,6 +289,10 @@ async def get_conversation(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversa nao encontrada")
 
+    # CONV-TAGS-SYNC-01: espelha as tags do lead (CRM) ao abrir a conversa
+    # (read-repair; no-op se conversa sem lead ou CRM inacessivel em dev)
+    crm_service.sync_lead_tags_to_conversation(conversation, db)
+
     # Mark as read
     conversation.unread_count = 0
     db.commit()

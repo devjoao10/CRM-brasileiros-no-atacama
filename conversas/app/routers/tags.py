@@ -19,6 +19,7 @@ from app.auth import get_current_user, User
 from app.models.conversation import Conversation
 from app.models.tag import ConversationTag
 from app.schemas.conversation import TagResponse, TagCreate
+from app.services import crm as crm_service
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,10 @@ async def apply_tag(
     if tag not in conv.tags:
         conv.tags.append(tag)
         db.commit()
+    # CONV-TAGS-SYNC-01: conversa vinculada replica no lead do CRM
+    # (cria a tag por NOME no CRM se faltar; falha em dev isolado so loga)
+    if conv.lead_id and conv.lead_id > 0:
+        crm_service.add_tag_to_lead(conv.lead_id, tag.nome, tag.cor, db)
     return conv.tags
 
 
@@ -131,4 +136,7 @@ async def remove_tag(
     if tag in conv.tags:
         conv.tags.remove(tag)
         db.commit()
+    # CONV-TAGS-SYNC-01: conversa vinculada remove tambem do lead do CRM
+    if conv.lead_id and conv.lead_id > 0:
+        crm_service.remove_tag_from_lead(conv.lead_id, tag.nome, db)
     return conv.tags
