@@ -4,8 +4,9 @@ Includes responsavel (owner) management and CRM integration.
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
@@ -21,9 +22,16 @@ from app.schemas.conversation import (
     MessageResponse,
     NotificationCreate,
     InitiateConversation,
+    AssignRequest,
 )
 from app.services import whatsapp
 from app.services import crm as crm_service
+from app.services.outbound import (
+    record_outbound_message,
+    classify_wa_response,
+    send_media_upload,
+    MediaRejection,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/conversations", tags=["Conversas"])
@@ -45,8 +53,13 @@ async def send_notification(
     """
     result = await whatsapp.send_text_message(data.to, data.message, db)
 
-    if result is None:
-        raise HTTPException(status_code=502, detail="Falha ao enviar mensagem via WhatsApp")
+    # CONV-08b: falha real agora vem como dict {"error": True, "summary": <seguro>}
+    if result is None or (isinstance(result, dict) and result.get("error")):
+        summary = result.get("summary") if isinstance(result, dict) else None
+        detail = "Falha ao enviar mensagem via WhatsApp"
+        if summary:
+            detail += f": {summary}"
+        raise HTTPException(status_code=502, detail=detail)
 
     # Simulated mode (API not configured)
     if result.get("simulated"):
@@ -142,24 +155,15 @@ async def initiate_conversation(
                 db=db,
             )
 
-            wa_msg_id = None
-            if wa_response and 'messages' in wa_response:
-                wa_msg_id = wa_response['messages'][0].get('id')
-
-            # Salva a mensagem na conversa
-            msg = Message(
-                conversation_id=conversation.id,
-                direction='outbound',
-                content=body_text,
-                msg_type='template',
-                whatsapp_msg_id=wa_msg_id,
-                status='sent',
+            # CONV-08b: persiste com status fiel ao resultado (nunca 'sent' em falha);
+            # preview so e atualizado em sucesso (dentro do helper).
+            msg = record_outbound_message(
+                db, conversation, body_text, 'template', wa_response,
+                update_preview=True,
             )
-            db.add(msg)
-            conversation.ultimo_msg = body_text[:200]
-            db.commit()
-            message_sent = True
-            logger.info(f"Template '{data.template_name}' enviado para {wpp_clean}")
+            message_sent = (msg.status == 'sent')
+            if message_sent:
+                logger.info(f"Template '{data.template_name}' enviado para {wpp_clean}")
         except Exception as e:
             logger.error(f"Erro ao enviar template para {wpp_clean}: {e}")
 
@@ -178,6 +182,9 @@ async def list_conversations(
     status: Optional[str] = Query(None, description="Filtrar por status: aberta, encerrada, aguardando"),
     search: Optional[str] = Query(None, description="Buscar por nome ou WhatsApp"),
     responsavel_id: Optional[int] = Query(None, description="Filtrar por responsavel (0 = Agente IA)"),
+    tag_id: Optional[int] = Query(None, description="CONV-05: filtrar por tag aplicada"),
+    queue: Optional[str] = Query(None, description="CONV-06: 'fila' (aberta sem atendente, mais antiga primeiro) | 'em_atendimento'"),
+    atendente_id: Optional[int] = Query(None, description="CONV-07: filtrar por atendente (0 = sem atendente)"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -202,8 +209,38 @@ async def list_conversations(
         else:
             query = query.filter(Conversation.responsavel_id == responsavel_id)
 
+    if tag_id is not None:
+        # CONV-05: join no link table N:N
+        from app.models.tag import ConversationTag
+        query = query.filter(Conversation.tags.any(ConversationTag.id == tag_id))
+
+    if atendente_id is not None:
+        # CONV-07: filtro por atendente ("minhas" = frontend passa o proprio id)
+        if atendente_id == 0:
+            query = query.filter(Conversation.atendente_id.is_(None))
+        else:
+            query = query.filter(Conversation.atendente_id == atendente_id)
+
+    # CONV-06: fila e ESTADO DERIVADO (fonte unica: status + atendente_id).
+    # 'aguardando' nao existe como valor persistido — elimina ambiguidade.
+    order_clause = desc(Conversation.updated_at)
+    if queue == "fila":
+        query = query.filter(
+            Conversation.status == "aberta",
+            Conversation.atendente_id.is_(None),
+        )
+        # quem espera ha mais tempo primeiro
+        order_clause = Conversation.last_customer_msg_at.asc()
+    elif queue == "em_atendimento":
+        query = query.filter(
+            Conversation.status == "aberta",
+            Conversation.atendente_id.isnot(None),
+        )
+    elif queue is not None:
+        raise HTTPException(status_code=422, detail="queue invalida (use 'fila' ou 'em_atendimento')")
+
     total = query.count()
-    conversations = query.order_by(desc(Conversation.updated_at)).offset(offset).limit(limit).all()
+    conversations = query.order_by(order_clause).offset(offset).limit(limit).all()
 
     return ConversationListResponse(
         conversations=[ConversationResponse.model_validate(c) for c in conversations],
@@ -252,6 +289,10 @@ async def get_conversation(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversa nao encontrada")
 
+    # CONV-TAGS-SYNC-01: espelha as tags do lead (CRM) ao abrir a conversa
+    # (read-repair; no-op se conversa sem lead ou CRM inacessivel em dev)
+    crm_service.sync_lead_tags_to_conversation(conversation, db)
+
     # Mark as read
     conversation.unread_count = 0
     db.commit()
@@ -277,6 +318,13 @@ async def update_conversation(
     old_status = conversation.status
 
     if data.status is not None:
+        # CONV-06: whitelist — 'aguardando' e derivado (aberta+sem atendente),
+        # nunca persistido; transicao invalida e rejeitada explicitamente.
+        if data.status not in ("aberta", "encerrada"):
+            raise HTTPException(
+                status_code=422,
+                detail="Status invalido (use 'aberta' ou 'encerrada'; 'aguardando' e derivado)",
+            )
         conversation.status = data.status
     if data.atendente_id is not None:
         conversation.atendente_id = data.atendente_id
@@ -310,16 +358,12 @@ async def update_conversation(
             AutoReply.is_active == True,
         ).first()
         if reply and reply.message and reply.message.strip():
-            await whatsapp.send_text_message(conversation.whatsapp, reply.message, db)
-            msg = Message(
-                conversation_id=conversation.id,
-                direction="outbound",
-                content=reply.message,
-                msg_type="text",
-                status="sent",
+            # CONV-08b: status fiel ao resultado do envio (nunca 'sent' em falha).
+            wa_response = await whatsapp.send_text_message(conversation.whatsapp, reply.message, db)
+            record_outbound_message(
+                db, conversation, reply.message, "text", wa_response,
+                update_preview=False,
             )
-            db.add(msg)
-            db.commit()
 
     return ConversationResponse.model_validate(conversation)
 
@@ -413,7 +457,6 @@ async def send_message(
 
     # Send via WhatsApp API
     wa_response = None
-    wa_msg_id = None
 
     if data.msg_type == "text":
         wa_response = await whatsapp.send_text_message(conversation.whatsapp, data.content, db)
@@ -434,30 +477,241 @@ async def send_message(
             conversation.whatsapp, data.msg_type, data.media_url, data.content, db
         )
 
-    if wa_response and "messages" in wa_response:
-        wa_msg_id = wa_response["messages"][0].get("id")
-
-    # Save message in DB
-    message = Message(
-        conversation_id=conversation.id,
-        direction="outbound",
-        content=data.content,
-        msg_type=data.msg_type,
-        media_url=data.media_url,
-        whatsapp_msg_id=wa_msg_id,
-        status="sent",
+    # CONV-08/CONV-08b: persistencia centralizada com status fiel ao resultado.
+    # Sucesso -> 'sent' + wamid + preview/unread; falha -> 'failed' + last_error
+    # seguro, preview intacto; simulado (dev) -> 'sent' explicito sem wamid.
+    message = record_outbound_message(
+        db, conversation, data.content, data.msg_type, wa_response,
+        media_url=data.media_url, update_preview=True, reset_unread=True,
     )
-    db.add(message)
 
-    # Update conversation preview
-    conversation.ultimo_msg = data.content[:200]
-    conversation.unread_count = 0
-
-    db.commit()
-    db.refresh(message)
+    if message.status == "failed":
+        raise HTTPException(
+            status_code=502,
+            detail="Nao foi possivel enviar a mensagem pelo WhatsApp. Tente novamente.",
+        )
 
     logger.info(f"Mensagem enviada para {conversation.nome} ({conversation.whatsapp})")
     return MessageResponse.model_validate(message)
+
+
+@router.post("/{conversation_id}/claim", response_model=ConversationResponse)
+async def claim_conversation(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    CONV-06: assumir a conversa (tira da fila). TRAVA anti-duplo-atendimento:
+    se outro atendente ja assumiu, 409. O atendente e SEMPRE o usuario
+    autenticado (nunca vem do request).
+    """
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id
+    ).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+    if conversation.status != "aberta":
+        raise HTTPException(status_code=409, detail="Conversa encerrada — reabra antes de assumir")
+    if conversation.atendente_id and conversation.atendente_id != current_user.id:
+        raise HTTPException(status_code=409, detail="Conversa ja esta em atendimento por outro usuario")
+    conversation.atendente_id = current_user.id
+    db.commit()
+    db.refresh(conversation)
+    logger.info(f"Conversa {conversation_id} assumida pelo usuario {current_user.id}")
+    return ConversationResponse.model_validate(conversation)
+
+
+@router.post("/{conversation_id}/assign", response_model=ConversationResponse)
+async def assign_conversation(
+    conversation_id: int,
+    data: AssignRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    CONV-07: atribuicao dirigida/handoff — atribui a QUALQUER usuario ativo
+    (diferente do claim, que atribui a si mesmo com trava). Reatribuicao e
+    permitida por design (handoff entre atendentes).
+    """
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id
+    ).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+    if conversation.status != "aberta":
+        raise HTTPException(status_code=409, detail="Conversa encerrada — reabra antes de atribuir")
+    target = db.query(User).filter(User.id == data.user_id, User.is_active == True).first()  # noqa: E712
+    if not target:
+        raise HTTPException(status_code=404, detail="Usuario nao encontrado ou inativo")
+    conversation.atendente_id = target.id
+    db.commit()
+    db.refresh(conversation)
+    logger.info(
+        f"Conversa {conversation_id} atribuida ao usuario {target.id} por {current_user.id} (handoff)"
+    )
+    return ConversationResponse.model_validate(conversation)
+
+
+@router.post("/{conversation_id}/release", response_model=ConversationResponse)
+async def release_conversation(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    CONV-06: liberar a conversa de volta para a fila (idempotente).
+    Handoff dirigido (reatribuir a alguem) = CONV-07.
+    """
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id
+    ).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+    if conversation.atendente_id is not None:
+        conversation.atendente_id = None
+        db.commit()
+        db.refresh(conversation)
+        logger.info(f"Conversa {conversation_id} devolvida a fila pelo usuario {current_user.id}")
+    return ConversationResponse.model_validate(conversation)
+
+
+@router.post("/{conversation_id}/messages/media", response_model=MessageResponse)
+async def send_media_message_upload(
+    conversation_id: int,
+    file: UploadFile = File(...),
+    caption: str = Form(""),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    CONV-03: envio outbound de midia por upload (multipart).
+    Rota fina: valida conversa -> delega a outbound.send_media_upload
+    (politica -> upload Meta -> send por media_id -> integridade CONV-08b).
+    Politica rejeita com 415/413 SEM persistir nada; falha de provider
+    persiste 'failed' (retry possivel) e responde 502 seguro.
+    """
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id
+    ).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Arquivo vazio")
+
+    try:
+        message, _asset = await send_media_upload(
+            db, conversation,
+            content=content,
+            mime_type=file.content_type or "",
+            caption=caption or "",
+            filename=file.filename,
+        )
+    except MediaRejection as e:
+        raise HTTPException(status_code=e.status_code, detail=e.reason)
+
+    if message.status == "failed":
+        raise HTTPException(
+            status_code=502,
+            detail="Nao foi possivel enviar a midia pelo WhatsApp. Tente novamente.",
+        )
+    logger.info(f"Midia enviada para {conversation.nome} ({conversation.whatsapp})")
+    return MessageResponse.model_validate(message)
+
+
+@router.post("/{conversation_id}/messages/{message_id}/retry", response_model=MessageResponse)
+async def retry_message(
+    conversation_id: int,
+    message_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    CONV-08b: reenvio MANUAL de uma mensagem outbound que falhou.
+
+    Regras estritas:
+    - so mensagens outbound;
+    - so status 'failed' (nunca reenvia 'sent'/'delivered'/'read' — sem duplicar);
+    - so texto ou midia com media_url (template nao e reenviavel: o conteudo
+      salvo e o corpo renderizado, nao os parametros do template).
+    Atualiza a MESMA linha (sem duplicar mensagem), incrementa send_attempts
+    e last_attempt_at, e limpa/atualiza last_error conforme o resultado.
+    """
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id
+    ).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+
+    message = db.query(Message).filter(
+        Message.id == message_id,
+        Message.conversation_id == conversation_id,
+    ).first()
+    if not message:
+        raise HTTPException(status_code=404, detail="Mensagem nao encontrada")
+
+    if message.direction != "outbound":
+        raise HTTPException(status_code=400, detail="Apenas mensagens enviadas podem ser reenviadas")
+    if message.status != "failed":
+        raise HTTPException(status_code=409, detail="Apenas mensagens com falha podem ser reenviadas")
+
+    if message.msg_type == "text":
+        wa_response = await whatsapp.send_text_message(conversation.whatsapp, message.content, db)
+    elif message.msg_type in ("image", "audio", "document", "video"):
+        # CONV-03: midia com espelho local (upload do operador) -> re-upload + send
+        from app.services import media_storage
+        asset = message.media_asset
+        local = media_storage.resolve_local_file(asset) if asset else None
+        if local is not None:
+            up = await whatsapp.upload_media(local.read_bytes(), asset.meta_mime_type or "application/octet-stream", db)
+            if not isinstance(up, dict) or up.get("error"):
+                wa_response = {
+                    "error": True,
+                    "summary": (up.get("summary") if isinstance(up, dict) else None)
+                    or "falha no re-upload da midia",
+                }
+            elif up.get("simulated"):
+                wa_response = {"simulated": True}
+            else:
+                asset.meta_media_id = up.get("id")
+                wa_response = await whatsapp.send_media_message(
+                    conversation.whatsapp, message.msg_type,
+                    caption=message.content or "", db=db, media_id=up.get("id"),
+                )
+        elif message.media_url:
+            wa_response = await whatsapp.send_media_message(
+                conversation.whatsapp, message.msg_type, message.media_url, message.content, db
+            )
+        else:
+            raise HTTPException(status_code=400, detail="Reenvio nao suportado para este tipo de mensagem")
+    else:
+        raise HTTPException(status_code=400, detail="Reenvio nao suportado para este tipo de mensagem")
+
+    r = classify_wa_response(wa_response)
+    message.send_attempts = (message.send_attempts or 0) + 1
+    message.last_attempt_at = datetime.now(timezone.utc)
+
+    if r["ok"]:
+        message.status = "sent"
+        message.whatsapp_msg_id = r["wamid"]
+        message.last_error = None
+        conversation.ultimo_msg = (message.content or "")[:200]
+        db.commit()
+        db.refresh(message)
+        logger.info(f"Reenvio OK da mensagem {message.id} (conversa {conversation.id})")
+        return MessageResponse.model_validate(message)
+
+    message.last_error = r["error_summary"]
+    db.commit()
+    logger.warning(
+        f"Reenvio FALHOU da mensagem {message.id} (conversa {conversation.id}): {r['error_summary']}"
+    )
+    raise HTTPException(
+        status_code=502,
+        detail="Reenvio falhou. Tente novamente.",
+    )
 
 
 @router.post("/{conversation_id}/auto-link")

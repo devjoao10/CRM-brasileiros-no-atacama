@@ -1,7 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
 import os
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -15,8 +13,9 @@ from app.auth import (
     hash_password,
 )
 
+from app.limiter import limiter  # instância única (WP-SEC-03)
+
 router = APIRouter(prefix="/api/auth", tags=["Autenticação"])
-limiter = Limiter(key_func=get_remote_address)
 
 
 @router.post("/login", response_model=TokenResponse, summary="Login com email e senha")
@@ -45,7 +44,7 @@ async def login(request: Request, data: LoginRequest, response: Response, db: Se
     #         detail="Por favor, verifique seu e-mail para ativar a conta."
     #     )
 
-    access_token = create_access_token(data={"sub": user.email})
+    access_token = create_access_token(data={"sub": user.email, "role": user.role})
 
     # Set cookie for frontend
     is_production = os.getenv("ENVIRONMENT", "development") == "production"
@@ -55,7 +54,8 @@ async def login(request: Request, data: LoginRequest, response: Response, db: Se
         httponly=True,
         secure=is_production,  # HTTPS only em produção
         max_age=28800,  # 8 hours
-        samesite="lax"
+        samesite="lax",
+        path="/",  # Garante que o cookie é enviado em todas as rotas
     )
 
     return TokenResponse(

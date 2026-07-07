@@ -364,3 +364,117 @@ async def get_users_list(db: Session) -> list:
         }
         for u in users
     ]
+
+
+# ─── CONV-TAGS-SYNC-01: tags do lead (CRM) <-> Conversas ────────────────────
+# Mesmo padrao SQL-direto do restante deste modulo (base compartilhada).
+# Todas as funcoes toleram a AUSENCIA das tabelas do CRM (dev isolado):
+# try/except + rollback -> retornam None/False e o Conversas segue 100% local.
+
+import re as _re
+
+_HEX6 = _re.compile(r"^#[0-9A-Fa-f]{6}$")
+_DEFAULT_TAG_COLOR = "#3B82F6"
+
+
+def _safe_color(cor) -> str:
+    """Cor vinda do CRM vai para atributo style no frontend — sanitizar SEMPRE."""
+    return cor if isinstance(cor, str) and _HEX6.match(cor) else _DEFAULT_TAG_COLOR
+
+
+def get_lead_tags(lead_id: int, db: Session):
+    """Le as tags do lead no CRM. Retorna [{'nome','cor'}] ou None se CRM inacessivel."""
+    try:
+        rows = db.execute(
+            text(
+                "SELECT t.nome AS nome, t.cor AS cor "
+                "FROM tags t JOIN lead_tags lt ON lt.tag_id = t.id "
+                "WHERE lt.lead_id = :lid"
+            ),
+            {"lid": lead_id},
+        ).fetchall()
+        return [{"nome": r.nome, "cor": _safe_color(r.cor)} for r in rows]
+    except Exception:
+        db.rollback()  # limpa a transacao abortada (dev sem tabelas CRM)
+        return None
+
+
+def add_tag_to_lead(lead_id: int, nome: str, cor: str, db: Session) -> bool:
+    """Aplica a tag ao lead no CRM (cria a tag por NOME se nao existir). Idempotente."""
+    try:
+        row = db.execute(text("SELECT id FROM tags WHERE nome = :n"), {"n": nome}).fetchone()
+        if row:
+            tag_id = row.id
+        else:
+            db.execute(
+                text("INSERT INTO tags (nome, cor, created_at) VALUES (:n, :c, CURRENT_TIMESTAMP)"),
+                {"n": nome, "c": _safe_color(cor)},
+            )
+            tag_id = db.execute(text("SELECT id FROM tags WHERE nome = :n"), {"n": nome}).fetchone().id
+        link = db.execute(
+            text("SELECT 1 FROM lead_tags WHERE lead_id = :lid AND tag_id = :tid"),
+            {"lid": lead_id, "tid": tag_id},
+        ).fetchone()
+        if not link:
+            db.execute(
+                text("INSERT INTO lead_tags (lead_id, tag_id) VALUES (:lid, :tid)"),
+                {"lid": lead_id, "tid": tag_id},
+            )
+        db.commit()
+        return True
+    except Exception as e:
+        db.rollback()
+        logger.warning(f"Tag sync Conversas->CRM indisponivel (lead {lead_id}): {type(e).__name__}")
+        return False
+
+
+def remove_tag_from_lead(lead_id: int, nome: str, db: Session) -> bool:
+    """Remove o vinculo lead<->tag no CRM (por NOME da tag). Idempotente."""
+    try:
+        db.execute(
+            text(
+                "DELETE FROM lead_tags WHERE lead_id = :lid "
+                "AND tag_id IN (SELECT id FROM tags WHERE nome = :n)"
+            ),
+            {"lid": lead_id, "n": nome},
+        )
+        db.commit()
+        return True
+    except Exception as e:
+        db.rollback()
+        logger.warning(f"Tag unsync Conversas->CRM indisponivel (lead {lead_id}): {type(e).__name__}")
+        return False
+
+
+def sync_lead_tags_to_conversation(conversation: Conversation, db: Session) -> bool:
+    """
+    Espelho CRM -> Conversas (read-repair, chamado ao ABRIR a conversa).
+
+    Para conversa VINCULADA (lead_id > 0) o CRM e a fonte de verdade: o
+    conjunto de tags da conversa vira EXATAMENTE o conjunto de tags do lead
+    (tag removida no CRM some aqui; aplicada la aparece aqui). Tags locais
+    sao criadas por NOME (cor copiada e sanitizada). Se o CRM estiver
+    inacessivel (dev isolado), NAO toca nas tags locais.
+    """
+    if not conversation.lead_id or conversation.lead_id <= 0:
+        return False
+    crm_tags = get_lead_tags(conversation.lead_id, db)
+    if crm_tags is None:
+        return False  # CRM inacessivel: preserva estado local
+
+    from app.models.tag import ConversationTag
+
+    desired = []
+    for item in crm_tags:
+        tag = db.query(ConversationTag).filter(ConversationTag.nome == item["nome"]).first()
+        if not tag:
+            tag = ConversationTag(nome=item["nome"], cor=item["cor"])
+            db.add(tag)
+            db.flush()
+        desired.append(tag)
+
+    if {t.id for t in conversation.tags} != {t.id for t in desired}:
+        conversation.tags = desired
+        db.commit()
+        logger.info(f"Tags da conversa {conversation.id} espelhadas do lead {conversation.lead_id}")
+    return True

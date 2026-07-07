@@ -1,61 +1,20 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pepétua — Assistente IA — CRM Brasileiros no Atacama</title>
-    
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    
-    <link rel="stylesheet" href="/static/css/variables.css?v=2">
-    <link rel="stylesheet" href="/static/css/base.css?v=2">
-    <link rel="stylesheet" href="/static/css/components.css?v=2">
-    <link rel="icon" href="/static/img/logo.png" type="image/png">
-    
-    <!-- Marked.js for markdown rendering -->
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+{% extends "base.html" %}
+{% set page_title = "Pepétua — Assistente IA" %}
+{% set active_nav = "ai" %}
+{% set sector = "comercial" %}
 
+{% block extra_head %}
+    <!-- Marked.js for markdown rendering (SEC-XSS-03: versao fixada p/ reduzir risco de supply-chain) -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+    <!-- SEC-XSS-01: DOMPurify sanitizes chat HTML before innerHTML (prompt-injection / stored XSS defense) -->
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.9/dist/purify.min.js"></script>
+{% endblock %}
+
+{% block extra_css %}
     <style>
-        /* Replicating Base Sidebar layout for consistency */
-        .dashboard-layout { display: flex; min-height: 100vh; }
-        .sidebar { width: 240px; background: var(--sidebar-bg); border-right: 1px solid var(--sidebar-border); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: var(--z-sidebar); transition: transform var(--t-base); }
-        .sidebar-header { padding: var(--sp-5); display: flex; align-items: center; gap: var(--sp-3); border-bottom: 1px solid var(--sidebar-border); min-height: 56px; }
-        .sidebar-logo { width: 32px; height: 32px; border-radius: var(--radius-md); overflow: hidden; flex-shrink: 0; }
-        .sidebar-logo img { width: 100%; height: 100%; object-fit: cover; }
-        .sidebar-brand { font-size: var(--font-size-sm); font-weight: var(--fw-semibold); color: var(--color-text); line-height: 1.3; }
-        .sidebar-brand span { color: var(--color-primary); }
-        .sidebar-nav { flex: 1; padding: var(--sp-3) 0; overflow-y: auto; }
-        .nav-section { padding: var(--sp-1) var(--sp-4); margin-top: var(--sp-4); }
-        .nav-section-title { font-size: 10px; font-weight: var(--fw-semibold); text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-4); margin-bottom: var(--sp-1); }
-        .nav-item { display: flex; align-items: center; gap: var(--sp-3); padding: 8px var(--sp-4); color: var(--sidebar-text); font-size: var(--font-size-sm); font-weight: var(--fw-medium); transition: background var(--t-fast), color var(--t-fast); cursor: pointer; text-decoration: none; border-left: 2px solid transparent; margin: 1px var(--sp-2); border-radius: var(--radius-md); }
-        .nav-item:hover { background: var(--sidebar-hover-bg); color: var(--color-text); }
-        .nav-item.active { background: var(--sidebar-active-bg); color: var(--sidebar-active-text); font-weight: var(--fw-semibold); }
-        .nav-item .nav-icon { width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; opacity: 0.7; }
-        .nav-item.active .nav-icon { opacity: 1; }
-        .sidebar-footer { padding: var(--sp-3) var(--sp-2); border-top: 1px solid var(--sidebar-border); }
-        .main-content { flex: 1; margin-left: 240px; display: flex; flex-direction: column; height: 100vh; }
-        .top-header { height: 56px; background: var(--color-surface); border-bottom: 1px solid var(--color-border); display: flex; align-items: center; justify-content: space-between; padding: 0 var(--sp-6); flex-shrink: 0; }
-        .header-left { display: flex; align-items: center; gap: var(--sp-3); }
-        .page-title { font-size: var(--font-size-base); font-weight: var(--fw-semibold); color: var(--color-text); }
-        .header-right { display: flex; align-items: center; gap: var(--sp-3); }
-        .user-info { display: flex; align-items: center; gap: var(--sp-2); padding: 5px var(--sp-3); border-radius: var(--radius-md); cursor: pointer; transition: background var(--t-fast); }
-        .user-info:hover { background: var(--color-bg); }
-        .user-avatar { width: 30px; height: 30px; border-radius: var(--radius-full); background: var(--color-primary); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: var(--fw-semibold); font-size: var(--font-size-xs); }
-        .user-name { font-size: var(--font-size-sm); font-weight: var(--fw-medium); color: var(--color-text); }
-        .user-role { font-size: var(--font-size-xs); color: var(--color-text-3); }
-        .menu-toggle { display: none; background: none; border: none; cursor: pointer; padding: 6px; color: var(--color-text-3); border-radius: var(--radius-md); }
-        .menu-toggle:hover { background: var(--color-bg); }
-        
-        @media (max-width: 1024px) {
-            .sidebar { transform: translateX(-100%); }
-            .sidebar.open { transform: translateX(0); }
-            .main-content { margin-left: 0; }
-            .menu-toggle { display: block; }
-            .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: calc(var(--z-sidebar) - 1); }
-            .sidebar-overlay.show { display: block; }
-        }
+        /* ai.html needs full-height layout for chat */
+        .main-content { height: 100vh; }
+        .content-area { padding: 0 !important; display: flex; flex-direction: column; }
 
         /* ===== Chat Layout with Sessions Sidebar ===== */
         .chat-layout {
@@ -476,60 +435,9 @@
             .sessions-panel { display: none; }
         }
     </style>
-</head>
-<body>
-    <div class="dashboard-layout">
-        <!-- Sidebar Overlay (mobile) -->
-        <div class="sidebar-overlay" id="sidebarOverlay"></div>
+{% endblock %}
 
-        <!-- Sidebar -->
-                <aside class="sidebar" id="sidebar">
-            <div class="sidebar-header">
-                <div class="sidebar-logo"><img src="/static/img/logo.png" alt="Logo"></div>
-                <div class="sidebar-brand">Brasileiros <span>no Atacama</span></div>
-            </div>
-            <nav class="sidebar-nav">
-                <div class="nav-section"><div class="nav-section-title">Principal</div></div>
-                <a href="/dashboard" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></span><span>Dashboard</span></a>
-                <div class="nav-section"><div class="nav-section-title">Inteligência</div></div>
-                <a href="/ai" class="nav-item active"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><circle cx="19" cy="5" r="3"/></svg></span><span>Assistente IA</span></a>
-                <div class="nav-section"><div class="nav-section-title">CRM</div></div>
-                <a href="/leads" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span><span>Leads</span></a>
-                <a href="/tags" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg></span><span>Tags</span></a>
-                <a href="/pipeline" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span><span>Pipeline</span></a>
-                <a href="/segmentacao" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span><span>Segmentação</span></a>
-                <a href="/tarefas" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><span>Tarefas</span></a>
-                <div class="nav-section"><div class="nav-section-title">Administração</div></div>
-                <a href="/relatorios" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span><span>Relatórios</span></a>
-                <a href="/equipe" class="nav-item"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span><span>Equipe e Usuários</span></a>
-                <div class="nav-section"><div class="nav-section-title">Sistema</div></div>
-                <a href="/docs" class="nav-item" target="_blank"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span><span>API Docs</span></a>
-                <a href="https://n8n.crmbrasileirosnoatacama.cloud" class="nav-item" target="_blank"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span><span>Servidor n8n</span></a>
-            </nav>
-            <div class="sidebar-footer">
-                <a href="#" class="nav-item" id="logoutBtn"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></span><span>Sair</span></a>
-            </div>
-        </aside>
-
-        <!-- Main Content -->
-        <main class="main-content">
-            <!-- Top Header -->
-            <header class="top-header">
-                <div class="header-left">
-                    <button class="menu-toggle" id="menuToggle" aria-label="Menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
-                    <h2 class="page-title">Pepétua — Assistente de IA</h2>
-                </div>
-                <div class="header-right">
-                    <div class="user-info">
-                        <div class="user-avatar" id="userAvatar">A</div>
-                        <div>
-                            <div class="user-name" id="userName">Carregando...</div>
-                            <div class="user-role" id="userRole">—</div>
-                        </div>
-                    </div>
-                </div>
-            </header>
-
+{% block content %}
             <!-- Chat Layout -->
             <div class="chat-layout">
                 <!-- Sessions Panel -->
@@ -607,36 +515,13 @@
                     </div>
                 </div>
             </div>
-        </main>
-    </div>
+{% endblock %}
 
-    <script src="/static/js/auth.js"></script>
+{% block scripts %}
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             if (!Auth.requireAuth()) return;
             const user = Auth.getUser();
-            if (user) {
-                document.getElementById('userName').textContent = user.nome;
-                document.getElementById('userRole').textContent = user.role === 'admin' ? 'Administrador' : 'Usuário';
-                document.getElementById('userAvatar').textContent = user.nome.charAt(0).toUpperCase();
-            }
-
-            document.getElementById('logoutBtn').addEventListener('click', (e) => {
-                e.preventDefault();
-                Auth.logout();
-            });
-
-            // Mobile menu config
-            const sidebar = document.getElementById('sidebar');
-            const overlay = document.getElementById('sidebarOverlay');
-            document.getElementById('menuToggle').addEventListener('click', () => {
-                sidebar.classList.toggle('open');
-                overlay.classList.toggle('show');
-            });
-            overlay.addEventListener('click', () => {
-                sidebar.classList.remove('open');
-                overlay.classList.remove('show');
-            });
 
             // ─── State ────────────────────────────────────
             let currentSessionId = null;
@@ -817,7 +702,7 @@
                 const href = link.getAttribute('href') || '';
                 
                 // Detectar se é um link de download de arquivo gerado pela IA
-                const downloadMatch = href.match(/\/(?:api\/)?ai\/download\/([^\s\?"#]+\.\w+)/);
+                const downloadMatch = href.match(/\/(?:api\/)?ai\/download\/([^\s\?\"#]+\.\w+)/);
                 if (!downloadMatch) return;
                 
                 // Bloquear navegação padrão
@@ -884,7 +769,10 @@
                 
                 const bubble = document.createElement('div');
                 bubble.className = 'chat-bubble';
-                bubble.innerHTML = isUser ? content.replace(/\n/g, '<br>') : marked.parse(content);
+                // SEC-XSS-01: sanitize all rendered chat content (user text + IA markdown) before innerHTML
+                bubble.innerHTML = isUser
+                    ? DOMPurify.sanitize(content.replace(/\n/g, '<br>'), { ALLOWED_TAGS: ['br'] })
+                    : DOMPurify.sanitize(marked.parse(content));
                 
                 div.appendChild(avatar);
                 div.appendChild(bubble);
@@ -1016,7 +904,7 @@
                 if (!str) return '';
                 const div = document.createElement('div');
                 div.textContent = str;
-                return div.innerHTML;
+                return div.innerHTML.replace(/\"/g, '&quot;').replace(/'/g, '&#39;');
             }
 
             function formatSessionDate(dateStr) {
@@ -1039,5 +927,4 @@
             loadSessions();
         });
     </script>
-</body>
-</html>
+{% endblock %}

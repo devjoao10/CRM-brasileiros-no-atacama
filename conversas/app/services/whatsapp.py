@@ -41,6 +41,29 @@ def is_configured(db: Optional[Session] = None) -> bool:
     return bool(token and phone_id)
 
 
+def _error_result(status_code: Optional[int], summary: str) -> dict:
+    """
+    CONV-08b: resultado padronizado de falha de envio.
+    `summary` deve ser SEGURO: nunca incluir token, headers, phone_number_id
+    ou payload bruto. Callers persistem isso em Message.last_error.
+    """
+    return {"error": True, "status_code": status_code, "summary": summary[:300]}
+
+
+def _http_error_summary(e: httpx.HTTPStatusError) -> dict:
+    """Extrai um resumo seguro de um erro HTTP da Meta (status + error.message/code)."""
+    summary = f"HTTP {e.response.status_code}"
+    try:
+        err = e.response.json().get("error", {})
+        if err.get("message"):
+            summary += f": {err['message']}"
+        if err.get("code") is not None:
+            summary += f" (code {err['code']})"
+    except Exception:
+        pass
+    return _error_result(e.response.status_code, summary)
+
+
 async def send_text_message(to: str, text: str, db: Optional[Session] = None) -> Optional[dict]:
     """
     Send a text message via WhatsApp Cloud API.
@@ -80,14 +103,106 @@ async def send_text_message(to: str, text: str, db: Optional[Session] = None) ->
             return data
     except httpx.HTTPStatusError as e:
         logger.error(f"Erro HTTP ao enviar mensagem: {e.response.status_code} - {e.response.text}")
-        return None
+        return _http_error_summary(e)
     except Exception as e:
         logger.error(f"Erro ao enviar mensagem: {e}")
-        return None
+        return _error_result(None, f"Erro de rede/cliente: {type(e).__name__}")
+
+
+async def get_media_url(media_id: str, db: Optional[Session] = None) -> Optional[dict]:
+    """
+    CONV-02: resolve um media_id da Meta para a URL temporaria de download.
+
+    Retorna (contrato padrao do adapter):
+      - dict {"url", "mime_type", "sha256", "file_size", "id"} no sucesso
+      - dict {"simulated": True} sem credenciais (dev)
+      - dict {"error": True, "status_code", "summary"} em falha real
+    A URL retornada expira em ~5 minutos — consumir imediatamente.
+    """
+    token, phone_id, base = _get_credentials(db)
+    if not token or not phone_id:
+        logger.warning("Meta Cloud API não configurada. get_media_url simulado.")
+        return {"simulated": True, "media_id": media_id}
+
+    url = f"{base}/{media_id}"
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Erro HTTP ao resolver media_id: {e.response.status_code}")
+        return _http_error_summary(e)
+    except Exception as e:
+        logger.error(f"Erro ao resolver media_id: {e}")
+        return _error_result(None, f"Erro de rede/cliente: {type(e).__name__}")
+
+
+async def download_media_content(media_url: str, db: Optional[Session] = None) -> Optional[dict]:
+    """
+    CONV-02: baixa o binario de uma URL de midia da Meta (autenticada por token).
+
+    Retorna:
+      - dict {"content": bytes} no sucesso
+      - dict {"simulated": True} sem credenciais (dev)
+      - dict {"error": True, "status_code", "summary"} em falha real
+    """
+    token, phone_id, _ = _get_credentials(db)
+    if not token or not phone_id:
+        return {"simulated": True}
+
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            response = await client.get(media_url, headers=headers)
+            response.raise_for_status()
+            return {"content": response.content}
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Erro HTTP ao baixar midia: {e.response.status_code}")
+        return _http_error_summary(e)
+    except Exception as e:
+        logger.error(f"Erro ao baixar midia: {e}")
+        return _error_result(None, f"Erro de rede/cliente: {type(e).__name__}")
+
+
+async def upload_media(
+    content: bytes, mime_type: str, db: Optional[Session] = None
+) -> Optional[dict]:
+    """
+    CONV-02: sobe um binario para a Meta e retorna o media_id (fundacao do
+    envio outbound de midia — o endpoint/UI chegam no CONV-03/04).
+
+    Retorna:
+      - dict {"id": "<media_id>"} no sucesso
+      - dict {"simulated": True, "id": None} sem credenciais (dev)
+      - dict {"error": True, "status_code", "summary"} em falha real
+    """
+    token, phone_id, base = _get_credentials(db)
+    if not token or not phone_id:
+        logger.warning("Meta Cloud API não configurada. upload_media simulado.")
+        return {"simulated": True, "id": None}
+
+    url = f"{base}/{phone_id}/media"
+    headers = {"Authorization": f"Bearer {token}"}
+    files = {"file": ("upload", content, mime_type)}
+    data = {"messaging_product": "whatsapp", "type": mime_type}
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(url, headers=headers, files=files, data=data)
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Erro HTTP no upload de midia: {e.response.status_code} - {e.response.text}")
+        return _http_error_summary(e)
+    except Exception as e:
+        logger.error(f"Erro no upload de midia: {e}")
+        return _error_result(None, f"Erro de rede/cliente: {type(e).__name__}")
 
 
 async def send_media_message(
-    to: str, media_type: str, media_url: str, caption: str = "", db: Optional[Session] = None
+    to: str, media_type: str, media_url: str = "", caption: str = "",
+    db: Optional[Session] = None, *, media_id: Optional[str] = None
 ) -> Optional[dict]:
     """
     Send a media message (image, audio, document, video) via WhatsApp Cloud API.
@@ -113,7 +228,8 @@ async def send_media_message(
         "Content-Type": "application/json",
     }
 
-    media_object = {"link": media_url}
+    # CONV-02: envio por media_id (upload previo) tem prioridade sobre link
+    media_object = {"id": media_id} if media_id else {"link": media_url}
     if caption and media_type in ("image", "document", "video"):
         media_object["caption"] = caption
 
@@ -132,9 +248,12 @@ async def send_media_message(
             data = response.json()
             logger.info(f"Mídia ({media_type}) enviada para {to}")
             return data
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Erro HTTP ao enviar mídia: {e.response.status_code} - {e.response.text}")
+        return _http_error_summary(e)
     except Exception as e:
         logger.error(f"Erro ao enviar mídia: {e}")
-        return None
+        return _error_result(None, f"Erro de rede/cliente: {type(e).__name__}")
 
 
 async def mark_as_read(message_id: str, db: Optional[Session] = None) -> bool:
@@ -210,10 +329,10 @@ async def send_template_message(
             return data
     except httpx.HTTPStatusError as e:
         logger.error(f"Erro HTTP ao enviar template: {e.response.status_code} - {e.response.text}")
-        return None
+        return _http_error_summary(e)
     except Exception as e:
         logger.error(f"Erro ao enviar template: {e}")
-        return None
+        return _error_result(None, f"Erro de rede/cliente: {type(e).__name__}")
 
 
 async def send_reaction(

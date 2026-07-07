@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Conversas — Brasileiros no Atacama</title>
     <meta name="description" content="Plataforma de conversas WhatsApp integrada ao CRM">
-    <link rel="stylesheet" href="/static/css/conversas.css">
+    <link rel="stylesheet" href="/static/css/conversas.css?v=conv-tags-ux-01">
 </head>
 <body>
     <div class="app-layout" id="appLayout">
@@ -33,17 +33,22 @@
                 <input type="text" id="searchInput" placeholder="Buscar conversa...">
             </div>
 
-            <div class="conv-filters">
+            <div class="conv-filter-tabs" data-tabs-scroll>
                 <button class="active" data-filter="all">Todas</button>
                 <button data-filter="aberta">Abertas <span class="badge" id="badgeAberta" style="display:none">0</span></button>
                 <button data-filter="aguardando">Aguardando</button>
+                <button data-filter="minhas">Minhas</button>
                 <button data-filter="encerrada">Encerradas</button>
             </div>
 
-            <div class="conv-filters" style="padding: 6px 16px; border-bottom: 1px solid var(--dark-200);">
+            <div class="conv-sidebar-filter-selects" style="padding: 6px 16px; border-bottom: 1px solid var(--dark-200); display:flex; flex-direction:column; gap:6px;">
                 <select id="filterResponsavel" style="width:100%; padding:7px 10px; border:1px solid var(--dark-200); border-radius:var(--radius-md); font-size:12px; font-family:var(--font); background:var(--white); color:var(--dark); outline:none;">
                     <option value="">Todos os responsaveis</option>
                     <option value="0">Agente IA</option>
+                </select>
+                <!-- CONV-05: filtro por tag -->
+                <select id="filterTag" style="width:100%; padding:7px 10px; border:1px solid var(--dark-200); border-radius:var(--radius-md); font-size:12px; font-family:var(--font); background:var(--white); color:var(--dark); outline:none;">
+                    <option value="">Todas as tags</option>
                 </select>
             </div>
 
@@ -75,6 +80,8 @@
                         <div class="chat-header-status" id="chatStatus">—</div>
                     </div>
                     <div class="chat-header-actions">
+                        <!-- CONV-06: assumir/liberar (fila) -->
+                        <button id="btnClaim" style="display:none; border:1px solid var(--primary); background:var(--white); color:var(--primary); border-radius:var(--radius-md); font-size:12px; font-weight:600; padding:5px 12px; cursor:pointer;">Assumir</button>
                         <button title="Encerrar conversa" id="btnCloseConv">
                             <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" id="iconCloseConv"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zM12 17c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM15.1 8H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
                         </button>
@@ -103,6 +110,11 @@
                         </div>
                     </div>
 
+                    <!-- CONV-03/04: anexo de midia (tipos aceitos pela Meta; validacao final = media_policy no backend) -->
+                    <button class="btn-action" id="btnAttach" title="Anexar mídia (áudio, imagem, vídeo, documento)" style="width: 42px; height: 42px; border: none; background: transparent; color: var(--dark-400); border-radius: var(--radius-full); cursor: pointer; transition: all var(--transition); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></svg>
+                    </button>
+                    <input type="file" id="mediaFileInput" accept="audio/*,image/jpeg,image/png,image/webp,video/mp4,video/3gpp,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt" style="display:none;">
                     <textarea id="msgInput" placeholder="Digite uma mensagem..." rows="1"></textarea>
                     <button class="btn-send" id="btnSend" title="Enviar">
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="#fff"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
@@ -145,12 +157,41 @@
                     </div>
                 </div>
 
+                <!-- CONV-07: atendente (quem esta atendendo agora — handoff) -->
+                <div class="lead-section">
+                    <div class="lead-section-title">Atendente</div>
+                    <select id="selectAtendente" style="width:100%; padding:8px 12px; border:1px solid var(--dark-200); border-radius:var(--radius-md); font-size:13px; font-family:var(--font); background:var(--white); color:var(--dark); outline:none;">
+                        <option value="0">Sem atendente (fila)</option>
+                    </select>
+                </div>
+
+                <!-- CONV-07: notas internas -->
+                <div class="lead-section">
+                    <div class="lead-section-title">Notas internas</div>
+                    <div id="notesList" style="display:flex; flex-direction:column; gap:6px; margin-bottom:8px; max-height:180px; overflow-y:auto;"></div>
+                    <textarea id="noteInput" rows="2" placeholder="Nota visível só para a equipe..." style="width:100%; padding:8px 10px; border:1px solid var(--dark-200); border-radius:var(--radius-md); font-size:12px; font-family:var(--font); resize:vertical; outline:none;"></textarea>
+                    <button id="btnAddNote" style="margin-top:6px; width:100%; padding:7px; border:1px solid var(--primary); background:var(--white); color:var(--primary); border-radius:var(--radius-md); font-size:12px; font-weight:600; cursor:pointer;">Adicionar nota</button>
+                    <div style="font-size:10px; color:var(--dark-400); margin-top:4px;">Notas internas NUNCA são enviadas ao WhatsApp.</div>
+                </div>
+
                 <div class="lead-section">
                     <div class="lead-section-title">Responsavel</div>
                     <select id="selectResponsavel" style="width:100%; padding:8px 12px; border:1px solid var(--dark-200); border-radius:var(--radius-md); font-size:13px; font-family:var(--font); background:var(--white); color:var(--dark); outline:none; margin-bottom: 8px;">
                         <option value="0">Agente IA</option>
                     </select>
                     <div style="font-size:11px; color:var(--dark-400);">Alteracoes sao sincronizadas com o CRM automaticamente.</div>
+                </div>
+
+                <!-- CONV-05: tags da conversa -->
+                <div class="lead-section">
+                    <div class="lead-section-title">Tags</div>
+                    <div id="convTagChips" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px;"></div>
+                    <div style="display:flex; gap:6px;">
+                        <select id="selectAddTag" style="flex:1; padding:6px 10px; border:1px solid var(--dark-200); border-radius:var(--radius-md); font-size:12px; font-family:var(--font); background:var(--white); color:var(--dark); outline:none;">
+                            <option value="">Aplicar tag...</option>
+                        </select>
+                        <button id="btnNewTag" title="Criar nova tag" style="padding:6px 10px; border:1px solid var(--dark-200); border-radius:var(--radius-md); background:var(--white); cursor:pointer; font-size:12px; color:var(--dark-500);">+ Nova</button>
+                    </div>
                 </div>
 
                 <div class="lead-section">
@@ -178,7 +219,47 @@
         </aside>
     </div>
 
+    <!-- CONV-TAGS-UX-01: modal interno de gestao de tags (substitui o prompt nativo) -->
+    <div class="tag-modal-overlay" id="tagModalOverlay">
+        <div class="tag-modal" role="dialog" aria-modal="true" aria-labelledby="tagModalTitle">
+            <div class="tag-modal-header">
+                <h3 id="tagModalTitle">Gerenciar tags</h3>
+                <button class="tag-modal-close" id="btnTagModalClose" title="Fechar">&times;</button>
+            </div>
+
+            <div class="tag-modal-notice" id="tagModalNotice" style="display:none;">
+                Esta conversa ainda não está vinculada a um lead. As tags abaixo são
+                <strong>locais do Conversas</strong> — vincule um lead para sincronizar com o CRM.
+            </div>
+
+            <div class="tag-modal-section">
+                <div class="tag-modal-label">Tags aplicadas</div>
+                <div class="tag-modal-chips" id="tagModalApplied"></div>
+            </div>
+
+            <div class="tag-modal-section">
+                <div class="tag-modal-label">Tags disponíveis — clique para aplicar</div>
+                <div class="tag-modal-chips" id="tagModalAvailable"></div>
+            </div>
+
+            <div class="tag-modal-section">
+                <div class="tag-modal-label">Criar nova tag</div>
+                <div class="tag-modal-create">
+                    <input type="text" id="tagModalName" maxlength="50" placeholder="Nome da tag (ex: Urgente)">
+                    <input type="color" id="tagModalColor" value="#3B82F6" title="Cor da tag">
+                    <button id="btnTagModalCreate">Criar e aplicar</button>
+                </div>
+            </div>
+
+            <div class="tag-modal-status" id="tagModalStatus"></div>
+
+            <div class="tag-modal-footer">
+                <button class="tag-modal-cancel" id="btnTagModalCancel">Fechar</button>
+            </div>
+        </div>
+    </div>
+
     <script src="/static/js/auth.js"></script>
-    <script src="/static/js/conversas.js?v=3"></script>
+    <script src="/static/js/conversas.js?v=conv-tags-ux-01"></script>
 </body>
 </html>

@@ -285,3 +285,165 @@ select.form-input { cursor: pointer; }
 }
 .empty-state svg { margin: 0 auto var(--sp-4); opacity: 0.3; }
 .empty-state p   { font-size: var(--font-size-sm); margin-top: var(--sp-2); }
+
+/* ─── Chips, Badges & Labels (WP-UX-01.1 Padronização) ───────────── */
+/* Base Chip Structure */
+.chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-1);
+    padding: 2px var(--sp-3);
+    font-size: 10px;
+    font-weight: var(--fw-semibold);
+    border-radius: var(--radius-full);
+    line-height: 1.2;
+    white-space: nowrap;
+    border: 1px solid transparent;
+    box-sizing: border-box;
+    transition: all var(--t-fast);
+}
+
+/* Sizes */
+.chip-sm {
+    padding: 1px var(--sp-2);
+    font-size: 9px;
+}
+.chip-md {
+    padding: 3px var(--sp-3);
+    font-size: 10px;
+}
+.chip-lg {
+    padding: 5px var(--sp-4);
+    font-size: var(--font-size-sm);
+}
+
+/* Sub-elements: Dot & Icon */
+.chip-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: currentColor;
+    display: inline-block;
+    flex-shrink: 0;
+}
+.chip-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+}
+
+/* Semantics */
+.chip-status {
+    background: var(--color-bg);
+    color: var(--color-text-2);
+    border-color: var(--color-border);
+}
+
+.chip-success {
+    background: var(--color-success-bg);
+    color: var(--color-success);
+    border-color: rgba(72,187,120,0.2);
+}
+.chip-warning {
+    background: var(--color-warning-bg);
+    color: var(--color-warning);
+    border-color: rgba(221,107,32,0.2);
+}
+.chip-danger {
+    background: var(--color-error-bg);
+    color: var(--color-error);
+    border-color: rgba(229,62,62,0.2);
+}
+.chip-neutral {
+    background: var(--color-bg);
+    color: var(--color-text-3);
+    border-color: var(--color-border-dark);
+}
+.chip-info {
+    background: var(--color-info-bg);
+    color: var(--color-info);
+    border-color: rgba(49,130,206,0.2);
+}
+
+.chip-priority {
+    font-weight: var(--fw-bold);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.chip-destination {
+    background: rgba(113,128,150,0.1);
+    color: var(--color-text-3);
+    text-transform: capitalize;
+}
+.chip-destination.atacama {
+    background: rgba(192,86,33,0.1);
+    color: var(--color-secondary);
+}
+.chip-destination.uyuni {
+    background: rgba(43,108,176,0.1);
+    color: var(--color-primary);
+}
+.chip-destination.santiago {
+    background: rgba(56,161,105,0.1);
+    color: var(--color-success);
+}
+.chip-destination.outro {
+    background: rgba(113,128,150,0.1);
+    color: var(--color-text-3);
+}
+
+.chip-tag {
+    color: #fff;
+    text-shadow: 0 1px 1px rgba(0,0,0,0.1);
+}
+
+.chip-days {
+    font-weight: var(--fw-bold);
+}
+.chip-days.future {
+    background: rgba(56,161,105,0.1);
+    color: var(--color-success);
+}
+.chip-days.today {
+    background: rgba(214,158,46,0.1);
+    color: #B7791F;
+    border-color: rgba(214,158,46,0.3);
+}
+.chip-days.past {
+    background: rgba(113,128,150,0.1);
+    color: var(--color-text-3);
+}
+
+.chip-assignee {
+    background: var(--color-surface);
+    color: var(--color-text);
+    border-color: var(--color-border);
+    font-weight: var(--fw-medium);
+}
+
+.chip-category {
+    background: var(--color-surface);
+    color: var(--color-text-2);
+    border-color: var(--color-border-dark);
+}
+
+/* Modifiers */
+.chip.is-active {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px var(--color-primary-light);
+}
+.chip.is-muted {
+    opacity: 0.6;
+}
+.chip.is-outline {
+    background-color: transparent !important;
+    border-style: solid;
+}
+.chip.is-filled {
+    border-color: transparent !important;
+}

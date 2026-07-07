@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% set page_title = "Hub de Setores" %}
+
+{# WP-UX-02: o hub é a porta de entrada pós-login — sem sidebar de setor. #}
+{% block sidebar %}{% endblock %}
+
+{% block extra_css %}
+    <style>
+        /* Sem sidebar: main ocupa toda a largura; toggle mobile não faz sentido aqui */
+        .main-content { margin-left: 0; }
+        .menu-toggle { display: none !important; }
+
+        .hub-wrap {
+            max-width: 1080px;
+            margin: 0 auto;
+            padding: var(--sp-8) var(--sp-4);
+        }
+        .hub-greeting { text-align: center; margin-bottom: var(--sp-8); }
+        .hub-greeting h1 {
+            font-size: var(--font-size-2xl);
+            font-weight: var(--fw-bold);
+            color: var(--color-text);
+            margin-bottom: var(--sp-2);
+        }
+        .hub-greeting p { font-size: var(--font-size-sm); color: var(--color-text-3); }
+
+        .hub-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: var(--sp-6);
+        }
+        .sector-card {
+            display: flex;
+            flex-direction: column;
+            gap: var(--sp-3);
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-top: 4px solid var(--color-primary);
+            border-radius: var(--radius-xl);
+            padding: var(--sp-6);
+            text-decoration: none;
+            color: var(--color-text);
+            transition: transform var(--t-fast), box-shadow var(--t-fast);
+        }
+        .sector-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg); }
+        .sector-card.operacional { border-top-color: var(--color-secondary); }
+        .sector-card.gestao { border-top-color: var(--color-success); }
+
+        .sector-icon {
+            width: 44px; height: 44px;
+            border-radius: var(--radius-lg);
+            display: flex; align-items: center; justify-content: center;
+            background: var(--color-primary-light);
+            color: var(--color-primary);
+        }
+        .sector-card.operacional .sector-icon { background: rgba(192,86,33,.12); color: var(--color-secondary); }
+        .sector-card.gestao .sector-icon { background: var(--color-success-bg); color: var(--color-success); }
+
+        .sector-title-row { display: flex; align-items: center; gap: var(--sp-2); }
+        .sector-card h2 { font-size: var(--font-size-lg); font-weight: var(--fw-semibold); }
+        .sector-card p { font-size: var(--font-size-sm); color: var(--color-text-3); line-height: 1.5; flex: 1; }
+        .sector-action {
+            font-size: var(--font-size-sm);
+            font-weight: var(--fw-semibold);
+            color: var(--color-primary);
+            display: flex; align-items: center; gap: var(--sp-1);
+        }
+        .sector-card.operacional .sector-action { color: var(--color-secondary); }
+        .sector-card.gestao .sector-action { color: var(--color-success); }
+
+        .hub-footer { text-align: center; margin-top: var(--sp-8); }
+        .hub-footer a {
+            font-size: var(--font-size-xs);
+            color: var(--color-text-3);
+            text-decoration: none;
+        }
+        .hub-footer a:hover { color: var(--color-error); }
+
+        @media (max-width: 640px) { .hub-wrap { padding: var(--sp-6) var(--sp-3); } }
+    </style>
+{% endblock %}
+
+{% block content %}
+    <div class="hub-wrap">
+        <div class="hub-greeting">
+            <h1 id="hubGreeting">Bem-vindo</h1>
+            <p>Escolha um setor para começar a trabalhar.</p>
+        </div>
+
+        <div class="hub-grid">
+            <a class="sector-card comercial" href="/dashboard">
+                <div class="sector-title-row">
+                    <span class="sector-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span>
+                    <h2>Comercial</h2>
+                </div>
+                <p>Gerencie leads, pipeline, tags, segmentação, tarefas comerciais e relatórios de vendas.</p>
+                <span class="sector-action">Entrar no Comercial →</span>
+            </a>
+
+            <a class="sector-card operacional" href="/operational/boards">
+                <div class="sector-title-row">
+                    <span class="sector-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></span>
+                    <h2>Operacional</h2>
+                </div>
+                <p>Organize a execução pós-venda com quadros, listas, cards, checklists e fluxos operacionais.</p>
+                <span class="sector-action">Entrar no Operacional →</span>
+            </a>
+
+            <a class="sector-card gestao" href="/gestao/pendencias">
+                <div class="sector-title-row">
+                    <span class="sector-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></span>
+                    <h2>Gestão Interna</h2>
+                    <span class="chip chip-info chip-sm">Em evolução</span>
+                </div>
+                <p>Acompanhe pendências internas, responsáveis, equipe e tarefas do dia a dia.</p>
+                <span class="sector-action">Entrar na Gestão →</span>
+            </a>
+        </div>
+
+        <div class="hub-footer">
+            <a href="#" id="logoutBtn">Sair da conta</a>
+        </div>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            if (typeof Auth === 'undefined' || !Auth.requireAuth()) return;
+            const u = Auth.getUser();
+            if (u && u.nome) {
+                const el = document.getElementById('hubGreeting');
+                if (el) el.textContent = `Olá, ${u.nome.split(' ')[0]}! Onde você quer trabalhar hoje?`;
+            }
+        });
+    </script>
+{% endblock %}

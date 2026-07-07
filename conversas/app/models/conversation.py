@@ -31,6 +31,19 @@ class Conversation(Base):
         cascade="all, delete-orphan",
         order_by="Message.created_at"
     )
+    # CONV-05: tags N:N (link table com PK composta)
+    tags = relationship(
+        "ConversationTag",
+        secondary="conversation_tag_links",
+        back_populates="conversations",
+    )
+    # CONV-07: notas internas (nunca enviadas ao WhatsApp)
+    notes = relationship(
+        "ConversationNote",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="ConversationNote.created_at",
+    )
 
     def __repr__(self):
         return f"<Conversation(id={self.id}, lead_id={self.lead_id}, nome='{self.nome}')>"
@@ -50,8 +63,21 @@ class Message(Base):
     status = Column(String(20), default="sent", nullable=False)  # sent, delivered, read, failed
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    # CONV-08b — integridade de outbound (base para retry).
+    # Bancos existentes: aplicar migrations/m003_conversas_message_error_fields.py.
+    last_error = Column(Text, nullable=True)          # resumo SEGURO da ultima falha (sem token/payload)
+    send_attempts = Column(Integer, default=0, nullable=False)  # tentativas de envio (outbound)
+    last_attempt_at = Column(DateTime(timezone=True), nullable=True)  # ultima tentativa de envio
+
     # Relationships
     conversation = relationship("Conversation", back_populates="messages")
+    # CONV-01: 1:1 com media_assets (so mensagens de midia possuem asset)
+    media_asset = relationship(
+        "MediaAsset",
+        back_populates="message",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self):
         return f"<Message(id={self.id}, direction='{self.direction}', type='{self.msg_type}')>"

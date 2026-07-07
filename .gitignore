@@ -167,3 +167,6 @@ crm_atacama.db
 
 # Uploads locais de teste
 uploads/
+
+# Arquivos auxiliares de desenvolvimento (nao versionar)
+scratch/

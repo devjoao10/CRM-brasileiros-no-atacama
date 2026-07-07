@@ -13,7 +13,7 @@ from app.models.quick_reply import QuickReply  # noqa: F401
 from app.models.template import MessageTemplate  # noqa: F401
 from app.models.auto_reply import AutoReply, BusinessHours  # noqa: F401
 from app.models.api_config import ApiConfig  # noqa: F401
-from app.routers import webhook, conversations, pages, auth, quick_replies, templates, settings, api_config
+from app.routers import webhook, conversations, pages, auth, quick_replies, templates, settings, api_config, media, tags, notes
 from app.seed import seed_dev_user, seed_quick_replies, seed_templates, seed_auto_replies, seed_business_hours, CONVERSAS_SEED_DEV_DATA
 
 logger = logging.getLogger(__name__)
@@ -66,6 +66,9 @@ app.include_router(quick_replies.router)
 app.include_router(templates.router)
 app.include_router(settings.router)
 app.include_router(api_config.router)
+app.include_router(media.router)  # CONV-02: preview/download autenticado de midia
+app.include_router(tags.router)   # CONV-05: tags de conversa
+app.include_router(notes.router)  # CONV-07: notas internas (nunca vao ao WhatsApp)
 app.include_router(pages.router)  # Pages always last (catch-all routes)
 
 

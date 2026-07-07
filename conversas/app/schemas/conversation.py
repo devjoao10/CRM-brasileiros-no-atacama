@@ -11,6 +11,60 @@ class MessageCreate(BaseModel):
     template_name: Optional[str] = None
 
 
+class NoteCreate(BaseModel):
+    """CONV-07 — nota interna (NUNCA enviada ao WhatsApp)."""
+    content: str = Field(..., min_length=1, max_length=5000)
+
+
+class NoteResponse(BaseModel):
+    id: int
+    conversation_id: int
+    user_id: int
+    user_nome: Optional[str] = None
+    content: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AssignRequest(BaseModel):
+    """CONV-07 — atribuicao dirigida/handoff."""
+    user_id: int = Field(..., ge=1)
+
+
+class TagResponse(BaseModel):
+    """CONV-05 — tag de conversa (cor validada ^#hex6$ na rota)."""
+    id: int
+    nome: str
+    cor: str
+
+    class Config:
+        from_attributes = True
+
+
+class TagCreate(BaseModel):
+    nome: str = Field(..., min_length=1, max_length=50)
+    cor: str = Field(default="#3B82F6", pattern=r"^#[0-9A-Fa-f]{6}$")
+
+
+class MediaAssetResponse(BaseModel):
+    """CONV-01 — referencia de midia (metadados publicos Meta + espelho local futuro)."""
+    id: int
+    meta_media_id: Optional[str] = None
+    meta_mime_type: Optional[str] = None
+    meta_sha256: Optional[str] = None
+    filename: Optional[str] = None
+    status: str
+    local_path: Optional[str] = None
+    local_size_bytes: Optional[int] = None
+    downloaded_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
 class MessageResponse(BaseModel):
     id: int
     conversation_id: int
@@ -21,6 +75,13 @@ class MessageResponse(BaseModel):
     whatsapp_msg_id: Optional[str] = None
     status: str
     created_at: datetime
+    # CONV-08b — metadados de integridade de envio (outbound)
+    last_error: Optional[str] = None
+    send_attempts: Optional[int] = 0
+    last_attempt_at: Optional[datetime] = None
+    # CONV-01 — referencia de midia (None para mensagens sem midia; campo aditivo,
+    # o frontend atual ignora chaves desconhecidas)
+    media_asset: Optional[MediaAssetResponse] = None
 
     class Config:
         from_attributes = True
@@ -49,6 +110,8 @@ class ConversationResponse(BaseModel):
     last_customer_msg_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+    # CONV-05 — tags aplicadas a conversa (aditivo)
+    tags: List[TagResponse] = []
 
     class Config:
         from_attributes = True

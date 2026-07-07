@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+{% set page_title = "Quadros Operacionais" %}
+{% set active_nav = "operational-boards" %}
+{% set sector = "operacional" %}
+
+{% block extra_css %}
+    <style>
+        .board-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: var(--sp-6);
+            margin-top: var(--sp-6);
+        }
+        .board-card {
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-lg);
+            padding: var(--sp-5);
+            transition: all var(--t-fast);
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            min-height: 160px;
+            box-shadow: var(--shadow-sm);
+        }
+        .board-card:hover {
+            border-color: var(--color-primary);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+        .board-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 4px;
+            background: var(--color-primary);
+        }
+        .board-title {
+            font-size: var(--font-size-md);
+            font-weight: var(--fw-semibold);
+            color: var(--color-text);
+            margin-bottom: var(--sp-2);
+        }
+        .board-desc {
+            font-size: var(--font-size-sm);
+            color: var(--color-text-3);
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            flex-grow: 1;
+            margin-bottom: var(--sp-4);
+        }
+        .board-meta {
+            font-size: var(--font-size-xs);
+            color: var(--color-text-4);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-top: 1px solid var(--color-border);
+            padding-top: var(--sp-3);
+        }
+        .empty-state {
+            background: var(--color-surface);
+            border: 1px dashed var(--color-border-dark);
+            border-radius: var(--radius-xl);
+            padding: var(--sp-12);
+            text-align: center;
+            max-width: 500px;
+            margin: var(--sp-12) auto;
+        }
+        
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.5);
+            align-items: center; justify-content: center;
+            z-index: var(--z-modal);
+            padding: var(--sp-4);
+            backdrop-filter: blur(2px);
+        }
+        .modal.show { display: flex; }
+        .modal-content {
+            background: var(--color-surface);
+            border-radius: var(--radius-xl);
+            padding: var(--sp-6);
+            width: 100%;
+            max-width: 460px;
+            box-shadow: var(--shadow-lg);
+            animation: modalIn var(--t-base);
+        }
+        @keyframes modalIn {
+            from { transform: scale(0.95); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+    </style>
+{% endblock %}
+
+{% block content %}
+            <div class="content-area">
+                <div style="display: flex; justify-content: flex-end; margin-bottom: var(--sp-4);">
+                    <button class="btn btn-primary" id="newBoardBtn" style="display: none;">+ Novo Quadro</button>
+                </div>
+                <div id="boardsList" class="board-grid">
+                    <!-- Loaded dynamically -->
+                    <div style="text-align: center; grid-column: 1/-1; padding: var(--sp-12); color: var(--color-text-3);">
+                        Carregando seus quadros operacionais...
+                    </div>
+                </div>
+                
+                <div id="emptyState" class="empty-state" style="display: none;">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-4)" stroke-width="2" style="margin: 0 auto var(--sp-4);"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+                    <h3 style="font-size: var(--font-size-lg); font-weight: var(--fw-semibold); color: var(--color-text); margin-bottom: var(--sp-2);">Nenhum Quadro Encontrado</h3>
+                    <p style="font-size: var(--font-size-sm); color: var(--color-text-3); margin-bottom: var(--sp-6);">Crie um novo quadro operacional para gerenciar o pós-vendas da agência.</p>
+                </div>
+            </div>
+
+    <!-- Create Board Modal -->
+    <div class="modal" id="createBoardModal">
+        <div class="modal-content">
+            <h3 style="font-size: var(--font-size-lg); font-weight: var(--fw-semibold); color: var(--color-text); margin-bottom: var(--sp-4);">Criar Novo Quadro Operacional</h3>
+            <form id="createBoardForm">
+                <div style="margin-bottom: var(--sp-4);">
+                    <label for="boardName" style="display: block; font-size: var(--font-size-xs); font-weight: var(--fw-semibold); color: var(--color-text-2); margin-bottom: var(--sp-2);">Nome do Quadro</label>
+                    <input type="text" id="boardName" class="form-input" style="width: 100%;" placeholder="Ex: Operações Chile 2026" required>
+                </div>
+                <div style="margin-bottom: var(--sp-6);">
+                    <label for="boardDesc" style="display: block; font-size: var(--font-size-xs); font-weight: var(--fw-semibold); color: var(--color-text-2); margin-bottom: var(--sp-2);">Descrição</label>
+                    <textarea id="boardDesc" class="form-input" style="width: 100%; min-height: 80px;" placeholder="Ex: Controle de passageiros e cotações locais"></textarea>
+                </div>
+                <div style="display: flex; gap: var(--sp-3); justify-content: flex-end;">
+                    <button type="button" class="btn" id="closeModalBtn" style="background: var(--color-bg); color: var(--color-text-2);">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Salvar Quadro</button>
+                </div>
+            </form>
+        </div>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+    <script>
+        // ── Auth ──
+        if (!Auth.requireAuth()) throw new Error("redirect");
+
+        const user = Auth.getUser();
+        let isAdmin = user && user.role === "admin";
+        if (isAdmin) {
+            document.getElementById("newBoardBtn").style.display = "block";
+        }
+
+        // ── XSS Helper ──
+        function esc(str) {
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML.replace(/\"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        const modal = document.getElementById("createBoardModal");
+        
+        document.getElementById("newBoardBtn").onclick = () => modal.classList.add("show");
+        document.getElementById("closeModalBtn").onclick = () => modal.classList.remove("show");
+
+        // Fetch boards on load
+        async function fetchBoards() {
+            try {
+                let response = await Auth.apiRequest("/api/operational/boards");
+                if (!response || !response.ok) throw new Error();
+                let boards = await response.json();
+                renderBoards(boards);
+            } catch (e) {
+                document.getElementById("boardsList").innerHTML = `
+                    <div style="text-align: center; grid-column: 1/-1; padding: var(--sp-12); color: var(--color-error);">
+                        Erro ao conectar com a API. Verifique sua sessão.
+                    </div>
+                `;
+            }
+        }
+
+        function renderBoards(boards) {
+            const listDiv = document.getElementById("boardsList");
+            const emptyDiv = document.getElementById("emptyState");
+            
+            listDiv.innerHTML = "";
+            
+            if (boards.length === 0) {
+                emptyDiv.style.display = "block";
+                listDiv.style.display = "none";
+                return;
+            }
+            
+            emptyDiv.style.display = "none";
+            listDiv.style.display = "grid";
+            
+            boards.forEach(b => {
+                let card = document.createElement("div");
+                card.className = "board-card";
+                card.onclick = () => window.location.href = `/operational/boards/${b.id}`;
+                card.innerHTML = `
+                    <div>
+                        <div class="board-title">${esc(b.name)}</div>
+                        <div class="board-desc">${esc(b.description || 'Sem descrição.')}</div>
+                    </div>
+                    <div class="board-meta">
+                        <span>Acessar Quadro &rarr;</span>
+                        <span>${new Date(b.created_at).toLocaleDateString('pt-BR')}</span>
+                    </div>
+                `;
+                listDiv.appendChild(card);
+            });
+        }
+
+        // Handle Create Board
+        document.getElementById("createBoardForm").onsubmit = async (e) => {
+            e.preventDefault();
+            let name = document.getElementById("boardName").value;
+            let description = document.getElementById("boardDesc").value;
+            
+            try {
+                let response = await Auth.apiRequest("/api/operational/boards", {
+                    method: "POST",
+                    body: JSON.stringify({ name, description })
+                });
+                
+                if (response && response.ok) {
+                    modal.classList.remove("show");
+                    document.getElementById("createBoardForm").reset();
+                    fetchBoards();
+                } else {
+                    alert("Apenas administradores podem criar novos quadros operacionais!");
+                }
+            } catch (e) {
+                alert("Erro inesperado.");
+            }
+        };
+
+        fetchBoards();
+    </script>
+{% endblock %}

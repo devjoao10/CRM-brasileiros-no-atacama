@@ -1,0 +1,1000 @@
+{% extends "base.html" %}
+{% set page_title = "Quadro Kanban" %}
+{% set active_nav = "operational-boards" %}
+{% set sector = "operacional" %}
+
+{# WP-OP-UI-02: board full-screen — sem sidebar, main ocupa toda a largura.
+   Volta via botão "Voltar para Quadros" no header do próprio board. #}
+{% block sidebar %}{% endblock %}
+
+{% block extra_css %}
+    <style>
+        /* Ajuste do layout para manter o cabeçalho no topo e scroll horizontal correto */
+        .main-content > .top-header {
+            display: none !important;
+        }
+        .main-content {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            margin-left: 0; /* full-screen: sem sidebar (WP-OP-UI-02) */
+        }
+        .content-area {
+            padding: 0 !important;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            flex: 1;
+        }
+        
+        .top-header {
+            height: 56px;
+            background: var(--color-surface);
+            border-bottom: 1px solid var(--color-border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 var(--sp-6);
+            position: sticky; top: 0;
+            z-index: 100;
+        }
+        .header-left { display: flex; align-items: center; gap: var(--sp-3); }
+        .page-title {
+            font-size: var(--font-size-base);
+            font-weight: var(--fw-semibold);
+            color: var(--color-text);
+        }
+        
+        /* ===== Kanban estilo Trello (WP-OP-UI-03) ===== */
+        .kanban-container {
+            display: flex;
+            gap: var(--sp-3);
+            align-items: flex-start;
+            flex: 1;
+            padding: var(--sp-4) var(--sp-5);
+            overflow-x: auto;
+            overflow-y: hidden;
+            min-height: 500px;
+        }
+        /* Lista/coluna: cinza claro, compacta, sem borda — como no Trello */
+        .kanban-column {
+            width: 272px;
+            background: #f1f2f4;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            max-height: calc(100vh - 96px);
+            flex-shrink: 0;
+            padding: var(--sp-2);
+        }
+        .column-header {
+            padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3);
+            font-weight: var(--fw-semibold);
+            font-size: var(--font-size-sm);
+            color: var(--color-text);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .col-count {
+            font-size: 11px;
+            font-weight: var(--fw-semibold);
+            color: var(--color-text-3);
+            background: rgba(0,0,0,0.06);
+            padding: 2px 8px;
+            border-radius: var(--radius-full);
+        }
+        .card-list {
+            padding: var(--sp-1);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            overflow-y: auto;
+            flex: 1;
+            min-height: 24px; /* alvo de drag&drop mesmo vazia */
+        }
+        /* Card branco compacto com sombra sutil — Trello */
+        .kanban-card {
+            background: var(--color-surface);
+            border-radius: 8px;
+            padding: 8px 10px;
+            box-shadow: 0 1px 1px rgba(9,30,66,.25), 0 0 1px rgba(9,30,66,.31);
+            cursor: pointer;
+            transition: outline-color var(--t-fast), opacity var(--t-fast);
+            outline: 2px solid transparent;
+        }
+        .kanban-card:hover { outline-color: var(--color-primary); }
+        .kanban-card.dragging { opacity: .55; transform: rotate(3deg); }
+        .card-title {
+            font-size: var(--font-size-sm);
+            font-weight: var(--fw-regular, 400);
+            color: var(--color-text);
+            line-height: 1.4;
+            word-break: break-word;
+        }
+        .card-badges {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 6px;
+            flex-wrap: wrap;
+        }
+        .card-badge {
+            font-size: 11px;
+            color: var(--color-text-3);
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+        }
+        /* Botao "+ Adicionar um card" no rodape de CADA coluna (§7.2) */
+        .kanban-add-card {
+            border: none;
+            background: transparent;
+            text-align: left;
+            padding: 8px 10px;
+            margin-top: 4px;
+            border-radius: 8px;
+            font-size: var(--font-size-sm);
+            color: var(--color-text-3);
+            cursor: pointer;
+            transition: background var(--t-fast), color var(--t-fast);
+        }
+        .kanban-add-card:hover { background: rgba(0,0,0,0.06); color: var(--color-text); }
+        /* Coluna-fantasma "+ Adicionar outra lista" (admin) */
+        .kanban-add-list {
+            width: 272px;
+            flex-shrink: 0;
+            border: none;
+            border-radius: 12px;
+            padding: var(--sp-3) var(--sp-4);
+            background: rgba(43,108,176,0.08);
+            color: var(--color-primary);
+            font-size: var(--font-size-sm);
+            font-weight: var(--fw-semibold);
+            text-align: left;
+            cursor: pointer;
+            transition: background var(--t-fast);
+            height: fit-content;
+        }
+        .kanban-add-list:hover { background: rgba(43,108,176,0.16); }
+
+        /* Modal Rich Detail */
+        .rich-modal {
+            display: none;
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.55);
+            align-items: center; justify-content: center;
+            z-index: var(--z-modal);
+            padding: var(--sp-4);
+            backdrop-filter: blur(2px);
+        }
+        .rich-modal.show { display: flex; }
+        .rich-content {
+            background: var(--color-surface);
+            border-radius: var(--radius-xl);
+            width: 100%;
+            max-width: 800px;
+            height: 90%;
+            max-height: 680px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: var(--shadow-lg);
+            animation: modalIn var(--t-base);
+        }
+        .rich-header {
+            padding: var(--sp-4) var(--sp-6);
+            border-bottom: 1px solid var(--color-border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .rich-body {
+            padding: var(--sp-6);
+            overflow-y: auto;
+            flex: 1;
+            display: grid;
+            grid-template-columns: 1.7fr 1fr;
+            gap: var(--sp-6);
+        }
+        .rich-section {
+            margin-bottom: var(--sp-5);
+        }
+        .rich-section-title {
+            font-size: var(--font-size-sm);
+            font-weight: var(--fw-semibold);
+            color: var(--color-text-2);
+            margin-bottom: var(--sp-3);
+            border-bottom: 1px solid var(--color-border);
+            padding-bottom: 4px;
+        }
+        .tab-btn {
+            background: none; border: none;
+            padding: 6px 12px;
+            font-size: var(--font-size-sm);
+            color: var(--color-text-3);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all var(--t-fast);
+        }
+        .tab-btn.active {
+            color: var(--color-primary);
+            border-color: var(--color-primary);
+            font-weight: var(--fw-semibold);
+        }
+        
+        /* General modal overlay transitions */
+        @keyframes modalIn {
+            from { transform: scale(0.95); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+
+        /* WP-OP-UI-04: estado vazio (sem colunas) + botão condicional */
+        .board-empty {
+            margin: auto;
+            text-align: center;
+            color: var(--color-text-3);
+            font-size: var(--font-size-sm);
+            display: flex; flex-direction: column; gap: var(--sp-2);
+            align-items: center;
+        }
+        .board-empty-icon { font-size: 2.5rem; }
+        .board-empty-hint { font-size: var(--font-size-xs); color: var(--color-text-4); }
+        #newCardBtn:disabled { opacity: .55; cursor: not-allowed; }
+
+        /* WP-OP-UI-03: chip de prazo estilo Trello (pill; vermelho quando vencido) */
+        .kanban-due {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            background: rgba(0,0,0,0.06);
+            color: var(--color-text-2);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .kanban-due.overdue { background: var(--color-error); color: #fff; font-weight: var(--fw-semibold); }
+
+        /* Fix pós-migração: overlay dos modais de criar card/coluna
+           (o CSS de .modal vivia no HTML antigo e components.css não o define) */
+        .modal {
+            display: none;
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.55);
+            z-index: var(--z-modal);
+            align-items: center; justify-content: center;
+            padding: var(--sp-4);
+            backdrop-filter: blur(2px);
+        }
+        .modal.show { display: flex; }
+        .modal-content {
+            background: var(--color-surface);
+            border-radius: var(--radius-xl);
+            width: 100%;
+            max-width: 480px;
+            max-height: 90vh;
+            overflow-y: auto;
+            padding: var(--sp-6);
+            box-shadow: var(--shadow-lg);
+            animation: modalIn var(--t-base);
+        }
+    </style>
+{% endblock %}
+
+{% block content %}
+    <header class="top-header">
+        <div class="header-left">
+            <h2 class="page-title" id="boardTitle">Carregando quadro...</h2>
+        </div>
+        <div class="header-right" style="display: flex; gap: var(--sp-3);">
+            <button class="btn" style="background: var(--color-surface); border: 1px solid var(--color-border); color: var(--color-text-2);" onclick="window.location.href='/operational/boards'">&larr; Voltar para Quadros</button>
+            <button class="btn btn-primary" id="newCardBtn">+ Criar Card</button>
+            <button class="btn btn-primary" id="newListBtn" style="display: none;">+ Nova Coluna</button>
+        </div>
+    </header>
+
+    <div class="kanban-container" id="kanbanContainer">
+        <!-- Loaded dynamically -->
+    </div>
+
+    <!-- Create Card Modal -->
+    <div class="modal" id="createCardModal">
+        <div class="modal-content">
+            <h3 style="font-size: var(--font-size-lg); font-weight: var(--fw-semibold); color: var(--color-text); margin-bottom: var(--sp-4);">Criar Novo Card Operacional</h3>
+            <form id="createCardForm">
+                <div style="margin-bottom: var(--sp-4);">
+                    <label for="cardCol" style="display: block; font-size: var(--font-size-xs); font-weight: var(--fw-semibold); color: var(--color-text-2); margin-bottom: var(--sp-2);">Coluna</label>
+                    <select id="cardCol" class="form-input" style="width: 100%;" required></select>
+                </div>
+                <div style="margin-bottom: var(--sp-4);">
+                    <label for="cardTitle" style="display: block; font-size: var(--font-size-xs); font-weight: var(--fw-semibold); color: var(--color-text-2); margin-bottom: var(--sp-2);">Título do Card</label>
+                    <input type="text" id="cardTitle" class="form-input" style="width: 100%;" placeholder="Ex: Júlia Santos - Chile VIP" required>
+                </div>
+                <div style="margin-bottom: var(--sp-6);">
+                    <label for="cardDesc" style="display: block; font-size: var(--font-size-xs); font-weight: var(--fw-semibold); color: var(--color-text-2); margin-bottom: var(--sp-2);">Descrição</label>
+                    <textarea id="cardDesc" class="form-input" style="width: 100%; min-height: 80px;" placeholder="Detalhes do processo..."></textarea>
+                </div>
+                <div style="display: flex; gap: var(--sp-3); justify-content: flex-end;">
+                    <button type="button" class="btn" id="closeCardModalBtn" style="background: var(--color-bg); color: var(--color-text-2);">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Criar Card</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Create Column Modal -->
+    <div class="modal" id="createListModal">
+        <div class="modal-content">
+            <h3 style="font-size: var(--font-size-lg); font-weight: var(--fw-semibold); color: var(--color-text); margin-bottom: var(--sp-4);">Criar Nova Coluna</h3>
+            <form id="createListForm">
+                <div style="margin-bottom: var(--sp-6);">
+                    <label for="listName" style="display: block; font-size: var(--font-size-xs); font-weight: var(--fw-semibold); color: var(--color-text-2); margin-bottom: var(--sp-2);">Nome da Coluna</label>
+                    <input type="text" id="listName" class="form-input" style="width: 100%;" placeholder="Ex: Aguardando Vouchers" required>
+                </div>
+                <div style="display: flex; gap: var(--sp-3); justify-content: flex-end;">
+                    <button type="button" class="btn" id="closeListModalBtn" style="background: var(--color-bg); color: var(--color-text-2);">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Criar Coluna</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Rich Card Detail Modal -->
+    <div class="rich-modal" id="richCardModal">
+        <div class="rich-content">
+            <div class="rich-header">
+                <h3 id="richCardTitle" style="font-size: var(--font-size-lg); font-weight: var(--fw-semibold); color: var(--color-text);">Carregando card...</h3>
+                <div style="display: flex; gap: var(--sp-2);">
+                    <button class="btn" style="background: var(--color-error-bg); color: var(--color-error); padding: 4px 10px; font-size: 12px;" id="archiveCardBtn">Arquivar Card</button>
+                    <button class="btn" style="background: var(--color-bg); color: var(--color-text-2); padding: 4px 10px; font-size: 12px;" id="closeRichModalBtn">Fechar</button>
+                </div>
+            </div>
+
+            <div class="rich-body">
+                <!-- Left panel: Details, Checklists, Comments -->
+                <div style="display: flex; flex-direction: column; gap: var(--sp-5);">
+                    <div>
+                        <label style="font-size: 11px; font-weight: var(--fw-semibold); color: var(--color-text-3);">DESCRIÇÃO</label>
+                        <p id="richCardDesc" style="font-size: var(--font-size-sm); color: var(--color-text-2); background: var(--color-bg); padding: var(--sp-3); border-radius: var(--radius-md); margin-top: 4px; min-height: 50px;">Sem descrição.</p>
+                    </div>
+
+                    <!-- Checklists Section -->
+                    <div class="rich-section">
+                        <div class="rich-section-title" style="display:flex; justify-content:space-between; align-items:center;">
+                            <span>CHECKLISTS</span>
+                            <button class="tab-btn" style="padding:0; font-size:11px;" id="addChecklistBtn">+ Adicionar Lista</button>
+                        </div>
+                        <div id="checklistsContainer" style="display:flex; flex-direction:column; gap:var(--sp-4);"></div>
+                    </div>
+
+                    <!-- Comments Section -->
+                    <div class="rich-section">
+                        <div class="rich-section-title">COMENTÁRIOS DA EQUIPE</div>
+                        <div id="commentsContainer" style="display:flex; flex-direction:column; gap:var(--sp-3); max-height:160px; overflow-y:auto; margin-bottom:var(--sp-3);"></div>
+                        <form id="addCommentForm" style="display:flex; gap:var(--sp-2);">
+                            <input type="text" id="commentContent" class="form-input" style="flex:1;" placeholder="Digite um comentário... Use @ para mencionar alguém" required>
+                            <button type="submit" class="btn btn-primary" style="padding:0 var(--sp-4);">Enviar</button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Right panel: Assignees, Custom Fields, History -->
+                <div style="border-left: 1px solid var(--color-border); padding-left: var(--sp-6); display: flex; flex-direction: column; gap: var(--sp-5);">
+                    <!-- Assignees -->
+                    <div>
+                        <label style="font-size: 11px; font-weight: var(--fw-semibold); color: var(--color-text-3);">RESPONSÁVEIS DESIGNADOS</label>
+                        <div id="assigneesList" style="display:flex; flex-direction:column; gap:6px; margin-top:6px;"></div>
+                        <select id="addAssigneeSelect" class="form-input" style="width:100%; margin-top:6px; font-size:12px;">
+                            <option value="">+ Designar usuário...</option>
+                        </select>
+                    </div>
+
+                    <!-- Custom Fields -->
+                    <div>
+                        <label style="font-size: 11px; font-weight: var(--fw-semibold); color: var(--color-text-3);">CAMPOS PERSONALIZADOS DO QUADRO</label>
+                        <div id="customFieldsContainer" style="display:flex; flex-direction:column; gap:var(--sp-3); margin-top:6px;"></div>
+                    </div>
+
+                    <!-- History / Logs -->
+                    <div>
+                        <label style="font-size: 11px; font-weight: var(--fw-semibold); color: var(--color-text-3);">HISTÓRICO DO CARD</label>
+                        <div id="cardHistoryContainer" style="display:flex; flex-direction:column; gap:4px; max-height:120px; overflow-y:auto; font-size:11px; color:var(--color-text-3); margin-top:6px;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+    <script>
+        const boardId = {{ board_id }};
+        let token = Auth.getToken();
+        let lists = [];
+        let cards = [];
+        let activeCardId = null;
+        let usersList = [];
+        let fieldDefinitions = [];
+        let isAdmin = false;
+
+        // Check admin from user object stored in localStorage
+        const _user = Auth.getUser();
+        if (_user && _user.role === "admin") {
+            isAdmin = true;
+            document.getElementById("newListBtn").style.display = "block";
+        }
+
+        // ── XSS Helper ──
+        function esc(str) {
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML.replace(/\"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        // Modal triggers
+        const cardModal = document.getElementById("createCardModal");
+        const listModal = document.getElementById("createListModal");
+        const richModal = document.getElementById("richCardModal");
+
+        // WP-OP-UI-04: nao permitir criar card sem coluna (botao condicional)
+        const NO_LISTS_MSG = "Crie uma coluna antes de criar um card.";
+        function updateCreateCardState() {
+            const btn = document.getElementById("newCardBtn");
+            const empty = lists.length === 0;
+            btn.disabled = empty;
+            btn.title = empty ? NO_LISTS_MSG : "";
+        }
+
+        // §7.2: criar card a partir do topo OU do rodapé de cada coluna (pré-seleciona a coluna)
+        function openCreateCardModal(preListId) {
+            if (lists.length === 0) {
+                alert(NO_LISTS_MSG);
+                return;
+            }
+            const select = document.getElementById("cardCol");
+            select.innerHTML = "";
+            lists.forEach(l => {
+                select.innerHTML += `<option value="${l.id}">${esc(l.name)}</option>`;
+            });
+            if (preListId) select.value = String(preListId);
+            cardModal.classList.add("show");
+        }
+        function openListModal() { listModal.classList.add("show"); }
+
+        document.getElementById("newCardBtn").onclick = () => openCreateCardModal();
+        document.getElementById("closeCardModalBtn").onclick = () => cardModal.classList.remove("show");
+
+        document.getElementById("newListBtn").onclick = openListModal;
+        document.getElementById("closeListModalBtn").onclick = () => listModal.classList.remove("show");
+        document.getElementById("closeRichModalBtn").onclick = () => richModal.classList.remove("show");
+
+        // Fetch board details, lists, cards, users, field definitions
+        async function init() {
+            await fetchBoardInfo();
+            await fetchLists();
+            await fetchCards();
+            await fetchUsers();
+            await fetchFieldDefinitions();
+        }
+
+        async function fetchBoardInfo() {
+            let response = await fetch(`/api/operational/boards/${boardId}`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                let b = await response.json();
+                document.getElementById("boardTitle").innerText = b.name;
+            }
+        }
+
+        async function fetchLists() {
+            let response = await fetch(`/api/operational/boards/${boardId}/lists`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                lists = await response.json();
+                updateCreateCardState();
+            }
+        }
+
+        async function fetchCards() {
+            let response = await fetch(`/api/operational/boards/${boardId}/cards`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                cards = await response.json();
+                renderKanban();
+            }
+        }
+
+        async function fetchUsers() {
+            let response = await fetch("/api/users", {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                usersList = await response.json();
+                let select = document.getElementById("addAssigneeSelect");
+                usersList.forEach(u => {
+                    select.innerHTML += `<option value="${u.id}">${u.nome}</option>`;
+                });
+            }
+        }
+
+        async function fetchFieldDefinitions() {
+            let response = await fetch(`/api/operational/boards/${boardId}/field-definitions`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                fieldDefinitions = await response.json();
+            }
+        }
+
+        // Render Kanban Board
+        function renderKanban() {
+            const container = document.getElementById("kanbanContainer");
+            container.innerHTML = "";
+
+            // WP-OP-UI-04: estado vazio quando o quadro nao tem colunas
+            // (admin cai no fluxo normal e ve a coluna-fantasma "+ Criar a primeira coluna")
+            if (lists.length === 0 && !isAdmin) {
+                const emptyBox = document.createElement("div");
+                emptyBox.className = "board-empty";
+                emptyBox.innerHTML = `
+                    <div class="board-empty-icon">📋</div>
+                    <p><strong>Este quadro ainda não tem colunas.</strong></p>
+                    <p>${NO_LISTS_MSG}</p>
+                    <p class="board-empty-hint">Peça a um administrador para criar as colunas deste quadro.</p>
+                `;
+                container.appendChild(emptyBox);
+                return;
+            }
+
+            lists.forEach(l => {
+                let column = document.createElement("div");
+                column.className = "kanban-column";
+                column.innerHTML = `
+                    <div class="column-header">
+                        <span>${esc(l.name)}</span>
+                        <span class="col-count" id="col-count-${l.id}">0</span>
+                    </div>
+                    <div class="card-list" id="list-cards-${l.id}" ondragover="allowDrop(event)" ondrop="drop(event, ${l.id})"></div>
+                    <button type="button" class="kanban-add-card" onclick="openCreateCardModal(${l.id})">+ Adicionar um card</button>
+                `;
+                container.appendChild(column);
+            });
+
+            // Trello-style: coluna-fantasma para criar listas (admin)
+            if (isAdmin) {
+                const ghost = document.createElement("button");
+                ghost.type = "button";
+                ghost.className = "kanban-add-list";
+                ghost.textContent = lists.length ? "+ Adicionar outra lista" : "+ Criar a primeira coluna";
+                ghost.onclick = openListModal;
+                container.appendChild(ghost);
+            }
+
+            // Populate cards into columns
+            let countMap = {};
+            cards.forEach(c => {
+                if (c.is_archived) return;
+                
+                let listDiv = document.getElementById(`list-cards-${c.list_id}`);
+                if (!listDiv) return;
+
+                countMap[c.list_id] = (countMap[c.list_id] || 0) + 1;
+                
+                let card = document.createElement("div");
+                card.className = "kanban-card";
+                card.draggable = true;
+                card.ondragstart = (e) => drag(e, c.id);
+                card.ondragend = (e) => e.currentTarget.classList.remove("dragging");
+                card.onclick = () => openCardDetails(c.id);
+
+                // Trello-style: titulo + badges (prazo, indicador de descricao)
+                const badges = [];
+                if (c.due_date) {
+                    const overdue = new Date(c.due_date) < new Date();
+                    badges.push(`<span class="kanban-due${overdue ? ' overdue' : ''}" title="${overdue ? 'Atrasado' : 'Prazo'}">🕒 ${new Date(c.due_date).toLocaleDateString('pt-BR')}</span>`);
+                }
+                if (c.description) {
+                    badges.push('<span class="card-badge" title="Este card tem descrição">≡</span>');
+                }
+                card.innerHTML = `
+                    <div class="card-title">${esc(c.title)}</div>
+                    ${badges.length ? `<div class="card-badges">${badges.join('')}</div>` : ''}
+                `;
+                listDiv.appendChild(card);
+            });
+
+            // Update column badges
+            lists.forEach(l => {
+                document.getElementById(`col-count-${l.id}`).innerText = countMap[l.id] || 0;
+            });
+        }
+
+        // Drag & Drop
+        function allowDrop(e) { e.preventDefault(); }
+        function drag(e, cardId) { e.dataTransfer.setData("text/plain", cardId); e.currentTarget.classList.add("dragging"); }
+        async function drop(e, toListId) {
+            e.preventDefault();
+            let cardId = e.dataTransfer.getData("text/plain");
+            
+            try {
+                let response = await fetch(`/api/operational/cards/${cardId}/move`, {
+                    method: "POST",
+                    headers: { 
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${token}` 
+                    },
+                    body: JSON.stringify({ to_list_id: toListId })
+                });
+                if (response.ok) {
+                    fetchCards();
+                }
+            } catch (err) {}
+        }
+
+        // Handle Create Card
+        document.getElementById("createCardForm").onsubmit = async (e) => {
+            e.preventDefault();
+            let list_id = document.getElementById("cardCol").value;
+            let title = document.getElementById("cardTitle").value;
+            let description = document.getElementById("cardDesc").value;
+            
+            try {
+                let response = await fetch("/api/operational/cards", {
+                    method: "POST",
+                    headers: { 
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${token}` 
+                    },
+                    body: JSON.stringify({ board_id: boardId, list_id, title, description })
+                });
+                
+                if (response.ok) {
+                    cardModal.classList.remove("show");
+                    document.getElementById("createCardForm").reset();
+                    fetchCards();
+                }
+            } catch (err) {}
+        };
+
+        // Handle Create List
+        document.getElementById("createListForm").onsubmit = async (e) => {
+            e.preventDefault();
+            let name = document.getElementById("listName").value;
+            
+            try {
+                let response = await fetch("/api/operational/lists", {
+                    method: "POST",
+                    headers: { 
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${token}` 
+                    },
+                    body: JSON.stringify({ board_id: boardId, name, position: lists.length })
+                });
+                
+                if (response.ok) {
+                    listModal.classList.remove("show");
+                    document.getElementById("createListForm").reset();
+                    await fetchLists();
+                    fetchCards();
+                }
+            } catch (err) {}
+        };
+
+        // Rich Card Details Logic
+        async function openCardDetails(cardId) {
+            activeCardId = cardId;
+            let response = await fetch(`/api/operational/cards/${cardId}`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                let c = await response.json();
+                document.getElementById("richCardTitle").innerText = c.title;
+                document.getElementById("richCardDesc").innerText = c.description || 'Sem descrição.';
+                
+                await fetchChecklists();
+                await fetchComments();
+                await fetchAssignees();
+                await fetchCustomFields();
+                await fetchHistory();
+
+                richModal.classList.add("show");
+            }
+        }
+
+        async function fetchChecklists() {
+            let response = await fetch(`/api/operational/cards/${activeCardId}/checklists`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                let lists = await response.json();
+                let container = document.getElementById("checklistsContainer");
+                container.innerHTML = "";
+                
+                lists.forEach(l => {
+                    let section = document.createElement("div");
+                    section.innerHTML = `
+                        <div style="font-weight: var(--fw-semibold); font-size:12px; color:var(--color-text); margin-bottom:6px; display:flex; justify-content:space-between;">
+                            <span>${esc(l.name)}</span>
+                            <button class="tab-btn" style="padding:0; font-size:10px;" onclick="addChecklistItem(${l.id})">+ Novo Item</button>
+                        </div>
+                        <div id="checklist-items-${l.id}" style="display:flex; flex-direction:column; gap:4px; padding-left:10px;"></div>
+                    `;
+                    container.appendChild(section);
+                    fetchChecklistItems(l.id);
+                });
+            }
+        }
+
+        async function fetchChecklistItems(checklistId) {
+            let response = await fetch(`/api/operational/checklists/${checklistId}/items`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                let items = await response.json();
+                let listDiv = document.getElementById(`checklist-items-${checklistId}`);
+                listDiv.innerHTML = "";
+                
+                items.forEach(i => {
+                    let div = document.createElement("div");
+                    div.style.display = "flex";
+                    div.style.alignItems = "center";
+                    div.style.gap = "8px";
+                    div.style.fontSize = "12px";
+                    div.innerHTML = `
+                        <input type="checkbox" ${i.is_checked ? 'checked' : ''} onclick="toggleChecklistItem(${i.id})">
+                        <span style="${i.is_checked ? 'text-decoration: line-through; color: var(--color-text-4);' : ''}">${esc(i.name)}</span>
+                    `;
+                    listDiv.appendChild(div);
+                });
+            }
+        }
+
+        async function toggleChecklistItem(itemId) {
+            let response = await fetch(`/api/operational/checklist-items/${itemId}/toggle`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                fetchChecklists();
+            }
+        }
+
+        async function addChecklistItem(checklistId) {
+            let name = prompt("Nome da nova tarefa:");
+            if (!name) return;
+            
+            let response = await fetch(`/api/operational/checklists/${checklistId}/items`, {
+                method: "POST",
+                headers: { 
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}` 
+                },
+                body: JSON.stringify({ name })
+            });
+            if (response.ok) {
+                fetchChecklists();
+            }
+        }
+
+        document.getElementById("addChecklistBtn").onclick = async () => {
+            let name = prompt("Nome da lista de verificação:");
+            if (!name) return;
+            
+            let response = await fetch(`/api/operational/cards/${activeCardId}/checklists`, {
+                method: "POST",
+                headers: { 
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}` 
+                },
+                body: JSON.stringify({ name })
+            });
+            if (response.ok) {
+                fetchChecklists();
+            }
+        };
+
+        // Comments
+        async function fetchComments() {
+            let response = await fetch(`/api/operational/cards/${activeCardId}/comments`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                let comments = await response.json();
+                let container = document.getElementById("commentsContainer");
+                container.innerHTML = "";
+                
+                comments.forEach(c => {
+                    let div = document.createElement("div");
+                    div.style.background = "var(--color-bg)";
+                    div.style.padding = "6px 10px";
+                    div.style.borderRadius = "6px";
+                    div.style.fontSize = "12px";
+                    div.innerHTML = `
+                        <div style="font-weight:var(--fw-semibold); font-size:11px; margin-bottom:2px;">User #${c.user_id}</div>
+                        <div>${esc(c.content)}</div>
+                    `;
+                    container.appendChild(div);
+                });
+            }
+        }
+
+        document.getElementById("addCommentForm").onsubmit = async (e) => {
+            e.preventDefault();
+            let content = document.getElementById("commentContent").value;
+            
+            let response = await fetch(`/api/operational/cards/${activeCardId}/comments`, {
+                method: "POST",
+                headers: { 
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}` 
+                },
+                body: JSON.stringify({ content })
+            });
+            
+            if (response.ok) {
+                document.getElementById("commentContent").value = "";
+                fetchComments();
+                fetchHistory(); // comments generate history too
+            }
+        };
+
+        // Assignees
+        async function fetchAssignees() {
+            let response = await fetch(`/api/operational/cards/${activeCardId}/assignees`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                let links = await response.json();
+                let container = document.getElementById("assigneesList");
+                container.innerHTML = "";
+                
+                links.forEach(l => {
+                    let u = usersList.find(user => user.id === l.user_id);
+                    let name = u ? u.nome : `User #${l.user_id}`;
+                    let div = document.createElement("div");
+                    div.style.display = "flex";
+                    div.style.justifyContent = "space-between";
+                    div.style.alignItems = "center";
+                    div.style.fontSize = "12px";
+                    div.innerHTML = `
+                        <span>👤 ${name}</span>
+                        <button style="background:none; border:none; color:var(--color-error); cursor:pointer; font-size:11px;" onclick="removeAssignee(${l.user_id})">Remover</button>
+                    `;
+                    container.appendChild(div);
+                });
+            }
+        }
+
+        document.getElementById("addAssigneeSelect").onchange = async (e) => {
+            let userId = e.target.value;
+            if (!userId) return;
+
+            let response = await fetch(`/api/operational/cards/${activeCardId}/assignees/${userId}`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                e.target.value = "";
+                fetchAssignees();
+                fetchHistory();
+            }
+        };
+
+        async function removeAssignee(userId) {
+            let response = await fetch(`/api/operational/cards/${activeCardId}/assignees/${userId}/remove`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                fetchAssignees();
+                fetchHistory();
+            }
+        }
+
+        // Custom Fields
+        async function fetchCustomFields() {
+            let response = await fetch(`/api/operational/cards/${activeCardId}/field-values`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            let values = [];
+            if (response.ok) {
+                values = await response.json();
+            }
+
+            let container = document.getElementById("customFieldsContainer");
+            container.innerHTML = "";
+
+            if (fieldDefinitions.length === 0) {
+                container.innerHTML = "<div style='font-size:11px; color:var(--color-text-3);'>Nenhum campo estruturado cadastrado no quadro.</div>";
+                return;
+            }
+
+            fieldDefinitions.forEach(def => {
+                let valObj = values.find(v => v.definition_id === def.id);
+                let currentVal = "";
+                if (valObj) {
+                    if (def.field_type === "boolean") currentVal = valObj.value_boolean;
+                    else if (def.field_type === "date") currentVal = valObj.value_date ? valObj.value_date.substring(0, 10) : "";
+                    else currentVal = valObj.value_text || "";
+                }
+
+                let div = document.createElement("div");
+                div.style.fontSize = "12px";
+                
+                let inputHtml = "";
+                if (def.field_type === "boolean") {
+                    inputHtml = `<input type="checkbox" id="field-${def.id}" ${currentVal ? 'checked' : ''} onchange="saveCustomField(${def.id}, 'boolean')">`;
+                } else if (def.field_type === "date") {
+                    inputHtml = `<input type="date" id="field-${def.id}" class="form-input" style="width:100%; padding:4px;" value="${currentVal}" onchange="saveCustomField(${def.id}, 'date')">`;
+                } else if (def.field_type === "select" && def.select_options) {
+                    let opts = def.select_options;
+                    inputHtml = `<select id="field-${def.id}" class="form-input" style="width:100%; padding:4px;" onchange="saveCustomField(${def.id}, 'select')">
+                        <option value="">Selecione...</option>
+                        ${opts.map(o => `<option value="${o}" ${o === currentVal ? 'selected' : ''}>${o}</option>`).join('')}
+                    </select>`;
+                } else {
+                    inputHtml = `<input type="text" id="field-${def.id}" class="form-input" style="width:100%; padding:4px;" value="${currentVal}" onblur="saveCustomField(${def.id}, 'text')">`;
+                }
+
+                div.innerHTML = `
+                    <div style="font-weight:var(--fw-medium); margin-bottom:2px; font-size:11px;">${def.name}</div>
+                    ${inputHtml}
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        async function saveCustomField(definitionId, type) {
+            let input = document.getElementById(`field-${definitionId}`);
+            let body = {};
+            
+            if (type === "boolean") body.value_boolean = input.checked;
+            else if (type === "date") body.value_date = input.value ? new Date(input.value) : null;
+            else body.value_text = input.value;
+
+            await fetch(`/api/operational/cards/${activeCardId}/field-values/${definitionId}`, {
+                method: "POST",
+                headers: { 
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}` 
+                },
+                body: JSON.stringify(body)
+            });
+        }
+
+        // History
+        async function fetchHistory() {
+            let response = await fetch(`/api/operational/cards/${activeCardId}/activity-logs`, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                let logs = await response.json();
+                let container = document.getElementById("cardHistoryContainer");
+                container.innerHTML = "";
+                
+                logs.forEach(l => {
+                    let date = new Date(l.created_at).toLocaleString('pt-BR');
+                    container.innerHTML += `<div>[${date}] <strong>${l.action}</strong> por User #${l.user_id}</div>`;
+                });
+            }
+        }
+
+        // Archive Card
+        document.getElementById("archiveCardBtn").onclick = async () => {
+            if (!confirm("Deseja realmente arquivar este card operacional?")) return;
+            
+            let response = await fetch(`/api/operational/cards/${activeCardId}/archive`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            if (response.ok) {
+                richModal.classList.remove("show");
+                fetchCards();
+            }
+        };
+
+        init();
+    </script>
+{% endblock %}

@@ -8,13 +8,16 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.config import PROJECT_NAME, VERSION, DESCRIPTION, API_PREFIX, ENVIRONMENT
 from app.database import engine, Base
+from app.limiter import limiter
 from app.routers import auth, users, leads, tags, pipeline, segments, teams, pages, tasks, analytics, ai
+from app.routers import operational_boards, operational_cards, operational_flow, operational_checklists, operational_comments, operational_notifications, operational_pending, operational_pages
+from app.routers import internal_tasks  # Gestão Interna (WP-GI)
 from app.models.lead import Lead  # noqa: F401
 from app.models.tag import Tag, lead_tags  # noqa: F401
 from app.models.pipeline import Funnel, FunnelEntry, LeadHistory  # noqa: F401
@@ -22,6 +25,11 @@ from app.models.segment import Segment  # noqa: F401
 from app.models.team import Team, user_teams  # noqa: F401
 from app.models.task import Task  # noqa: F401
 from app.models.chat import ChatSession, ChatMessage  # noqa: F401
+import app.models.operational.board  # noqa: F401 — Operational Kanban models
+import app.models.operational.card  # noqa: F401
+import app.models.operational.checklist  # noqa: F401
+import app.models.operational.notification  # noqa: F401
+from app.models.internal_task import InternalTask  # noqa: F401 — Gestão Interna (WP-GI)
 from app.seed import seed_database
 
 logger = logging.getLogger(__name__)
@@ -54,39 +62,9 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
     # Startup
     Base.metadata.create_all(bind=engine)
-    # Inline migration: add new columns that create_all won't add to existing tables
-    from sqlalchemy import text, inspect
-    inspector = inspect(engine)
-    if 'leads' in inspector.get_table_names():
-        existing_cols = [c['name'] for c in inspector.get_columns('leads')]
-        with engine.begin() as conn:
-            if 'dias_por_destino' not in existing_cols:
-                conn.execute(text("ALTER TABLE leads ADD COLUMN dias_por_destino JSON DEFAULT NULL"))
-                logger.info("✅ Migration: added 'dias_por_destino' column to leads table")
-            
-            # Allow tasks to be assigned to AI (user_id = NULL)
-            try:
-                conn.execute(text("ALTER TABLE tasks ALTER COLUMN user_id DROP NOT NULL"))
-            except Exception as e:
-                logger.warning(f"⚠️ Could not alter user_id in tasks: {e}")
-            
-            # Add resultado_ia column for AI task results
-            try:
-                conn.execute(text("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS resultado_ia TEXT DEFAULT NULL"))
-                logger.info("✅ Migration: resultado_ia column OK")
-            except Exception as e:
-                logger.warning(f"⚠️ Could not add resultado_ia: {e}")
-            
-            # Criando índices de performance com segurança (IF NOT EXISTS)
-            try:
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_leads_created_at ON leads (created_at)"))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_status ON tasks (status)"))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_user_id ON tasks (user_id)"))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_lead_id ON tasks (lead_id)"))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_data_vencimento ON tasks (data_vencimento)"))
-                logger.info("✅ Migration: Performance indexes verified/created")
-            except Exception as e:
-                logger.warning(f"⚠️ Index creation failed (might already exist): {e}")
+    # Schema drift de bancos JA EXISTENTES (ALTER TABLE / indices) foi movido para
+    # migrations manuais idempotentes em `migrations/` (DATA-01). NAO rodamos ALTER
+    # TABLE no startup. Bancos novos sao criados completos pelo create_all() acima.
     seed_database()  # Guarded internally by SEED_INITIAL_ADMIN config flag
     _cleanup_old_uploads(max_age_hours=24)
     yield
@@ -102,10 +80,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Rate Limiter
-limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
+# Rate Limiter — instância única em app/limiter.py (WP-SEC-03)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# SlowAPIMiddleware aplica o default_limits global (200/minute por IP) a todas as rotas.
+# Limites por rota (ex.: login 5/minute) continuam via @limiter.limit no router.
+app.add_middleware(SlowAPIMiddleware)
 
 # CORS — Restrito em produção, aberto em dev
 _allowed_origins = ["*"] if ENVIRONMENT == "development" else [
@@ -148,6 +128,16 @@ app.include_router(teams.router)
 app.include_router(tasks.router)
 app.include_router(analytics.router)
 app.include_router(ai.router)
+# Include operational Kanban routers (OP-06 integration)
+app.include_router(operational_boards.router)
+app.include_router(operational_cards.router)
+app.include_router(operational_flow.router)
+app.include_router(operational_checklists.router)
+app.include_router(operational_comments.router)
+app.include_router(operational_notifications.router)
+app.include_router(operational_pending.router)
+app.include_router(operational_pages.router)
+app.include_router(internal_tasks.router)
 # Include page routes (must be last to not conflict with API routes)
 app.include_router(pages.router)
 

@@ -25,6 +25,22 @@ async def login_page(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
 
 
+@router.get("/hub", response_class=HTMLResponse, include_in_schema=False)
+async def hub_page(request: Request):
+    """Serve the sector hub (post-login landing) — WP-UX-02."""
+    if not _require_cookie(request):
+        return RedirectResponse(url="/login", status_code=302)
+    return templates.TemplateResponse("hub.html", {"request": request})
+
+
+@router.get("/gestao/pendencias", response_class=HTMLResponse, include_in_schema=False)
+async def gestao_pendencias_page(request: Request):
+    """Serve the internal tasks hub (Gestão Interna) — WP-GI-03."""
+    if not _require_cookie(request):
+        return RedirectResponse(url="/login?next=/gestao/pendencias", status_code=302)
+    return templates.TemplateResponse("gestao/pendencias.html", {"request": request})
+
+
 @router.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
 async def dashboard_page(request: Request):
     """Serve the dashboard page."""

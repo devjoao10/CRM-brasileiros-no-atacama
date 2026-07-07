@@ -22,6 +22,8 @@ from app.models.auto_reply import AutoReply, BusinessHours
 from app.models.api_config import ApiConfig
 from app.services import whatsapp
 from app.services import crm as crm_service
+from app.services.outbound import record_outbound_message
+from app.models.media_asset import MediaAsset
 
 logger = logging.getLogger(__name__)
 
@@ -182,18 +184,18 @@ async def _send_auto_reply_if_needed(
     if not _is_within_business_hours(db):
         message = _get_auto_reply("out_of_hours", db)
         if message:
-            await whatsapp.send_text_message(phone, message, db)
-            _save_outbound_message(conversation, message, db)
-            logger.info(f"Auto-reply (fora do expediente) enviado para {phone}")
+            wa_response = await whatsapp.send_text_message(phone, message, db)
+            _save_outbound_message(conversation, message, db, wa_response)
+            logger.info(f"Auto-reply (fora do expediente) processado para {phone}")
             return
 
     # New conversation — send greeting
     if is_new_conversation:
         message = _get_auto_reply("greeting", db)
         if message:
-            await whatsapp.send_text_message(phone, message, db)
-            _save_outbound_message(conversation, message, db)
-            logger.info(f"Auto-reply (saudação) enviado para {phone}")
+            wa_response = await whatsapp.send_text_message(phone, message, db)
+            _save_outbound_message(conversation, message, db, wa_response)
+            logger.info(f"Auto-reply (saudação) processado para {phone}")
             return
 
     # Existing conversation without attendant — send waiting message
@@ -213,22 +215,20 @@ async def _send_auto_reply_if_needed(
                 if time_since < timedelta(hours=1):
                     return  # Don't spam the same waiting message
 
-            await whatsapp.send_text_message(phone, message, db)
-            _save_outbound_message(conversation, message, db)
-            logger.info(f"Auto-reply (aguardando) enviado para {phone}")
+            wa_response = await whatsapp.send_text_message(phone, message, db)
+            _save_outbound_message(conversation, message, db, wa_response)
+            logger.info(f"Auto-reply (aguardando) processado para {phone}")
 
 
-def _save_outbound_message(conversation: Conversation, content: str, db: Session):
-    """Save an auto-reply message to the database."""
-    message = Message(
-        conversation_id=conversation.id,
-        direction="outbound",
-        content=content,
-        msg_type="text",
-        status="sent",
+def _save_outbound_message(conversation: Conversation, content: str, db: Session, wa_response):
+    """
+    Save an auto-reply message to the database.
+    CONV-08b: status fiel ao resultado do envio (nunca 'sent' em falha).
+    """
+    return record_outbound_message(
+        db, conversation, content, "text", wa_response,
+        update_preview=False,
     )
-    db.add(message)
-    db.commit()
 
 
 async def _process_incoming_message(msg: dict, value: dict, db: Session):
@@ -241,6 +241,7 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
     # Extract content based on message type
     content = ""
     media_url = None
+    media_meta = None  # CONV-01: metadados Meta p/ media_assets (so tipos de midia)
 
     if msg_type == "text":
         content = msg.get("text", {}).get("body", "")
@@ -248,6 +249,14 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
         media_data = msg.get(msg_type, {})
         content = media_data.get("caption", f"[{msg_type.upper()}]")
         media_url = media_data.get("id")  # Media ID (needs download via Graph API)
+        # CONV-01: o payload da Meta JA traz metadados publicos — capturar em vez
+        # de descartar (mime_type/sha256 sempre; filename so em document).
+        media_meta = {
+            "meta_media_id": media_data.get("id"),
+            "meta_mime_type": media_data.get("mime_type"),
+            "meta_sha256": media_data.get("sha256"),
+            "filename": media_data.get("filename"),
+        }
     elif msg_type == "location":
         loc = msg.get("location", {})
         content = f"Localização: {loc.get('latitude', '')}, {loc.get('longitude', '')}"
@@ -324,6 +333,25 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
     )
     db.add(message)
     db.commit()
+
+    # CONV-01: persiste a referencia de midia em transacao PROPRIA — uma falha
+    # aqui nunca pode desfazer/perder a mensagem inbound ja commitada.
+    if media_meta and media_meta.get("meta_media_id"):
+        try:
+            db.add(MediaAsset(
+                message_id=message.id,
+                meta_media_id=media_meta["meta_media_id"],
+                meta_mime_type=media_meta["meta_mime_type"],
+                meta_sha256=media_meta["meta_sha256"],
+                filename=media_meta["filename"],
+                status="referenced",
+            ))
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.warning(
+                f"Falha ao registrar media_asset da mensagem {message.id}: {type(e).__name__}"
+            )
 
     logger.info(f"Mensagem recebida de {sender_name} ({whatsapp_number}): {content[:50]}")
 
@@ -497,28 +525,30 @@ async def _forward_to_agent(conversation: Conversation, message_text: str, db: S
                         sub = re.split(r'\n\s*\n', raw)
                         partes.extend([p.strip() for p in sub if p.strip()])
 
+                    # CONV-08b: cada parte e persistida com status fiel ao envio;
+                    # preview/unread so mudam se ao menos uma parte foi aceita.
+                    last_ok_part = None
                     for i, parte in enumerate(partes):
                         # Send each part as a separate WhatsApp message
-                        await whatsapp.send_text_message(conversation.whatsapp, parte, db)
+                        wa_response = await whatsapp.send_text_message(conversation.whatsapp, parte, db)
 
                         # Small delay between messages for natural feel
                         if i < len(partes) - 1:
                             import asyncio
                             await asyncio.sleep(1.2)
 
-                        # Save each part as outbound message
-                        agent_msg = Message(
-                            conversation_id=conversation.id,
-                            direction="outbound",
-                            content=parte,
-                            msg_type="text",
-                            status="sent",
+                        # Save each part as outbound message (status real)
+                        agent_msg = record_outbound_message(
+                            db, conversation, parte, "text", wa_response,
+                            update_preview=False, commit=False,
                         )
-                        db.add(agent_msg)
+                        if agent_msg.status == "sent":
+                            last_ok_part = parte
 
-                    # Update conversation preview with last part
-                    conversation.ultimo_msg = partes[-1][:200]
-                    conversation.unread_count = 0
+                    # Update conversation preview only with the last SENT part
+                    if last_ok_part is not None:
+                        conversation.ultimo_msg = last_ok_part[:200]
+                        conversation.unread_count = 0
                     db.commit()
 
                     logger.info(f"Resposta da Bia ({len(partes)} msgs) para {conversation.whatsapp}")

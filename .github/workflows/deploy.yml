@@ -1,12 +1,50 @@
-name: Deploy to VPS
+name: Deploy to VPS (manual, gated)
+
+# WP-OPS-01 (stabilization): o disparo AUTOMATICO em push para `main` foi REMOVIDO.
+# Merge em main NAO deploya mais sozinho. Deploy agora e MANUAL e explicito
+# (workflow_dispatch), exigindo confirmacao e o cumprimento dos gates abaixo.
+#
+# GATES OBRIGATORIOS antes de rodar (responsabilidade humana):
+#   1. Backup fresco do PostgreSQL verificado (pg_dump + checksum + offsite)
+#   2. Revisao das migrations e execucao controlada (m001, m002) com aprovacao
+#   3. Revisao de Docker/Traefik (CRM so via proxy)
+#   4. Smoke visual + smoke de auth (login/logout, 429) + smoke do board operacional
+#   5. Plano de rollback definido
+#   6. Aprovacao humana explicita
+# Ver TECNOLOGIA_E_SISTEMAS/02_INFRAESTRUTURA_E_DEPLOY/CHECKLIST_PRE_DEPLOY.md
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Digite DEPLOY para confirmar que os gates pre-deploy foram cumpridos (backup, migrations, smoke, rollback, aprovacao).'
+        required: true
+        default: ''
+      migrations_reviewed:
+        description: 'Migrations revisadas e aplicadas com backup? (yes/no)'
+        required: true
+        default: 'no'
 
 jobs:
-  deploy:
+  guard:
     runs-on: ubuntu-latest
+    steps:
+      - name: Verificar confirmacao dos gates
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "DEPLOY" ]; then
+            echo "::error::Confirmacao ausente. Digite DEPLOY para prosseguir (apos cumprir os gates)."
+            exit 1
+          fi
+          if [ "${{ github.event.inputs.migrations_reviewed }}" != "yes" ]; then
+            echo "::error::Migrations nao confirmadas. Aplique m001/m002 com backup antes do deploy."
+            exit 1
+          fi
+          echo "Gates confirmados manualmente. Prosseguindo."
+
+  deploy:
+    needs: guard
+    runs-on: ubuntu-latest
+    environment: production   # exige aprovacao/regras do environment 'production' no GitHub
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
@@ -19,4 +57,4 @@ jobs:
             git pull origin main
             docker compose build --no-cache
             docker compose up -d
-            echo "✅ Deploy concluído em $(date)"
+            echo "Deploy concluido em $(date)"

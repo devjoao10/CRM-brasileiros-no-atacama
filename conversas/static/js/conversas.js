@@ -11,6 +11,8 @@
     let activeConversation = null;
     let activeFilter = 'all';
     let activeResponsavelFilter = '';
+    let activeTagFilter = '';   // CONV-05
+    let allTags = [];           // CONV-05
     let searchTerm = '';
     let pollInterval = null;
     let usersCache = [];
@@ -26,6 +28,7 @@
 
         loadUsers();
         setupEventListeners();
+        loadTags();          // CONV-05
         loadConversations();
 
         // Poll for new messages every 5 seconds
@@ -56,12 +59,19 @@
 
         // Populate filter dropdown
         const filterSelect = document.getElementById('filterResponsavel');
+        const atendenteSelect = document.getElementById('selectAtendente'); // CONV-07
         // Keep first two options (Todos / Agente IA)
         usersCache.forEach(u => {
             const opt = document.createElement('option');
             opt.value = u.id;
             opt.textContent = u.nome;
             filterSelect.appendChild(opt);
+            if (atendenteSelect) {
+                const opt2 = document.createElement('option');
+                opt2.value = u.id;
+                opt2.textContent = u.nome;   // textContent = seguro
+                atendenteSelect.appendChild(opt2);
+            }
         });
 
         // Populate responsavel select in panel
@@ -94,9 +104,9 @@
         });
 
         // Status filters
-        document.querySelectorAll('.conv-filters button').forEach(btn => {
+        document.querySelectorAll('.conv-filter-tabs button').forEach(btn => {
             btn.addEventListener('click', () => {
-                document.querySelectorAll('.conv-filters button').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.conv-filter-tabs button').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 activeFilter = btn.dataset.filter;
                 renderConversationList();
@@ -107,6 +117,37 @@
         document.getElementById('filterResponsavel').addEventListener('change', (e) => {
             activeResponsavelFilter = e.target.value;
             loadConversations();
+        });
+
+        // CONV-05: tag filter + aplicar/criar tag
+        document.getElementById('filterTag').addEventListener('change', (e) => {
+            activeTagFilter = e.target.value;
+            loadConversations();
+        });
+        document.getElementById('selectAddTag').addEventListener('change', async (e) => {
+            const tagId = Number(e.target.value);
+            e.target.value = '';
+            if (!activeConversation || !tagId) return;
+            const resp = await Auth.apiRequest(
+                `/api/conversations/${activeConversation.id}/tags/${tagId}`, { method: 'POST' });
+            if (resp && resp.ok) {
+                activeConversation.tags = await resp.json();
+                renderConvTags();
+                loadConversations();
+            } else {
+                showToast('Falha ao aplicar a tag.');
+            }
+        });
+        // CONV-TAGS-UX-01: "+ Nova" abre o MODAL interno (nada de prompt nativo)
+        document.getElementById('btnNewTag').addEventListener('click', openTagModal);
+        document.getElementById('btnTagModalClose').addEventListener('click', closeTagModal);
+        document.getElementById('btnTagModalCancel').addEventListener('click', closeTagModal);
+        document.getElementById('tagModalOverlay').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) closeTagModal();  // clique fora fecha
+        });
+        document.getElementById('btnTagModalCreate').addEventListener('click', createAndApplyTagFromModal);
+        document.getElementById('tagModalName').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); createAndApplyTagFromModal(); }
         });
 
         // Responsavel selector in panel
@@ -242,6 +283,63 @@
         // Send message
         document.getElementById('btnSend').addEventListener('click', sendMessage);
 
+        // CONV-BF-UI-03: drag-to-scroll das abas de filtro — ESCOPADO ao
+        // container das abas (nao sequestra eventos globais; arrasto real
+        // nao dispara troca de aba; roda do mouse rola horizontalmente).
+        (function initTabsDragScroll() {
+            const firstTab = document.querySelector('.conv-filter-tabs button[data-filter]');
+            const bar = firstTab ? firstTab.parentElement : null;
+            if (!bar) return;
+            let isDown = false, startX = 0, startScroll = 0, dragged = false;
+            bar.addEventListener('mousedown', (e) => {
+                isDown = true;
+                dragged = false;
+                startX = e.pageX;
+                startScroll = bar.scrollLeft;
+            });
+            window.addEventListener('mousemove', (e) => {
+                if (!isDown) return;
+                const dx = e.pageX - startX;
+                if (Math.abs(dx) > 5) dragged = true;
+                bar.scrollLeft = startScroll - dx;
+            });
+            window.addEventListener('mouseup', () => { isDown = false; });
+            // clique que na verdade foi arrasto nao muda o filtro
+            bar.addEventListener('click', (e) => {
+                if (dragged) {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    dragged = false;
+                }
+            }, true);
+            bar.addEventListener('wheel', (e) => {
+                if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+                    bar.scrollLeft += e.deltaY;
+                    e.preventDefault();
+                }
+            }, { passive: false });
+        })();
+
+        // CONV-06: assumir/liberar conversa
+        document.getElementById('btnClaim').addEventListener('click', claimOrRelease);
+
+        // CONV-07: atribuicao dirigida + notas internas
+        document.getElementById('selectAtendente').addEventListener('change', (e) => {
+            assignTo(e.target.value);
+        });
+        document.getElementById('btnAddNote').addEventListener('click', addNote);
+
+        // CONV-03: anexo de midia
+        document.getElementById('btnAttach').addEventListener('click', () => {
+            if (!activeConversation) { showToast('Abra uma conversa primeiro'); return; }
+            document.getElementById('mediaFileInput').click();
+        });
+        document.getElementById('mediaFileInput').addEventListener('change', async function () {
+            const file = this.files && this.files[0];
+            this.value = ''; // permite reanexar o mesmo arquivo
+            if (file) await sendMediaFile(file);
+        });
+
         // Textarea: Enter to send, Shift+Enter for newline
         document.getElementById('msgInput').addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -335,6 +433,9 @@
         let url = '/api/conversations?limit=200';
         if (activeResponsavelFilter !== '') {
             url += `&responsavel_id=${activeResponsavelFilter}`;
+        }
+        if (activeTagFilter !== '') {
+            url += `&tag_id=${Number(activeTagFilter)}`;  // CONV-05
         }
 
         const resp = await Auth.apiRequest(url);
@@ -470,15 +571,502 @@
         if (resp && resp.ok) {
             loadChat(activeConversation.id);
             loadConversations();
+        } else {
+            // (CONV-08b: mensagens 'failed' persistidas exibem botao de reenvio no chat)
+            // CONV-08: o envio falhou. O backend NAO marca a mensagem como 'sent' e a
+            // persiste como 'failed'. Recarrega o chat para exibir o status de falha
+            // (X vermelho) e avisa o operador com uma mensagem segura (sem segredos).
+            let detail = 'Falha ao enviar a mensagem. Tente novamente.';
+            try {
+                if (resp) {
+                    const err = await resp.json();
+                    if (err && err.detail) detail = err.detail;
+                }
+            } catch (_) { /* resposta sem corpo JSON */ }
+            showToast(detail);
+            loadChat(activeConversation.id);
         }
     }
+
+    // ─── CONV-07: Atribuicao dirigida + notas ────
+    async function assignTo(userId) {
+        if (!activeConversation) return;
+        const id = Number(userId);
+        const url = id === 0
+            ? `/api/conversations/${activeConversation.id}/release`
+            : `/api/conversations/${activeConversation.id}/assign`;
+        const opts = id === 0
+            ? { method: 'POST' }
+            : { method: 'POST', body: JSON.stringify({ user_id: id }) };
+        const resp = await Auth.apiRequest(url, opts);
+        if (resp && resp.ok) {
+            const updated = await resp.json();
+            activeConversation.atendente_id = updated.atendente_id;
+            updateClaimButton(activeConversation);
+            showToast(id === 0 ? 'Conversa devolvida à fila' : 'Conversa atribuída');
+            loadConversations();
+        } else {
+            let detail = 'Falha ao atribuir.';
+            try { const e = await resp.json(); if (e && e.detail) detail = e.detail; } catch (_) { }
+            showToast(detail);
+        }
+    }
+
+    // Notas internas: conteudo e autor SEMPRE escapados; nunca vao ao WhatsApp.
+    async function loadNotes() {
+        const box = document.getElementById('notesList');
+        if (!activeConversation) { box.innerHTML = ''; return; }
+        const resp = await Auth.apiRequest(`/api/conversations/${activeConversation.id}/notes`);
+        if (!resp || !resp.ok) { box.innerHTML = ''; return; }
+        const notes = await resp.json();
+        const me = Auth.getUser() || {};
+        box.innerHTML = notes.length ? notes.map(n => {
+            const when = new Date(n.created_at).toLocaleString('pt-BR',
+                { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+            const del = n.user_id === me.id
+                ? ` <span onclick="window._deleteNote(${Number(n.id)})" style="cursor:pointer; color:var(--error); font-weight:700;">&times;</span>`
+                : '';
+            return `<div style="background:#FEF9C3; border:1px solid #FDE047; border-radius:6px; padding:6px 8px; font-size:11px;">
+                <div style="color:var(--dark-400); font-size:10px;">${escapeHtml(n.user_nome || 'Equipe')} · ${when}${del}</div>
+                <div style="white-space:pre-wrap;">${escapeHtml(n.content)}</div>
+            </div>`;
+        }).join('') : '<span style="font-size:11px; color:var(--dark-400);">Sem notas</span>';
+    }
+
+    window._deleteNote = async function (noteId) {
+        if (!activeConversation) return;
+        const resp = await Auth.apiRequest(
+            `/api/conversations/${activeConversation.id}/notes/${Number(noteId)}`, { method: 'DELETE' });
+        if (resp && (resp.ok || resp.status === 204)) loadNotes();
+        else showToast('Falha ao remover a nota.');
+    };
+
+    async function addNote() {
+        if (!activeConversation) return;
+        const input = document.getElementById('noteInput');
+        const content = (input.value || '').trim();
+        if (!content) return;
+        const resp = await Auth.apiRequest(`/api/conversations/${activeConversation.id}/notes`, {
+            method: 'POST',
+            body: JSON.stringify({ content: content }),
+        });
+        if (resp && resp.ok) {
+            input.value = '';
+            loadNotes();
+        } else {
+            showToast('Falha ao salvar a nota.');
+        }
+    }
+
+    // ─── CONV-TAGS-UX-01: modal de gestao de tags ─────────────────────────
+    // CRM e a fonte de verdade para conversa VINCULADA (lead_id>0): aplicar/
+    // remover/criar aqui replica no lead (endpoints do CONV-TAGS-SYNC-01);
+    // sem lead, as tags sao LOCAIS e o modal avisa — nunca finge sync.
+    function setTagModalStatus(text, isError) {
+        const el = document.getElementById('tagModalStatus');
+        el.textContent = text || '';
+        el.className = 'tag-modal-status' + (isError ? ' error' : '');
+    }
+
+    function openTagModal() {
+        if (!activeConversation) { showToast('Abra uma conversa primeiro'); return; }
+        document.getElementById('tagModalOverlay').classList.add('open');
+        setTagModalStatus('');
+        document.getElementById('tagModalName').value = '';
+        renderTagModal();
+    }
+
+    function closeTagModal() {
+        document.getElementById('tagModalOverlay').classList.remove('open');
+    }
+
+    function renderTagModal() {
+        if (!activeConversation) return;
+        const linked = Number(activeConversation.lead_id) > 0;
+        document.getElementById('tagModalTitle').textContent =
+            linked ? 'Gerenciar tags do lead' : 'Gerenciar tags da conversa';
+        document.getElementById('tagModalNotice').style.display = linked ? 'none' : 'block';
+
+        const applied = activeConversation.tags || [];
+        const appliedIds = new Set(applied.map(t => t.id));
+        const appliedBox = document.getElementById('tagModalApplied');
+        appliedBox.innerHTML = applied.length
+            ? applied.map(t =>
+                `<span class="tag-chip" style="border-color:${safeTagColor(t.cor)};">` +
+                `<span class="chip-dot" style="background:${safeTagColor(t.cor)};"></span>` +
+                `${escapeHtml(t.nome)}` +
+                ` <span class="chip-x" onclick="window._modalRemoveTag(${Number(t.id)})" title="Remover">&times;</span></span>`
+            ).join('')
+            : '<span class="tag-modal-empty">Nenhuma tag aplicada</span>';
+
+        const available = (allTags || []).filter(t => !appliedIds.has(t.id));
+        const availBox = document.getElementById('tagModalAvailable');
+        availBox.innerHTML = available.length
+            ? available.map(t =>
+                `<span class="tag-chip clickable" onclick="window._modalApplyTag(${Number(t.id)})" title="Aplicar tag">` +
+                `<span class="chip-dot" style="background:${safeTagColor(t.cor)};"></span>` +
+                `${escapeHtml(t.nome)}</span>`
+            ).join('')
+            : '<span class="tag-modal-empty">Todas as tags já estão aplicadas</span>';
+    }
+
+    async function refreshAfterTagChange(tagsFromApi) {
+        activeConversation.tags = tagsFromApi;
+        renderConvTags();
+        renderTagModal();
+        loadConversations();
+    }
+
+    window._modalApplyTag = async function (tagId) {
+        if (!activeConversation) return;
+        setTagModalStatus('Aplicando tag...');
+        const resp = await Auth.apiRequest(
+            `/api/conversations/${activeConversation.id}/tags/${Number(tagId)}`, { method: 'POST' });
+        if (resp && resp.ok) {
+            await refreshAfterTagChange(await resp.json());
+            setTagModalStatus('');
+            showToast('Tag aplicada');
+        } else {
+            setTagModalStatus('Não foi possível aplicar a tag. Tente novamente.', true);
+        }
+    };
+
+    window._modalRemoveTag = async function (tagId) {
+        if (!activeConversation) return;
+        setTagModalStatus('Removendo tag...');
+        const resp = await Auth.apiRequest(
+            `/api/conversations/${activeConversation.id}/tags/${Number(tagId)}`, { method: 'DELETE' });
+        if (resp && resp.ok) {
+            await refreshAfterTagChange(await resp.json());
+            setTagModalStatus('');
+            showToast('Tag removida');
+        } else {
+            setTagModalStatus('Não foi possível remover a tag. Tente novamente.', true);
+        }
+    };
+
+    async function createAndApplyTagFromModal() {
+        if (!activeConversation) return;
+        const nameInput = document.getElementById('tagModalName');
+        const nome = (nameInput.value || '').trim();
+        const cor = document.getElementById('tagModalColor').value || '#3B82F6';
+        if (!nome) { setTagModalStatus('Digite o nome da tag.', true); return; }
+
+        const btn = document.getElementById('btnTagModalCreate');
+        btn.disabled = true;
+        setTagModalStatus('Criando tag...');
+        try {
+            let tagId = null;
+            const resp = await Auth.apiRequest('/api/tags', {
+                method: 'POST',
+                body: JSON.stringify({ nome: nome, cor: cor }),
+            });
+            if (resp && resp.ok) {
+                tagId = (await resp.json()).id;
+            } else if (resp && resp.status === 409) {
+                // ja existe com esse nome -> reusa (sem duplicar) e aplica
+                await loadTags();
+                const existing = (allTags || []).find(
+                    t => t.nome.toLowerCase() === nome.toLowerCase());
+                if (existing) tagId = existing.id;
+            }
+            if (!tagId) {
+                setTagModalStatus('Não foi possível criar a tag. Verifique o nome e tente novamente.', true);
+                return;
+            }
+            await loadTags();  // catalogo/filtro da sidebar atualizados
+            await window._modalApplyTag(tagId);  // criar SEMPRE aplica na conversa atual
+            nameInput.value = '';
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    // ─── CONV-06: Fila (assumir/liberar) ─────────
+    function updateClaimButton(conv) {
+        const btn = document.getElementById('btnClaim');
+        if (!btn) return;
+        const me = Auth.getUser() || {};
+        if (conv.status !== 'aberta') {
+            btn.style.display = 'none';
+            return;
+        }
+        btn.style.display = 'inline-block';
+        btn.disabled = false;
+        if (!conv.atendente_id) {
+            btn.textContent = 'Assumir';
+            btn.dataset.action = 'claim';
+        } else if (conv.atendente_id === me.id) {
+            btn.textContent = 'Liberar';
+            btn.dataset.action = 'release';
+        } else {
+            btn.textContent = 'Em atendimento';
+            btn.dataset.action = '';
+            btn.disabled = true;
+        }
+    }
+
+    async function claimOrRelease() {
+        if (!activeConversation) return;
+        const btn = document.getElementById('btnClaim');
+        const action = btn.dataset.action;
+        if (!action) return;
+        const resp = await Auth.apiRequest(
+            `/api/conversations/${activeConversation.id}/${action}`, { method: 'POST' });
+        if (resp && resp.ok) {
+            const updated = await resp.json();
+            activeConversation.atendente_id = updated.atendente_id;
+            updateClaimButton(activeConversation);
+            showToast(action === 'claim' ? 'Conversa assumida' : 'Conversa devolvida à fila');
+            loadConversations();
+        } else {
+            let detail = 'Falha na operação.';
+            try { const e = await resp.json(); if (e && e.detail) detail = e.detail; } catch (_) { }
+            showToast(detail);
+            loadChat(activeConversation.id); // re-sincroniza (outro atendente pode ter assumido)
+        }
+    }
+
+    // ─── CONV-05: Tags ───────────────────────────
+    // Cor SEMPRE revalidada no cliente antes de ir para style (defesa em
+    // profundidade — o backend ja valida ^#hex6$); nome SEMPRE via escapeHtml.
+    function safeTagColor(cor) {
+        return /^#[0-9A-Fa-f]{6}$/.test(cor || '') ? cor : '#999999';
+    }
+
+    function tagChipHtml(t, removable) {
+        const remove = removable
+            ? ` <span onclick="window._removeTag(${Number(t.id)})" style="cursor:pointer; font-weight:700;">&times;</span>`
+            : '';
+        return `<span style="background:${safeTagColor(t.cor)}22; border:1px solid ${safeTagColor(t.cor)}; color:var(--dark-600); border-radius:10px; font-size:10px; padding:1px 8px; white-space:nowrap;">${escapeHtml(t.nome)}${remove}</span>`;
+    }
+
+    async function loadTags() {
+        const resp = await Auth.apiRequest('/api/tags');
+        if (!resp || !resp.ok) return;
+        allTags = await resp.json();
+
+        const filterSel = document.getElementById('filterTag');
+        const current = filterSel.value;
+        filterSel.innerHTML = '<option value="">Todas as tags</option>';
+        const addSel = document.getElementById('selectAddTag');
+        addSel.innerHTML = '<option value="">Aplicar tag...</option>';
+        allTags.forEach(t => {
+            const o1 = document.createElement('option');
+            o1.value = t.id;
+            o1.textContent = t.nome;   // textContent = seguro
+            filterSel.appendChild(o1);
+            const o2 = document.createElement('option');
+            o2.value = t.id;
+            o2.textContent = t.nome;
+            addSel.appendChild(o2);
+        });
+        filterSel.value = current;
+    }
+
+    function renderConvTags() {
+        const box = document.getElementById('convTagChips');
+        if (!activeConversation) { box.innerHTML = ''; return; }
+        const tags = activeConversation.tags || [];
+        box.innerHTML = tags.length
+            ? tags.map(t => tagChipHtml(t, true)).join('')
+            : '<span style="font-size:11px; color:var(--dark-400);">Sem tags</span>';
+    }
+
+    window._removeTag = async function (tagId) {
+        if (!activeConversation) return;
+        const resp = await Auth.apiRequest(
+            `/api/conversations/${activeConversation.id}/tags/${Number(tagId)}`, { method: 'DELETE' });
+        if (resp && resp.ok) {
+            activeConversation.tags = await resp.json();
+            renderConvTags();
+            loadConversations();
+        } else {
+            showToast('Falha ao remover a tag.');
+        }
+    };
+
+    // CONV-04: busca o blob de um asset (baixa da Meta sob demanda). Helper
+    // unico usado por player/imagem/video/download — toast seguro em falha.
+    async function fetchMediaBlob(assetId) {
+        const id = Number(assetId);
+        let resp = await Auth.apiRequest(`/api/media/${id}`);
+        if (resp && resp.status === 409) {
+            const f = await Auth.apiRequest(`/api/media/${id}/fetch`, { method: 'POST' });
+            if (!f || !f.ok) {
+                let detail = 'Falha ao baixar a mídia.';
+                try { const e = await f.json(); if (e && e.detail) detail = e.detail; } catch (_) { }
+                showToast(detail);
+                return null;
+            }
+            resp = await Auth.apiRequest(`/api/media/${id}`);
+        }
+        if (!resp || !resp.ok) { showToast('Mídia indisponível.'); return null; }
+        return await resp.blob();
+    }
+
+    // CONV-04: render inline de imagem/video via blob autenticado
+    window._showInlineMedia = async function (assetId, kind, btn) {
+        if (btn) { btn.disabled = true; btn.textContent = 'Carregando...'; }
+        const blob = await fetchMediaBlob(assetId);
+        if (!blob) {
+            if (btn) { btn.disabled = false; btn.textContent = 'Tentar novamente'; }
+            return;
+        }
+        const url = URL.createObjectURL(blob);
+        let el;
+        if (kind === 'image') {
+            el = document.createElement('img');
+            el.src = url;
+            el.style.maxWidth = '100%';
+            el.style.borderRadius = '8px';
+            el.style.cursor = 'zoom-in';
+            el.onclick = () => window.open(url, '_blank');
+        } else {
+            el = document.createElement('video');
+            el.controls = true;
+            el.src = url;
+            el.style.maxWidth = '260px';
+            el.style.borderRadius = '8px';
+        }
+        if (btn && btn.parentNode) btn.parentNode.replaceChild(el, btn);
+    };
+
+    // CONV-04: download de documento com o filename original (via data-attribute
+    // escapado — nunca interpolado em onclick)
+    window._downloadMedia = async function (assetId, btn) {
+        if (btn) { btn.disabled = true; }
+        const blob = await fetchMediaBlob(assetId);
+        if (btn) { btn.disabled = false; }
+        if (!blob) return;
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = (btn && btn.dataset && btn.dataset.fn) || 'documento';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    };
+
+    // CONV-03: envio de midia por upload (multipart). Nao usa Auth.apiRequest
+    // porque ele fixa Content-Type: application/json — FormData exige que o
+    // browser defina o boundary sozinho. O Bearer vai manualmente.
+    // CONV-04: o texto digitado no input vira caption (imagem/video/documento).
+    async function sendMediaFile(file) {
+        if (!activeConversation || !file) return;
+        const input = document.getElementById('msgInput');
+        const caption = (input.value || '').trim();
+        const fd = new FormData();
+        fd.append('file', file, file.name);
+        fd.append('caption', caption);
+        input.value = '';
+        input.style.height = 'auto';
+        showToast('Enviando mídia...');
+        const resp = await fetch(`/api/conversations/${activeConversation.id}/messages/media`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${Auth.getToken()}` },
+            body: fd,
+        });
+        if (resp.ok) {
+            showToast('Mídia enviada');
+        } else {
+            let detail = 'Falha ao enviar a mídia.';
+            try { const e = await resp.json(); if (e && e.detail) detail = e.detail; } catch (_) { }
+            showToast(detail);
+        }
+        loadChat(activeConversation.id);
+        loadConversations();
+    }
+
+    // CONV-03: player de audio embutido via blob autenticado
+    window._playAudio = async function (assetId, btn) {
+        const id = Number(assetId);
+        if (btn) { btn.disabled = true; btn.textContent = 'Carregando...'; }
+        try {
+            let resp = await Auth.apiRequest(`/api/media/${id}`);
+            if (resp && resp.status === 409) {
+                const f = await Auth.apiRequest(`/api/media/${id}/fetch`, { method: 'POST' });
+                if (!f || !f.ok) {
+                    let detail = 'Falha ao baixar o áudio.';
+                    try { const e = await f.json(); if (e && e.detail) detail = e.detail; } catch (_) { }
+                    showToast(detail);
+                    return;
+                }
+                resp = await Auth.apiRequest(`/api/media/${id}`);
+            }
+            if (!resp || !resp.ok) { showToast('Áudio indisponível.'); return; }
+            const blob = await resp.blob();
+            const audio = document.createElement('audio');
+            audio.controls = true;
+            audio.src = URL.createObjectURL(blob);
+            audio.style.maxWidth = '220px';
+            if (btn && btn.parentNode) btn.parentNode.replaceChild(audio, btn);
+            audio.play().catch(() => { /* autoplay bloqueado: usuario aperta play */ });
+        } finally {
+            if (btn && btn.isConnected) { btn.disabled = false; btn.innerHTML = '&#9654; Ouvir'; }
+        }
+    };
+
+    // CONV-02: abre a midia de um asset via fetch autenticado (baixa da Meta se preciso)
+    window._openMedia = async function (assetId, btn) {
+        const id = Number(assetId);
+        if (btn) { btn.disabled = true; btn.textContent = 'Carregando...'; }
+        try {
+            let resp = await Auth.apiRequest(`/api/media/${id}`);
+            if (resp && resp.status === 409) {
+                // ainda nao espelhada — pede o download da Meta
+                const f = await Auth.apiRequest(`/api/media/${id}/fetch`, { method: 'POST' });
+                if (!f || !f.ok) {
+                    let detail = 'Falha ao baixar a mídia.';
+                    try { const e = await f.json(); if (e && e.detail) detail = e.detail; } catch (_) { }
+                    showToast(detail);
+                    return;
+                }
+                resp = await Auth.apiRequest(`/api/media/${id}`);
+            }
+            if (!resp || !resp.ok) { showToast('Mídia indisponível.'); return; }
+            const blob = await resp.blob();
+            window.open(URL.createObjectURL(blob), '_blank');
+        } finally {
+            if (btn) { btn.disabled = false; btn.innerHTML = '&#128206; Ver mídia'; }
+        }
+    };
+
+    // CONV-08b: reenvio manual de mensagem outbound com falha
+    window._retryMessage = async function (msgId) {
+        if (!activeConversation) return;
+        const resp = await Auth.apiRequest(
+            `/api/conversations/${activeConversation.id}/messages/${Number(msgId)}/retry`,
+            { method: 'POST' }
+        );
+        if (resp && resp.ok) {
+            showToast('Mensagem reenviada');
+        } else {
+            let detail = 'Falha ao reenviar a mensagem.';
+            try {
+                if (resp) {
+                    const err = await resp.json();
+                    if (err && err.detail) detail = err.detail;
+                }
+            } catch (_) { /* resposta sem corpo JSON */ }
+            showToast(detail);
+        }
+        loadChat(activeConversation.id);
+        loadConversations();
+    };
 
     // ─── Rendering ──────────────────────────────
     function renderConversationList() {
         const list = document.getElementById('convList');
         let filtered = conversations;
 
-        if (activeFilter !== 'all') {
+        if (activeFilter === 'aguardando') {
+            // CONV-06: fila = derivado (aberta + sem atendente)
+            filtered = filtered.filter(c => c.status === 'aberta' && !c.atendente_id);
+        } else if (activeFilter === 'minhas') {
+            // CONV-07: atribuidas a mim
+            const me = Auth.getUser() || {};
+            filtered = filtered.filter(c => c.atendente_id === me.id);
+        } else if (activeFilter !== 'all') {
             filtered = filtered.filter(c => c.status === activeFilter);
         }
 
@@ -536,6 +1124,7 @@
                             <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
                             ${escapeHtml(respLabel)}
                         </div>
+                        ${(conv.tags && conv.tags.length) ? `<div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:3px;">${conv.tags.map(t => tagChipHtml(t, false)).join('')}</div>` : ''}
                     </div>
                     ${isUnread ? `<div class="conv-unread-badge">${conv.unread_count}</div>` : ''}
                 </div>
@@ -552,13 +1141,17 @@
         document.getElementById('chatAvatar').textContent = getInitials(conv.nome);
         document.getElementById('chatName').textContent = conv.nome || conv.whatsapp;
 
-        const statusText = conv.status === 'aberta' ? 'Online' :
-            conv.status === 'aguardando' ? 'Aguardando' : 'Encerrada';
+        // CONV-06: estado DERIVADO (status + atendente_id) — 'aguardando' nao e persistido
+        const statusText = conv.status === 'encerrada' ? 'Encerrada' :
+            (conv.atendente_id ? 'Em atendimento' : 'Aguardando atendimento');
         document.getElementById('chatStatus').textContent = statusText;
 
         // Close button label
         document.getElementById('btnCloseConv').title =
             conv.status === 'encerrada' ? 'Reabrir conversa' : 'Encerrar conversa';
+
+        // CONV-06: botao Assumir/Liberar
+        updateClaimButton(conv);
 
         // Messages
         const container = document.getElementById('chatMessages');
@@ -602,23 +1195,59 @@
             else if (msg.status === 'sent') statusIcon = '<span class="message-status">&#10003;</span>';
             else if (msg.status === 'delivered') statusIcon = '<span class="message-status delivered">&#10003;&#10003;</span>';
             else if (msg.status === 'read') statusIcon = '<span class="message-status read">&#10003;&#10003;</span>';
-            else if (msg.status === 'failed') statusIcon = '<span class="message-status" style="color:var(--error)">&#10007;</span>';
+            else if (msg.status === 'failed') {
+                statusIcon = '<span class="message-status" style="color:var(--error)" title="Falha no envio">&#10007;</span>';
+                // CONV-08b: reenvio manual — so para mensagens persistidas (com id do banco)
+                if (msg.id) {
+                    statusIcon += `<button class="msg-retry-btn" onclick="window._retryMessage(${Number(msg.id)})" title="Reenviar mensagem" style="background:none; border:none; cursor:pointer; color:var(--error); font-size:13px; padding:0 2px; vertical-align:middle;">&#8635;</button>`;
+                }
+            }
         }
 
         let content = escapeHtml(msg.content);
 
-        if (msg.msg_type === 'image' && msg.media_url) {
-            content = `<img src="${msg.media_url}" style="max-width:100%; border-radius:8px; margin-bottom:4px;"><br>${content}`;
+        // CONV-04: caption real (esconde placeholders [IMAGE]/[VIDEO]/[DOCUMENT]/[AUDIO])
+        const captionHtml = (msg.content && !/^\[[A-Z]+\]$/.test(msg.content)) ? `<br>${content}` : '';
+
+        if (msg.msg_type === 'image' && msg.media_asset && msg.media_asset.id) {
+            // CONV-04: imagem inline sob demanda via blob autenticado
+            content = `<button class="media-inline-btn" onclick="window._showInlineMedia(${Number(msg.media_asset.id)}, 'image', this)" style="background:var(--dark-100); border:1px solid var(--dark-300); border-radius:8px; cursor:pointer; font-size:12px; padding:18px 26px; color:var(--dark-600);">&#128247; Ver imagem</button>${captionHtml}`;
+        } else if (msg.msg_type === 'image' && msg.media_url) {
+            content = `<img src="${escapeHtml(msg.media_url)}" style="max-width:100%; border-radius:8px; margin-bottom:4px;"><br>${content}`;
         } else if (msg.msg_type === 'template') {
             content = `<div style="font-size:10px; color:var(--primary); font-weight:600; margin-bottom:4px; display:flex; align-items:center; gap:4px;"><svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>Template</div>${content}`;
         } else if (msg.msg_type === 'audio') {
-            content = '<em>Audio</em>';
+            // CONV-03: player sob demanda quando ha asset persistido
+            if (msg.media_asset && msg.media_asset.id) {
+                content = `<button class="audio-play-btn" onclick="window._playAudio(${Number(msg.media_asset.id)}, this)" style="background:var(--dark-100); border:1px solid var(--dark-300); border-radius:16px; cursor:pointer; font-size:12px; padding:6px 14px; color:var(--dark-600);">&#9654; Ouvir</button>` + (msg.content && msg.content !== '[AUDIO]' ? `<br>${content}` : '');
+            } else {
+                content = '<em>Audio</em>';
+            }
         } else if (msg.msg_type === 'document') {
-            content = '<em>Documento</em>';
+            // CONV-04: filename SEMPRE escapado (texto e data-attribute)
+            if (msg.media_asset && msg.media_asset.id) {
+                const fn = escapeHtml(msg.media_asset.filename || 'documento');
+                content = `<div style="display:flex; align-items:center; gap:8px;">&#128196; <span style="font-size:12px;">${fn}</span> <button class="media-download-btn" data-fn="${fn}" onclick="window._downloadMedia(${Number(msg.media_asset.id)}, this)" style="background:none; border:1px solid var(--dark-300); border-radius:6px; cursor:pointer; font-size:11px; padding:2px 8px; color:var(--dark-500);">Baixar</button></div>${captionHtml}`;
+            } else {
+                content = '<em>Documento</em>';
+            }
         } else if (msg.msg_type === 'video') {
-            content = '<em>Video</em>';
+            if (msg.media_asset && msg.media_asset.id) {
+                content = `<button class="media-inline-btn" onclick="window._showInlineMedia(${Number(msg.media_asset.id)}, 'video', this)" style="background:var(--dark-100); border:1px solid var(--dark-300); border-radius:8px; cursor:pointer; font-size:12px; padding:18px 26px; color:var(--dark-600);">&#127909; Ver v&iacute;deo</button>${captionHtml}`;
+            } else {
+                content = '<em>Video</em>';
+            }
         }
 
+        // CONV-02: preview generico so para tipos SEM render dedicado
+        // (audio/imagem/video/documento ja tem controles proprios — CONV-03/04)
+        if (msg.media_asset && msg.media_asset.id
+            && !['image', 'video', 'document', 'audio'].includes(msg.msg_type)) {
+            content += `<div style="margin-top:4px;"><button class="media-preview-btn" onclick="window._openMedia(${Number(msg.media_asset.id)}, this)" style="background:none; border:1px solid var(--dark-300); border-radius:6px; cursor:pointer; font-size:11px; padding:2px 8px; color:var(--dark-500);">&#128206; Ver m&iacute;dia</button></div>`;
+        }
+
+        // SEC-CONV-01: `content` e `media_url` ja passaram por escapeHtml; o restante
+        // e template estatico gerado pela app (time/statusIcon). Seguro por construcao.
         bubble.innerHTML = `
             <div class="message-content">${content}</div>
             <div class="message-meta">
@@ -633,6 +1262,11 @@
     function renderLeadPanel() {
         if (!activeConversation) return;
         const conv = activeConversation;
+
+        renderConvTags();  // CONV-05
+        loadNotes();       // CONV-07
+        const atSel = document.getElementById('selectAtendente');
+        if (atSel) atSel.value = String(conv.atendente_id || 0);  // CONV-07
 
         document.getElementById('leadAvatar').textContent = getInitials(conv.nome);
         document.getElementById('leadName').textContent = conv.nome || conv.whatsapp;
@@ -699,10 +1333,12 @@
     }
 
     function escapeHtml(text) {
-        if (!text) return '';
+        // SEC-CONV-01: escapa tambem aspas simples/duplas (protege contexto de atributo).
+        // Toda interpolacao de dado nao-confiavel em innerHTML DEVE passar por aqui.
+        if (text === null || text === undefined) return '';
         const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        div.textContent = String(text);
+        return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     function showToast(message) {

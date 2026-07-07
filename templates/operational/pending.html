@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+{% set page_title = "Minhas Pendências" %}
+{% set active_nav = "operational-pending" %}
+{% set sector = "gestao" %}
+
+{% block extra_css %}
+    <style>
+        .content-area {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: var(--sp-6);
+        }
+        .pending-card-box {
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-xl);
+            padding: var(--sp-5);
+            box-shadow: var(--shadow-sm);
+            display: flex;
+            flex-direction: column;
+            max-height: calc(100vh - 120px);
+        }
+        .pending-title {
+            font-size: var(--font-size-md);
+            font-weight: var(--fw-semibold);
+            color: var(--color-text);
+            margin-bottom: var(--sp-4);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--color-border);
+            padding-bottom: var(--sp-3);
+        }
+        .pending-list {
+            display: flex;
+            flex-direction: column;
+            gap: var(--sp-3);
+            overflow-y: auto;
+            flex: 1;
+        }
+        .card-item {
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-lg);
+            padding: var(--sp-4);
+            transition: all var(--t-fast);
+            cursor: pointer;
+            box-shadow: var(--shadow-xs);
+        }
+        .card-item:hover {
+            border-color: var(--color-primary);
+            box-shadow: var(--shadow-md);
+            transform: translateY(-1px);
+        }
+        .notif-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            padding: var(--sp-3) var(--sp-4);
+            background: var(--sidebar-hover-bg);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-lg);
+            gap: var(--sp-3);
+        }
+    </style>
+{% endblock %}
+
+{% block content %}
+            <div class="content-area">
+                <!-- Assigned Cards Box -->
+                <div class="pending-card-box">
+                    <div class="pending-title">
+                        <span>Cards Designados a Mim</span>
+                        <span id="cardsCount" style="font-size: 11px; background: var(--color-bg); padding: 2px 8px; border-radius: 10px;">0</span>
+                    </div>
+                    <div class="pending-list" id="assignedCardsContainer">
+                        <div style="text-align:center; padding:var(--sp-6); color:var(--color-text-3);">Carregando cards...</div>
+                    </div>
+                </div>
+
+                <!-- Notifications Box -->
+                <div class="pending-card-box">
+                    <div class="pending-title">
+                        <span>Inbox de Notificações</span>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span id="notifsCount" style="font-size: 11px; background: var(--color-bg); padding: 2px 8px; border-radius: 10px;">0</span>
+                            <button class="btn" style="padding: 2px 8px; font-size:10px; background: var(--color-primary-light); color: var(--color-primary);" id="readAllBtn">Ler Todas</button>
+                        </div>
+                    </div>
+                    <div class="pending-list" id="notificationsContainer">
+                        <div style="text-align:center; padding:var(--sp-6); color:var(--color-text-3);">Carregando notificações...</div>
+                    </div>
+                </div>
+            </div>
+{% endblock %}
+
+{% block scripts %}
+    <script>
+        if (!Auth.requireAuth()) throw new Error("redirect");
+
+        // ── XSS Helper ──
+        function esc(str) {
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML.replace(/\"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        async function fetchPending() {
+            try {
+                let response = await Auth.apiRequest("/api/operational/my-pending");
+                if (!response || !response.ok) throw new Error();
+                let data = await response.json();
+                renderPending(data);
+            } catch (e) {
+                document.getElementById("assignedCardsContainer").innerHTML = "Erro ao carregar dados.";
+                document.getElementById("notificationsContainer").innerHTML = "Erro ao carregar dados.";
+            }
+        }
+
+        function renderPending(data) {
+            // Render Cards
+            const cardsContainer = document.getElementById("assignedCardsContainer");
+            const cardsCount = document.getElementById("cardsCount");
+            cardsContainer.innerHTML = "";
+            
+            let cards = data.assigned_cards || [];
+            cardsCount.innerText = cards.length;
+            
+            if (cards.length === 0) {
+                cardsContainer.innerHTML = "<div style='text-align:center; padding:var(--sp-8); color:var(--color-text-3); font-size:12px;'>Você não tem cards operacionais designados.</div>";
+            } else {
+                cards.forEach(c => {
+                    let div = document.createElement("div");
+                    div.className = "card-item";
+                    div.onclick = () => window.location.href = `/operational/boards/${c.board_id}`;
+                    div.innerHTML = `
+                        <div style="font-weight:var(--fw-semibold); font-size:13px; color:var(--color-text); margin-bottom:2px;">${esc(c.title)}</div>
+                        <div style="font-size:11px; color:var(--color-text-3); margin-bottom:6px;">${esc(c.description || 'Sem descrição.')}</div>
+                        <div style="font-size:10px; color:var(--color-text-4); display:flex; justify-content:space-between;">
+                            <span>Quadro #${c.board_id}</span>
+                            <span>Prazo: ${c.due_date ? new Date(c.due_date).toLocaleDateString('pt-BR') : 'Sem prazo'}</span>
+                        </div>
+                    `;
+                    cardsContainer.appendChild(div);
+                });
+            }
+
+            // Render Notifications
+            const notifsContainer = document.getElementById("notificationsContainer");
+            const notifsCount = document.getElementById("notifsCount");
+            notifsContainer.innerHTML = "";
+            
+            let notifs = data.unread_notifications || [];
+            notifsCount.innerText = notifs.length;
+            
+            if (notifs.length === 0) {
+                notifsContainer.innerHTML = "<div style='text-align:center; padding:var(--sp-8); color:var(--color-text-3); font-size:12px;'>Você está em dia! Nenhuma notificação pendente.</div>";
+            } else {
+                notifs.forEach(n => {
+                    let div = document.createElement("div");
+                    div.className = "notif-item";
+                    div.innerHTML = `
+                        <div style="display:flex; flex-direction:column; gap:2px; font-size:12px;">
+                            <span style="font-weight:var(--fw-medium); color:var(--color-text-2);">${esc(n.message)}</span>
+                            <span style="font-size:10px; color:var(--color-text-4);">${new Date(n.created_at).toLocaleString('pt-BR')}</span>
+                        </div>
+                        <button class="btn" style="padding:2px 6px; font-size:9px; background:var(--color-surface); border:1px solid var(--color-border);" onclick="readNotif(${n.id})">Marcar lida</button>
+                    `;
+                    notifsContainer.appendChild(div);
+                });
+            }
+        }
+
+        async function readNotif(id) {
+            let response = await Auth.apiRequest(`/api/operational/notifications/${id}/read`, {
+                method: "POST"
+            });
+            if (response && response.ok) {
+                fetchPending();
+            }
+        }
+
+        document.getElementById("readAllBtn").onclick = async () => {
+            let response = await Auth.apiRequest("/api/operational/notifications/read-all", {
+                method: "POST"
+            });
+            if (response && response.ok) {
+                fetchPending();
+            }
+        };
+
+        fetchPending();
+    </script>
+{% endblock %}
