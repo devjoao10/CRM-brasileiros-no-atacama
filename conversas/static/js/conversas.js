@@ -345,11 +345,25 @@
             if (file) await sendMediaFile(file);
         });
 
-        // Textarea: Enter to send, Shift+Enter for newline
+        // Textarea: Enter to send, Shift+Enter for newline.
+        // CONV-HOTFIX-QUICK-REPLIES-01: a paleta "/" consome a tecla ANTES do
+        // envio — selecionar mensagem rapida NUNCA envia automaticamente.
         document.getElementById('msgInput').addEventListener('keydown', (e) => {
+            if (handleQrPaletteKeydown(e)) return;
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 sendMessage();
+            }
+        });
+
+        // CONV-HOTFIX-QUICK-REPLIES-01: gatilho/filtro da paleta — ligado
+        // SOMENTE ao composer (#msgInput); outros campos nao abrem a paleta.
+        document.getElementById('msgInput').addEventListener('input', updateQrPalette);
+        document.addEventListener('click', (e) => {
+            const palette = document.getElementById('qrPalette');
+            const input = document.getElementById('msgInput');
+            if (qrOpen && !palette.contains(e.target) && e.target !== input) {
+                closeQrPalette(false);
             }
         });
 
@@ -591,6 +605,149 @@
             showToast(detail);
             loadChat(activeConversation.id);
         }
+    }
+
+    // ─── CONV-HOTFIX-QUICK-REPLIES-01: paleta de mensagens rapidas ("/") ───
+    // Fonte: backend PRE-EXISTENTE /api/quick-replies (gerenciadas em /settings).
+    // A paleta abre APENAS quando o valor do composer COMECA com "/" — barra
+    // digitada no meio do texto e sempre literal. Esc fecha e suprime a
+    // reabertura ate o "/" inicial sair do campo (permite manter "/" literal).
+    // Itens renderizados com createElement/textContent (conteudo controlado
+    // por usuarios via settings — nunca interpolado como HTML).
+    let qrOpen = false;
+    let qrDismissed = false;
+    let qrLoaded = false;
+    let qrAll = [];        // cache da ultima carga (apenas ativas)
+    let qrItems = [];      // itens filtrados exibidos
+    let qrIndex = 0;
+    let qrFetchSeq = 0;
+
+    async function fetchQuickReplies() {
+        const seq = ++qrFetchSeq;
+        const resp = await Auth.apiRequest('/api/quick-replies');
+        if (!resp || !resp.ok || seq !== qrFetchSeq) return;
+        const data = await resp.json();
+        qrAll = data.quick_replies || [];
+        qrLoaded = true;
+        if (qrOpen) renderQrPalette();
+    }
+
+    function updateQrPalette() {
+        const value = document.getElementById('msgInput').value;
+        if (!value.startsWith('/')) {
+            qrDismissed = false;   // "/" inicial saiu do campo: proximo "/" reabre
+            if (qrOpen) closeQrPalette(false);
+            return;
+        }
+        if (qrDismissed) return;   // Esc: "/" segue literal ate limpar o campo
+        if (!qrOpen) {
+            qrOpen = true;
+            qrIndex = 0;
+            fetchQuickReplies();   // recarrega a cada abertura (1 request, pega edicoes do settings)
+        }
+        renderQrPalette();
+    }
+
+    function renderQrPalette() {
+        const palette = document.getElementById('qrPalette');
+        const q = document.getElementById('msgInput').value.slice(1).trim().toLowerCase();
+        qrItems = qrAll.filter(r =>
+            !q ||
+            (r.shortcut || '').toLowerCase().includes(q) ||
+            (r.title || '').toLowerCase().includes(q) ||
+            (r.content || '').toLowerCase().includes(q)
+        );
+        if (qrIndex >= qrItems.length) qrIndex = 0;
+
+        palette.replaceChildren();
+        const header = document.createElement('div');
+        header.className = 'qr-palette-header';
+        header.textContent = 'Mensagens rápidas';
+        palette.appendChild(header);
+
+        if (qrItems.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'qr-palette-empty';
+            empty.textContent = !qrLoaded
+                ? 'Carregando…'
+                : (qrAll.length === 0
+                    ? 'Nenhuma mensagem rápida cadastrada (crie em Configurações).'
+                    : 'Nenhuma mensagem rápida encontrada.');
+            palette.appendChild(empty);
+        } else {
+            qrItems.forEach((r, i) => {
+                const item = document.createElement('div');
+                item.className = 'qr-palette-item' + (i === qrIndex ? ' active' : '');
+                item.setAttribute('role', 'option');
+                item.setAttribute('aria-selected', i === qrIndex ? 'true' : 'false');
+                const shortcut = document.createElement('div');
+                shortcut.className = 'qr-shortcut';
+                shortcut.textContent = r.shortcut || '';
+                const title = document.createElement('div');
+                title.className = 'qr-title';
+                title.textContent = r.title || '';
+                const preview = document.createElement('div');
+                preview.className = 'qr-preview';
+                preview.textContent = r.content || '';
+                item.appendChild(shortcut);
+                item.appendChild(title);
+                item.appendChild(preview);
+                item.addEventListener('click', () => selectQuickReply(i));
+                palette.appendChild(item);
+            });
+        }
+        palette.style.display = 'block';
+    }
+
+    function closeQrPalette(dismissed) {
+        qrOpen = false;
+        qrDismissed = !!dismissed;
+        document.getElementById('qrPalette').style.display = 'none';
+    }
+
+    function selectQuickReply(i) {
+        const r = qrItems[i];
+        if (!r) return;
+        const input = document.getElementById('msgInput');
+        // Insere o texto no composer — NAO envia: o operador revisa/edita
+        // e envia manualmente (btnSend ou Enter).
+        input.value = r.content || '';
+        closeQrPalette(false);
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+        // auto-resize (mesma regra do handler de input)
+        input.style.height = 'auto';
+        input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+    }
+
+    function moveQrHighlight(delta) {
+        if (qrItems.length === 0) return;
+        qrIndex = (qrIndex + delta + qrItems.length) % qrItems.length;
+        renderQrPalette();
+        const active = document.querySelector('#qrPalette .qr-palette-item.active');
+        if (active && active.scrollIntoView) active.scrollIntoView({ block: 'nearest' });
+    }
+
+    // Retorna true se a paleta consumiu a tecla (o caller NAO envia).
+    function handleQrPaletteKeydown(e) {
+        // "/" digitado com o campo vazio e sempre um NOVO gatilho
+        // (limpa o dismiss de um Esc anterior, mesmo apos envio/limpeza)
+        if (e.key === '/' && e.target.value === '') qrDismissed = false;
+        if (!qrOpen) return false;
+        if (e.key === 'ArrowDown') { e.preventDefault(); moveQrHighlight(1); return true; }
+        if (e.key === 'ArrowUp') { e.preventDefault(); moveQrHighlight(-1); return true; }
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            closeQrPalette(true);  // o "/" ja digitado vira texto literal
+            return true;
+        }
+        if (e.key === 'Enter' && !e.shiftKey && qrItems.length > 0) {
+            e.preventDefault();
+            selectQuickReply(qrIndex);
+            return true;
+        }
+        return false;
     }
 
     // ─── CONV-07: Atribuicao dirigida + notas ────
