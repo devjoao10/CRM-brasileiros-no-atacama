@@ -182,10 +182,14 @@ check(crm_count_after == crm_count_before, "lead_tags do CRM INTOCADO para conve
 
 
 # ============ 6. GUARD DO BUGFIX DE UI ============
-print("\nCONV-BF-UI-02 — guard estatico das abas")
+print("\nCONV-BF-UI-03 — guard estatico das abas (linha rolavel)")
 css = (CONVERSAS_DIR / "static" / "css" / "conversas.css").read_text(encoding="utf-8")
-check("flex-wrap: wrap" in css and ".conv-filters" in css,
-      ".conv-filters com flex-wrap (todas as abas visiveis)")
+js_ui = (CONVERSAS_DIR / "static" / "js" / "conversas.js").read_text(encoding="utf-8")
+check("flex-wrap: nowrap" in css and "overflow-x: auto" in css,
+      ".conv-filters em UMA linha com overflow-x (abas alcancaveis por scroll)")
+check("flex: 0 0 auto" in css, "abas nao encolhem (flex 0 0 auto)")
+check("initTabsDragScroll" in js_ui and "dragged" in js_ui,
+      "drag-to-scroll escopado presente (arrasto nao dispara troca de aba)")
 
 # --- Resultado ---
 main.app.dependency_overrides.clear()

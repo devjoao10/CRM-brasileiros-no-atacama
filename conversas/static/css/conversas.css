@@ -158,24 +158,38 @@ body {
 }
 
 /* Filter tabs
-   CONV-BF-UI-02: com 5 abas (Todas/Abertas/Aguardando/Minhas/Encerradas) a
-   linha estourava a sidebar e cortava a ultima aba. flex-wrap garante que
-   TODAS as abas fiquem visiveis (quebrando em 2 linhas se preciso) e a
-   densidade foi reduzida para caberem em 1 linha na largura padrao. */
+   CONV-BF-UI-03: as 5 abas ficam em UMA linha rolavel horizontal (nav
+   segmentada). overflow-x + touch scroll nativo; o drag com mouse e feito
+   por um JS minimo escopado ao container (conversas.js). Nada de wrap,
+   nada de esconder/encolher abas. So a LINHA rola — nunca a pagina. */
 .conv-filters {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;               /* Firefox: barra discreta */
     padding: 0 12px;
     border-bottom: 1px solid var(--dark-200);
     gap: 0;
 }
 
+.conv-filters::-webkit-scrollbar {
+    height: 3px;
+}
+
+.conv-filters::-webkit-scrollbar-thumb {
+    background: var(--dark-300);
+    border-radius: 2px;
+}
+
 .conv-filters button {
-    flex: 1 1 auto;
-    padding: 9px 6px;
+    flex: 0 0 auto;
+    padding: 10px 10px;
     border: none;
     background: transparent;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     font-family: var(--font);
     color: var(--dark-500);
@@ -183,7 +197,7 @@ body {
     border-bottom: 2px solid transparent;
     transition: all var(--transition);
     text-transform: uppercase;
-    letter-spacing: 0.02em;
+    letter-spacing: 0.03em;
     white-space: nowrap;
 }
 

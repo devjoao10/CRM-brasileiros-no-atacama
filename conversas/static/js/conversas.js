@@ -288,6 +288,43 @@
         // Send message
         document.getElementById('btnSend').addEventListener('click', sendMessage);
 
+        // CONV-BF-UI-03: drag-to-scroll das abas de filtro — ESCOPADO ao
+        // container das abas (nao sequestra eventos globais; arrasto real
+        // nao dispara troca de aba; roda do mouse rola horizontalmente).
+        (function initTabsDragScroll() {
+            const firstTab = document.querySelector('.conv-filters button[data-filter]');
+            const bar = firstTab ? firstTab.parentElement : null;
+            if (!bar) return;
+            let isDown = false, startX = 0, startScroll = 0, dragged = false;
+            bar.addEventListener('mousedown', (e) => {
+                isDown = true;
+                dragged = false;
+                startX = e.pageX;
+                startScroll = bar.scrollLeft;
+            });
+            window.addEventListener('mousemove', (e) => {
+                if (!isDown) return;
+                const dx = e.pageX - startX;
+                if (Math.abs(dx) > 5) dragged = true;
+                bar.scrollLeft = startScroll - dx;
+            });
+            window.addEventListener('mouseup', () => { isDown = false; });
+            // clique que na verdade foi arrasto nao muda o filtro
+            bar.addEventListener('click', (e) => {
+                if (dragged) {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    dragged = false;
+                }
+            }, true);
+            bar.addEventListener('wheel', (e) => {
+                if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+                    bar.scrollLeft += e.deltaY;
+                    e.preventDefault();
+                }
+            }, { passive: false });
+        })();
+
         // CONV-06: assumir/liberar conversa
         document.getElementById('btnClaim').addEventListener('click', claimOrRelease);
 
