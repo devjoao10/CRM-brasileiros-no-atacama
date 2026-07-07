@@ -114,6 +114,14 @@ services:
       - META_ACCESS_TOKEN=${META_ACCESS_TOKEN:-}
       - META_PHONE_NUMBER_ID=${META_PHONE_NUMBER_ID:-}
       - META_WABA_ID=${META_WABA_ID:-}
+      # OPS-CONV-MEDIA-01 (C2): webhook em producao EXIGE HMAC — sem esta
+      # variavel o Conversas responde 500 a todo POST da Meta.
+      - META_APP_SECRET=${META_APP_SECRET:-}
+      # OPS-CONV-MEDIA-01 (C1): espelho local de midia em volume PERSISTENTE
+      # (sem isso os arquivos morrem no rebuild do container).
+      - CONVERSAS_MEDIA_DIR=/app/data/media
+    volumes:
+      - conversas_media:/app/data/media
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.conversas.rule=Host(`conversas.crmbrasileirosnoatacama.cloud`)"
@@ -124,3 +132,4 @@ services:
 volumes:
   pgdata:
   n8n_data:
+  conversas_media:
