@@ -104,9 +104,9 @@
         });
 
         // Status filters
-        document.querySelectorAll('.conv-filters button').forEach(btn => {
+        document.querySelectorAll('.conv-filter-tabs button').forEach(btn => {
             btn.addEventListener('click', () => {
-                document.querySelectorAll('.conv-filters button').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.conv-filter-tabs button').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 activeFilter = btn.dataset.filter;
                 renderConversationList();
@@ -292,7 +292,7 @@
         // container das abas (nao sequestra eventos globais; arrasto real
         // nao dispara troca de aba; roda do mouse rola horizontalmente).
         (function initTabsDragScroll() {
-            const firstTab = document.querySelector('.conv-filters button[data-filter]');
+            const firstTab = document.querySelector('.conv-filter-tabs button[data-filter]');
             const bar = firstTab ? firstTab.parentElement : null;
             if (!bar) return;
             let isDown = false, startX = 0, startScroll = 0, dragged = false;

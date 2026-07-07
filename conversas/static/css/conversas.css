@@ -162,7 +162,7 @@ body {
    segmentada). overflow-x + touch scroll nativo; o drag com mouse e feito
    por um JS minimo escopado ao container (conversas.js). Nada de wrap,
    nada de esconder/encolher abas. So a LINHA rola — nunca a pagina. */
-.conv-filters {
+.conv-filter-tabs {
     display: flex;
     flex-wrap: nowrap;
     overflow-x: auto;
@@ -175,16 +175,16 @@ body {
     gap: 0;
 }
 
-.conv-filters::-webkit-scrollbar {
+.conv-filter-tabs::-webkit-scrollbar {
     height: 3px;
 }
 
-.conv-filters::-webkit-scrollbar-thumb {
+.conv-filter-tabs::-webkit-scrollbar-thumb {
     background: var(--dark-300);
     border-radius: 2px;
 }
 
-.conv-filters button {
+.conv-filter-tabs button {
     flex: 0 0 auto;
     padding: 10px 10px;
     border: none;
@@ -201,16 +201,16 @@ body {
     white-space: nowrap;
 }
 
-.conv-filters button:hover {
+.conv-filter-tabs button:hover {
     color: var(--primary);
 }
 
-.conv-filters button.active {
+.conv-filter-tabs button.active {
     color: var(--primary);
     border-bottom-color: var(--primary);
 }
 
-.conv-filters button .badge {
+.conv-filter-tabs button .badge {
     display: inline-block;
     background: var(--error);
     color: white;

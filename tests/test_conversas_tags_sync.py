@@ -182,14 +182,31 @@ check(crm_count_after == crm_count_before, "lead_tags do CRM INTOCADO para conve
 
 
 # ============ 6. GUARD DO BUGFIX DE UI ============
-print("\nCONV-BF-UI-03 — guard estatico das abas (linha rolavel)")
+print("\nCONV-BF-UI-04 — guard estatico das abas (seletor dedicado + cache-bust)")
 css = (CONVERSAS_DIR / "static" / "css" / "conversas.css").read_text(encoding="utf-8")
 js_ui = (CONVERSAS_DIR / "static" / "js" / "conversas.js").read_text(encoding="utf-8")
-check("flex-wrap: nowrap" in css and "overflow-x: auto" in css,
-      ".conv-filters em UMA linha com overflow-x (abas alcancaveis por scroll)")
-check("flex: 0 0 auto" in css, "abas nao encolhem (flex 0 0 auto)")
+html_ui = (CONVERSAS_DIR / "templates" / "conversas.html").read_text(encoding="utf-8")
+
+# A raiz do bug do UI-03: .conv-filters era compartilhada entre a linha de
+# abas E o bloco de selects. Agora cada area tem classe DEDICADA.
+check('class="conv-filter-tabs"' in html_ui, "html: linha de abas usa .conv-filter-tabs")
+check('class="conv-sidebar-filter-selects"' in html_ui,
+      "html: bloco de selects usa .conv-sidebar-filter-selects")
+check('class="conv-filters"' not in html_ui,
+      "html: classe ambigua .conv-filters ELIMINADA")
+check(".conv-filter-tabs {" in css and "overflow-x: auto" in css
+      and "flex-wrap: nowrap" in css and "white-space: nowrap" in css,
+      "css: .conv-filter-tabs rolavel em uma linha (overflow-x/nowrap)")
+check("flex: 0 0 auto" in css, "css: abas nao encolhem (flex 0 0 auto)")
+check(".conv-filter-tabs button" in js_ui, "js: clique/estado das abas mira .conv-filter-tabs")
+check(".conv-filters button" not in js_ui, "js: NENHUM seletor antigo .conv-filters restante")
 check("initTabsDragScroll" in js_ui and "dragged" in js_ui,
-      "drag-to-scroll escopado presente (arrasto nao dispara troca de aba)")
+      "js: drag-to-scroll escopado presente")
+check("conversas.css?v=" in html_ui and "conversas.js?v=" in html_ui,
+      "html: referencias de CSS e JS com cache-bust")
+for page in ("settings.html", "templates.html"):
+    other = (CONVERSAS_DIR / "templates" / page).read_text(encoding="utf-8")
+    check("conversas.css?v=" in other, f"{page}: CSS compartilhado tambem cache-busted")
 
 # --- Resultado ---
 main.app.dependency_overrides.clear()
