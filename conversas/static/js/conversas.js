@@ -11,6 +11,8 @@
     let activeConversation = null;
     let activeFilter = 'all';
     let activeResponsavelFilter = '';
+    let activeTagFilter = '';   // CONV-05
+    let allTags = [];           // CONV-05
     let searchTerm = '';
     let pollInterval = null;
     let usersCache = [];
@@ -26,6 +28,7 @@
 
         loadUsers();
         setupEventListeners();
+        loadTags();          // CONV-05
         loadConversations();
 
         // Poll for new messages every 5 seconds
@@ -107,6 +110,42 @@
         document.getElementById('filterResponsavel').addEventListener('change', (e) => {
             activeResponsavelFilter = e.target.value;
             loadConversations();
+        });
+
+        // CONV-05: tag filter + aplicar/criar tag
+        document.getElementById('filterTag').addEventListener('change', (e) => {
+            activeTagFilter = e.target.value;
+            loadConversations();
+        });
+        document.getElementById('selectAddTag').addEventListener('change', async (e) => {
+            const tagId = Number(e.target.value);
+            e.target.value = '';
+            if (!activeConversation || !tagId) return;
+            const resp = await Auth.apiRequest(
+                `/api/conversations/${activeConversation.id}/tags/${tagId}`, { method: 'POST' });
+            if (resp && resp.ok) {
+                activeConversation.tags = await resp.json();
+                renderConvTags();
+                loadConversations();
+            } else {
+                showToast('Falha ao aplicar a tag.');
+            }
+        });
+        document.getElementById('btnNewTag').addEventListener('click', async () => {
+            const nome = (prompt('Nome da nova tag:') || '').trim();
+            if (!nome) return;
+            const resp = await Auth.apiRequest('/api/tags', {
+                method: 'POST',
+                body: JSON.stringify({ nome: nome, cor: '#3B82F6' }),
+            });
+            if (resp && resp.ok) {
+                showToast('Tag criada');
+                await loadTags();
+            } else {
+                let detail = 'Falha ao criar a tag.';
+                try { const err = await resp.json(); if (err && err.detail) detail = err.detail; } catch (_) { }
+                showToast(detail);
+            }
         });
 
         // Responsavel selector in panel
@@ -347,6 +386,9 @@
         if (activeResponsavelFilter !== '') {
             url += `&responsavel_id=${activeResponsavelFilter}`;
         }
+        if (activeTagFilter !== '') {
+            url += `&tag_id=${Number(activeTagFilter)}`;  // CONV-05
+        }
 
         const resp = await Auth.apiRequest(url);
         if (!resp || !resp.ok) return;
@@ -497,6 +539,65 @@
             loadChat(activeConversation.id);
         }
     }
+
+    // ─── CONV-05: Tags ───────────────────────────
+    // Cor SEMPRE revalidada no cliente antes de ir para style (defesa em
+    // profundidade — o backend ja valida ^#hex6$); nome SEMPRE via escapeHtml.
+    function safeTagColor(cor) {
+        return /^#[0-9A-Fa-f]{6}$/.test(cor || '') ? cor : '#999999';
+    }
+
+    function tagChipHtml(t, removable) {
+        const remove = removable
+            ? ` <span onclick="window._removeTag(${Number(t.id)})" style="cursor:pointer; font-weight:700;">&times;</span>`
+            : '';
+        return `<span style="background:${safeTagColor(t.cor)}22; border:1px solid ${safeTagColor(t.cor)}; color:var(--dark-600); border-radius:10px; font-size:10px; padding:1px 8px; white-space:nowrap;">${escapeHtml(t.nome)}${remove}</span>`;
+    }
+
+    async function loadTags() {
+        const resp = await Auth.apiRequest('/api/tags');
+        if (!resp || !resp.ok) return;
+        allTags = await resp.json();
+
+        const filterSel = document.getElementById('filterTag');
+        const current = filterSel.value;
+        filterSel.innerHTML = '<option value="">Todas as tags</option>';
+        const addSel = document.getElementById('selectAddTag');
+        addSel.innerHTML = '<option value="">Aplicar tag...</option>';
+        allTags.forEach(t => {
+            const o1 = document.createElement('option');
+            o1.value = t.id;
+            o1.textContent = t.nome;   // textContent = seguro
+            filterSel.appendChild(o1);
+            const o2 = document.createElement('option');
+            o2.value = t.id;
+            o2.textContent = t.nome;
+            addSel.appendChild(o2);
+        });
+        filterSel.value = current;
+    }
+
+    function renderConvTags() {
+        const box = document.getElementById('convTagChips');
+        if (!activeConversation) { box.innerHTML = ''; return; }
+        const tags = activeConversation.tags || [];
+        box.innerHTML = tags.length
+            ? tags.map(t => tagChipHtml(t, true)).join('')
+            : '<span style="font-size:11px; color:var(--dark-400);">Sem tags</span>';
+    }
+
+    window._removeTag = async function (tagId) {
+        if (!activeConversation) return;
+        const resp = await Auth.apiRequest(
+            `/api/conversations/${activeConversation.id}/tags/${Number(tagId)}`, { method: 'DELETE' });
+        if (resp && resp.ok) {
+            activeConversation.tags = await resp.json();
+            renderConvTags();
+            loadConversations();
+        } else {
+            showToast('Falha ao remover a tag.');
+        }
+    };
 
     // CONV-04: busca o blob de um asset (baixa da Meta sob demanda). Helper
     // unico usado por player/imagem/video/download — toast seguro em falha.
@@ -729,6 +830,7 @@
                             <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
                             ${escapeHtml(respLabel)}
                         </div>
+                        ${(conv.tags && conv.tags.length) ? `<div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:3px;">${conv.tags.map(t => tagChipHtml(t, false)).join('')}</div>` : ''}
                     </div>
                     ${isUnread ? `<div class="conv-unread-badge">${conv.unread_count}</div>` : ''}
                 </div>
@@ -862,6 +964,8 @@
     function renderLeadPanel() {
         if (!activeConversation) return;
         const conv = activeConversation;
+
+        renderConvTags();  // CONV-05
 
         document.getElementById('leadAvatar').textContent = getInitials(conv.nome);
         document.getElementById('leadName').textContent = conv.nome || conv.whatsapp;

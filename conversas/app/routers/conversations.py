@@ -181,6 +181,7 @@ async def list_conversations(
     status: Optional[str] = Query(None, description="Filtrar por status: aberta, encerrada, aguardando"),
     search: Optional[str] = Query(None, description="Buscar por nome ou WhatsApp"),
     responsavel_id: Optional[int] = Query(None, description="Filtrar por responsavel (0 = Agente IA)"),
+    tag_id: Optional[int] = Query(None, description="CONV-05: filtrar por tag aplicada"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -204,6 +205,11 @@ async def list_conversations(
             query = query.filter(Conversation.responsavel_id.is_(None))
         else:
             query = query.filter(Conversation.responsavel_id == responsavel_id)
+
+    if tag_id is not None:
+        # CONV-05: join no link table N:N
+        from app.models.tag import ConversationTag
+        query = query.filter(Conversation.tags.any(ConversationTag.id == tag_id))
 
     total = query.count()
     conversations = query.order_by(desc(Conversation.updated_at)).offset(offset).limit(limit).all()

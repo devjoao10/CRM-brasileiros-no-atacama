@@ -31,6 +31,12 @@ class Conversation(Base):
         cascade="all, delete-orphan",
         order_by="Message.created_at"
     )
+    # CONV-05: tags N:N (link table com PK composta)
+    tags = relationship(
+        "ConversationTag",
+        secondary="conversation_tag_links",
+        back_populates="conversations",
+    )
 
     def __repr__(self):
         return f"<Conversation(id={self.id}, lead_id={self.lead_id}, nome='{self.nome}')>"

@@ -40,10 +40,14 @@
                 <button data-filter="encerrada">Encerradas</button>
             </div>
 
-            <div class="conv-filters" style="padding: 6px 16px; border-bottom: 1px solid var(--dark-200);">
+            <div class="conv-filters" style="padding: 6px 16px; border-bottom: 1px solid var(--dark-200); display:flex; flex-direction:column; gap:6px;">
                 <select id="filterResponsavel" style="width:100%; padding:7px 10px; border:1px solid var(--dark-200); border-radius:var(--radius-md); font-size:12px; font-family:var(--font); background:var(--white); color:var(--dark); outline:none;">
                     <option value="">Todos os responsaveis</option>
                     <option value="0">Agente IA</option>
+                </select>
+                <!-- CONV-05: filtro por tag -->
+                <select id="filterTag" style="width:100%; padding:7px 10px; border:1px solid var(--dark-200); border-radius:var(--radius-md); font-size:12px; font-family:var(--font); background:var(--white); color:var(--dark); outline:none;">
+                    <option value="">Todas as tags</option>
                 </select>
             </div>
 
@@ -156,6 +160,18 @@
                         <option value="0">Agente IA</option>
                     </select>
                     <div style="font-size:11px; color:var(--dark-400);">Alteracoes sao sincronizadas com o CRM automaticamente.</div>
+                </div>
+
+                <!-- CONV-05: tags da conversa -->
+                <div class="lead-section">
+                    <div class="lead-section-title">Tags</div>
+                    <div id="convTagChips" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px;"></div>
+                    <div style="display:flex; gap:6px;">
+                        <select id="selectAddTag" style="flex:1; padding:6px 10px; border:1px solid var(--dark-200); border-radius:var(--radius-md); font-size:12px; font-family:var(--font); background:var(--white); color:var(--dark); outline:none;">
+                            <option value="">Aplicar tag...</option>
+                        </select>
+                        <button id="btnNewTag" title="Criar nova tag" style="padding:6px 10px; border:1px solid var(--dark-200); border-radius:var(--radius-md); background:var(--white); cursor:pointer; font-size:12px; color:var(--dark-500);">+ Nova</button>
+                    </div>
                 </div>
 
                 <div class="lead-section">

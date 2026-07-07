@@ -11,6 +11,21 @@ class MessageCreate(BaseModel):
     template_name: Optional[str] = None
 
 
+class TagResponse(BaseModel):
+    """CONV-05 — tag de conversa (cor validada ^#hex6$ na rota)."""
+    id: int
+    nome: str
+    cor: str
+
+    class Config:
+        from_attributes = True
+
+
+class TagCreate(BaseModel):
+    nome: str = Field(..., min_length=1, max_length=50)
+    cor: str = Field(default="#3B82F6", pattern=r"^#[0-9A-Fa-f]{6}$")
+
+
 class MediaAssetResponse(BaseModel):
     """CONV-01 — referencia de midia (metadados publicos Meta + espelho local futuro)."""
     id: int
@@ -73,6 +88,8 @@ class ConversationResponse(BaseModel):
     last_customer_msg_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+    # CONV-05 — tags aplicadas a conversa (aditivo)
+    tags: List[TagResponse] = []
 
     class Config:
         from_attributes = True
