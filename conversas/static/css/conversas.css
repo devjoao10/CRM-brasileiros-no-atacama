@@ -1129,6 +1129,26 @@ body {
 }
 .qr-item-actions { display: flex; gap: 4px; }
 
+/* ─── CONV-HOTFIX-QUICK-REPLIES-01: paleta "/" no composer ─── */
+.qr-palette {
+    position: absolute; bottom: 65px; left: 70px; width: 340px;
+    max-height: 260px; overflow-y: auto;
+    background: var(--white); border: 1px solid var(--dark-200);
+    border-radius: var(--radius-md); box-shadow: var(--shadow-lg); z-index: 100;
+}
+.qr-palette-header {
+    padding: 8px 12px; border-bottom: 1px solid var(--dark-100);
+    font-size: 11px; font-weight: 600; color: var(--dark-400);
+    text-transform: uppercase; letter-spacing: 0.4px;
+}
+.qr-palette-item {
+    padding: 10px 12px; cursor: pointer; border-bottom: 1px solid var(--dark-100);
+}
+.qr-palette-item:last-child { border-bottom: none; }
+.qr-palette-item:hover, .qr-palette-item.active { background: var(--light); }
+.qr-palette-item .qr-preview { white-space: normal; max-height: 34px; overflow: hidden; }
+.qr-palette-empty { padding: 14px 12px; font-size: 12px; color: var(--dark-400); }
+
 /* ─── Empty State ────────────────────────────── */
 .empty-state {
     text-align: center; padding: 60px 20px; color: var(--dark-400);
