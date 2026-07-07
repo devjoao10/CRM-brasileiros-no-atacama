@@ -182,6 +182,7 @@ async def list_conversations(
     search: Optional[str] = Query(None, description="Buscar por nome ou WhatsApp"),
     responsavel_id: Optional[int] = Query(None, description="Filtrar por responsavel (0 = Agente IA)"),
     tag_id: Optional[int] = Query(None, description="CONV-05: filtrar por tag aplicada"),
+    queue: Optional[str] = Query(None, description="CONV-06: 'fila' (aberta sem atendente, mais antiga primeiro) | 'em_atendimento'"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -211,8 +212,26 @@ async def list_conversations(
         from app.models.tag import ConversationTag
         query = query.filter(Conversation.tags.any(ConversationTag.id == tag_id))
 
+    # CONV-06: fila e ESTADO DERIVADO (fonte unica: status + atendente_id).
+    # 'aguardando' nao existe como valor persistido — elimina ambiguidade.
+    order_clause = desc(Conversation.updated_at)
+    if queue == "fila":
+        query = query.filter(
+            Conversation.status == "aberta",
+            Conversation.atendente_id.is_(None),
+        )
+        # quem espera ha mais tempo primeiro
+        order_clause = Conversation.last_customer_msg_at.asc()
+    elif queue == "em_atendimento":
+        query = query.filter(
+            Conversation.status == "aberta",
+            Conversation.atendente_id.isnot(None),
+        )
+    elif queue is not None:
+        raise HTTPException(status_code=422, detail="queue invalida (use 'fila' ou 'em_atendimento')")
+
     total = query.count()
-    conversations = query.order_by(desc(Conversation.updated_at)).offset(offset).limit(limit).all()
+    conversations = query.order_by(order_clause).offset(offset).limit(limit).all()
 
     return ConversationListResponse(
         conversations=[ConversationResponse.model_validate(c) for c in conversations],
@@ -286,6 +305,13 @@ async def update_conversation(
     old_status = conversation.status
 
     if data.status is not None:
+        # CONV-06: whitelist — 'aguardando' e derivado (aberta+sem atendente),
+        # nunca persistido; transicao invalida e rejeitada explicitamente.
+        if data.status not in ("aberta", "encerrada"):
+            raise HTTPException(
+                status_code=422,
+                detail="Status invalido (use 'aberta' ou 'encerrada'; 'aguardando' e derivado)",
+            )
         conversation.status = data.status
     if data.atendente_id is not None:
         conversation.atendente_id = data.atendente_id
@@ -454,6 +480,56 @@ async def send_message(
 
     logger.info(f"Mensagem enviada para {conversation.nome} ({conversation.whatsapp})")
     return MessageResponse.model_validate(message)
+
+
+@router.post("/{conversation_id}/claim", response_model=ConversationResponse)
+async def claim_conversation(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    CONV-06: assumir a conversa (tira da fila). TRAVA anti-duplo-atendimento:
+    se outro atendente ja assumiu, 409. O atendente e SEMPRE o usuario
+    autenticado (nunca vem do request).
+    """
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id
+    ).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+    if conversation.status != "aberta":
+        raise HTTPException(status_code=409, detail="Conversa encerrada — reabra antes de assumir")
+    if conversation.atendente_id and conversation.atendente_id != current_user.id:
+        raise HTTPException(status_code=409, detail="Conversa ja esta em atendimento por outro usuario")
+    conversation.atendente_id = current_user.id
+    db.commit()
+    db.refresh(conversation)
+    logger.info(f"Conversa {conversation_id} assumida pelo usuario {current_user.id}")
+    return ConversationResponse.model_validate(conversation)
+
+
+@router.post("/{conversation_id}/release", response_model=ConversationResponse)
+async def release_conversation(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    CONV-06: liberar a conversa de volta para a fila (idempotente).
+    Handoff dirigido (reatribuir a alguem) = CONV-07.
+    """
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id
+    ).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+    if conversation.atendente_id is not None:
+        conversation.atendente_id = None
+        db.commit()
+        db.refresh(conversation)
+        logger.info(f"Conversa {conversation_id} devolvida a fila pelo usuario {current_user.id}")
+    return ConversationResponse.model_validate(conversation)
 
 
 @router.post("/{conversation_id}/messages/media", response_model=MessageResponse)

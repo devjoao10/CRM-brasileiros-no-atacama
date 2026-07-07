@@ -281,6 +281,9 @@
         // Send message
         document.getElementById('btnSend').addEventListener('click', sendMessage);
 
+        // CONV-06: assumir/liberar conversa
+        document.getElementById('btnClaim').addEventListener('click', claimOrRelease);
+
         // CONV-03: anexo de midia
         document.getElementById('btnAttach').addEventListener('click', () => {
             if (!activeConversation) { showToast('Abra uma conversa primeiro'); return; }
@@ -540,6 +543,51 @@
         }
     }
 
+    // ─── CONV-06: Fila (assumir/liberar) ─────────
+    function updateClaimButton(conv) {
+        const btn = document.getElementById('btnClaim');
+        if (!btn) return;
+        const me = Auth.getUser() || {};
+        if (conv.status !== 'aberta') {
+            btn.style.display = 'none';
+            return;
+        }
+        btn.style.display = 'inline-block';
+        btn.disabled = false;
+        if (!conv.atendente_id) {
+            btn.textContent = 'Assumir';
+            btn.dataset.action = 'claim';
+        } else if (conv.atendente_id === me.id) {
+            btn.textContent = 'Liberar';
+            btn.dataset.action = 'release';
+        } else {
+            btn.textContent = 'Em atendimento';
+            btn.dataset.action = '';
+            btn.disabled = true;
+        }
+    }
+
+    async function claimOrRelease() {
+        if (!activeConversation) return;
+        const btn = document.getElementById('btnClaim');
+        const action = btn.dataset.action;
+        if (!action) return;
+        const resp = await Auth.apiRequest(
+            `/api/conversations/${activeConversation.id}/${action}`, { method: 'POST' });
+        if (resp && resp.ok) {
+            const updated = await resp.json();
+            activeConversation.atendente_id = updated.atendente_id;
+            updateClaimButton(activeConversation);
+            showToast(action === 'claim' ? 'Conversa assumida' : 'Conversa devolvida à fila');
+            loadConversations();
+        } else {
+            let detail = 'Falha na operação.';
+            try { const e = await resp.json(); if (e && e.detail) detail = e.detail; } catch (_) { }
+            showToast(detail);
+            loadChat(activeConversation.id); // re-sincroniza (outro atendente pode ter assumido)
+        }
+    }
+
     // ─── CONV-05: Tags ───────────────────────────
     // Cor SEMPRE revalidada no cliente antes de ir para style (defesa em
     // profundidade — o backend ja valida ^#hex6$); nome SEMPRE via escapeHtml.
@@ -772,7 +820,10 @@
         const list = document.getElementById('convList');
         let filtered = conversations;
 
-        if (activeFilter !== 'all') {
+        if (activeFilter === 'aguardando') {
+            // CONV-06: fila = derivado (aberta + sem atendente)
+            filtered = filtered.filter(c => c.status === 'aberta' && !c.atendente_id);
+        } else if (activeFilter !== 'all') {
             filtered = filtered.filter(c => c.status === activeFilter);
         }
 
@@ -847,13 +898,17 @@
         document.getElementById('chatAvatar').textContent = getInitials(conv.nome);
         document.getElementById('chatName').textContent = conv.nome || conv.whatsapp;
 
-        const statusText = conv.status === 'aberta' ? 'Online' :
-            conv.status === 'aguardando' ? 'Aguardando' : 'Encerrada';
+        // CONV-06: estado DERIVADO (status + atendente_id) — 'aguardando' nao e persistido
+        const statusText = conv.status === 'encerrada' ? 'Encerrada' :
+            (conv.atendente_id ? 'Em atendimento' : 'Aguardando atendimento');
         document.getElementById('chatStatus').textContent = statusText;
 
         // Close button label
         document.getElementById('btnCloseConv').title =
             conv.status === 'encerrada' ? 'Reabrir conversa' : 'Encerrar conversa';
+
+        // CONV-06: botao Assumir/Liberar
+        updateClaimButton(conv);
 
         // Messages
         const container = document.getElementById('chatMessages');
