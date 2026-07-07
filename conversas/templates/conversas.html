@@ -2,13 +2,13 @@
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Conversas — Brasileiros no Atacama</title>
     <meta name="description" content="Plataforma de conversas WhatsApp integrada ao CRM">
     <!-- CONV-MOBILE-PWA-01: fundacao PWA (manifest + theme-color; SEM service worker) -->
     <link rel="manifest" href="/static/manifest.json">
     <meta name="theme-color" content="#366B85">
-    <link rel="stylesheet" href="/static/css/conversas.css?v=conv-mobile-pwa-01">
+    <link rel="stylesheet" href="/static/css/conversas.css?v=conv-mobile-resp-02">
 </head>
 <body>
     <div class="app-layout" id="appLayout">
@@ -145,6 +145,10 @@
             <div class="lead-panel-header">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
                 Informacoes do Lead
+                <!-- CONV-MOBILE-RESPONSIVE-02: fechar a subview mobile (CSS-hidden no desktop) -->
+                <button id="btnCloseInfoMobile" class="lead-panel-close" title="Fechar informações">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                </button>
             </div>
             <div class="lead-panel-body">
                 <div class="lead-profile">
@@ -277,6 +281,6 @@
     </div>
 
     <script src="/static/js/auth.js"></script>
-    <script src="/static/js/conversas.js?v=conv-mobile-pwa-01"></script>
+    <script src="/static/js/conversas.js?v=conv-mobile-resp-02"></script>
 </body>
 </html>

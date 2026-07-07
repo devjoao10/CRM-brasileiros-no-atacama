@@ -245,6 +245,37 @@
     }
     // ─── fim CONV-MOBILE-PWA-01 ───
 
+    // ─── CONV-MOBILE-RESPONSIVE-02: info do contato como subview mobile ───
+    // Em <=1200px o CONV-MOBILE-PWA-01 esconde o #leadPanel com !important
+    // (vencia o display inline do loadChat) — o que deixou as informacoes do
+    // contato INACESSIVEIS no mobile/tablet. Aqui o mesmo painel (mesmo
+    // markup, sem duplicar) reabre em tela cheia via body.conv-mobile-info-open;
+    // #btnToggleInfo abre, #btnCloseInfoMobile / voltar fecham. Estado so e
+    // usado sob matchMedia; desktop >1200px mantem o toggle inline original.
+    const infoLayoutQuery = window.matchMedia('(max-width: 1200px)');
+
+    function openMobileInfoPanel() {
+        try { document.body.classList.add('conv-mobile-info-open'); } catch (_) { /* no-op */ }
+    }
+
+    function closeMobileInfoPanel() {
+        try { document.body.classList.remove('conv-mobile-info-open'); } catch (_) { /* no-op */ }
+    }
+
+    function setupMobileInfoPanel() {
+        try {
+            const closeBtn = document.getElementById('btnCloseInfoMobile');
+            if (closeBtn) closeBtn.addEventListener('click', closeMobileInfoPanel);
+            // voltar ao desktop com a subview aberta nao pode prender o layout
+            if (infoLayoutQuery.addEventListener) {
+                infoLayoutQuery.addEventListener('change', (e) => {
+                    if (!e.matches) closeMobileInfoPanel();
+                });
+            }
+        } catch (_) { /* nunca quebra o chat */ }
+    }
+    // ─── fim CONV-MOBILE-RESPONSIVE-02 ───
+
     // ─── Init ───────────────────────────────────
     document.addEventListener('DOMContentLoaded', () => {
         if (!Auth.requireAuth()) return;
@@ -253,6 +284,7 @@
         setupEventListeners();
         setupConvNotificationControls();  // CONV-NOTIFICATIONS-01
         setupMobileLayout();              // CONV-MOBILE-PWA-01: lista primeiro
+        setupMobileInfoPanel();           // CONV-MOBILE-RESPONSIVE-02
         loadTags();          // CONV-05
         loadConversations();
 
@@ -610,6 +642,13 @@
 
         // Toggle info panel
         document.getElementById('btnToggleInfo').addEventListener('click', () => {
+            // CONV-MOBILE-RESPONSIVE-02: em <=1200px o painel e uma subview
+            // em tela cheia governada por classe (o display inline perderia
+            // para o !important da media query)
+            if (infoLayoutQuery.matches) {
+                document.body.classList.toggle('conv-mobile-info-open');
+                return;
+            }
             const panel = document.getElementById('leadPanel');
             panel.style.display = panel.style.display === 'none' ? 'flex' : 'none';
         });
@@ -645,6 +684,7 @@
 
         // Mobile back
         document.getElementById('mobileBack').addEventListener('click', () => {
+            closeMobileInfoPanel(); // CONV-MOBILE-RESPONSIVE-02: voltar fecha a subview de info
             document.getElementById('chatActive').style.display = 'none';
             document.getElementById('chatEmpty').style.display = 'flex';
             document.getElementById('convSidebar').classList.add('open');
@@ -710,6 +750,8 @@
         // CONV-MOBILE-PWA-01: no mobile, abrir a conversa fecha o drawer da
         // lista (chat em tela cheia); #mobileBack reabre (handler existente)
         closeMobileDrawerForChat();
+        // CONV-MOBILE-RESPONSIVE-02: trocar de conversa reseta a subview de info
+        closeMobileInfoPanel();
 
         // Highlight in list
         document.querySelectorAll('.conv-item').forEach(el => el.classList.remove('active'));

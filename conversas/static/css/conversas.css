@@ -1225,6 +1225,121 @@ body {
 }
 /* ============ fim CONV-MOBILE-PWA-01 ============ */
 
+/* ============================================================
+   CONV-MOBILE-RESPONSIVE-02: refinamento responsivo completo
+   (app shell mobile: chat + info do contato + Templates +
+   Settings). Regras ADITIVAS confinadas a media queries e
+   classes de estado (.conv-mobile-info-open/.conv-mobile-menu-open,
+   aplicadas por JS SO sob matchMedia) — desktop intacto.
+   ============================================================ */
+
+/* botao fechar do painel de info: so existe visualmente no mobile/tablet */
+.lead-panel-close { display: none; }
+
+/* hamburguer e backdrop das paginas Templates/Settings: idem */
+.page-menu-btn { display: none; }
+.page-drawer-backdrop { display: none; }
+
+@media (max-width: 1200px) {
+    /* INFO DO CONTATO como subview: a secao CONV-MOBILE-PWA-01 esconde o
+       .lead-panel com !important (para vencer o display inline do
+       loadChat); esta regra MAIS ESPECIFICA reabre o mesmo markup em tela
+       cheia quando o estado esta ativo — sem duplicar conteudo. */
+    body.conv-mobile-info-open .lead-panel {
+        display: flex !important;
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        max-width: 100%;
+        z-index: 300;
+        border-left: none;
+    }
+    body.conv-mobile-info-open .lead-panel-close {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 44px;
+        height: 44px;
+        border: none;
+        background: transparent;
+        color: var(--dark-500);
+        cursor: pointer;
+        margin-left: auto;
+        flex-shrink: 0;
+    }
+}
+
+@media (max-width: 640px) {
+    /* ANTI-ZOOM iOS: qualquer campo < 16px dispara focus-zoom no Safari e
+       o zoom persiste ("zoom excessivo"). O !important vence os
+       font-size INLINE (ex.: selects de filtro com 12px no markup). */
+    input, select, textarea { font-size: 16px !important; }
+
+    /* header do chat sem clipping: nome com ellipsis, acoes nao encolhem */
+    .chat-header { gap: 8px; }
+    .chat-header-info { min-width: 0; }
+    .chat-header-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .chat-header-actions { flex-shrink: 0; }
+
+    /* ── Templates/Settings: sidebar vira drawer com backdrop ── */
+    .page-sidebar {
+        position: fixed;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        z-index: 200;
+        width: 260px;
+        transform: translateX(-100%);
+        transition: transform 0.25s ease;
+    }
+    body.conv-mobile-menu-open .page-sidebar { transform: translateX(0); }
+
+    .page-menu-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 44px;
+        height: 44px;
+        border: none;
+        background: transparent;
+        color: var(--dark-500);
+        cursor: pointer;
+        flex-shrink: 0;
+    }
+    .page-drawer-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.4);
+        z-index: 150;
+    }
+    body:not(.conv-mobile-menu-open) .page-drawer-backdrop { display: none; }
+    body.conv-mobile-menu-open .page-drawer-backdrop { display: block; }
+
+    /* conteudo das paginas em coluna unica, sem overflow */
+    .page-layout { height: 100dvh; }
+    .page-content { padding: 16px; }
+    body { overflow-x: hidden; }
+    .page-header { flex-wrap: wrap; gap: 10px; }
+    .page-header-actions { flex-wrap: wrap; }
+    .page-filters { flex-direction: column; align-items: stretch; }
+    .filter-group { flex-wrap: wrap; }
+    .filter-search { width: 100%; }
+    .templates-grid { grid-template-columns: 1fr; }
+    .template-card { min-width: 0; overflow-wrap: break-word; }
+    .form-row { grid-template-columns: 1fr; }
+    .modal { max-width: calc(100vw - 24px); }
+
+    /* settings: abas viram chips rolaveis (logica do settings.js intacta) */
+    .settings-tabs { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; }
+    .settings-tab { white-space: nowrap; flex: 0 0 auto; padding: 13px 16px; }
+}
+
+@media (max-width: 420px) {
+    .page-content { padding: 12px; }
+    .settings-card-header { padding: 14px; }
+}
+/* ============ fim CONV-MOBILE-RESPONSIVE-02 ============ */
+
 /* ─── CONV-NOTIFICATIONS-01: contador/controles de novas mensagens ─── */
 .conv-notification-count {
     display: inline-flex; align-items: center; justify-content: center;
