@@ -181,6 +181,27 @@ crm_count_after = crm_exec("SELECT COUNT(*) AS c FROM lead_tags")[0].c
 check(crm_count_after == crm_count_before, "lead_tags do CRM INTOCADO para conversa sem lead")
 
 
+# ============ 5b. CONV-TAGS-UX-01: MODAL DE TAGS ============
+print("\nCONV-TAGS-UX-01 — guard do modal de tags")
+js_m = (CONVERSAS_DIR / "static" / "js" / "conversas.js").read_text(encoding="utf-8")
+html_m = (CONVERSAS_DIR / "templates" / "conversas.html").read_text(encoding="utf-8")
+css_m = (CONVERSAS_DIR / "static" / "css" / "conversas.css").read_text(encoding="utf-8")
+check("prompt(" not in js_m, "NENHUM prompt() nativo restante no JS")
+check('id="tagModalOverlay"' in html_m and 'id="btnTagModalCreate"' in html_m
+      and 'id="tagModalName"' in html_m, "markup do modal presente")
+check("não está vinculada a um lead" in html_m,
+      "aviso explicito de conversa NAO vinculada (nao finge sync)")
+check("openTagModal" in js_m and "closeTagModal" in js_m and "renderTagModal" in js_m
+      and "createAndApplyTagFromModal" in js_m, "funcoes do modal presentes")
+check("window._modalApplyTag(${Number(t.id)}" in js_m
+      and "window._modalRemoveTag(${Number(t.id)}" in js_m,
+      "apply/remove do modal com ids numericos coercidos")
+check("escapeHtml(t.nome)" in js_m and "safeTagColor" in js_m,
+      "chips do modal com nome escapado e cor sanitizada")
+check("resp.status === 409" in js_m, "409 (nome duplicado) reusa a tag existente (sem duplicar)")
+check(".tag-modal-overlay" in css_m and ".tag-modal" in css_m, "CSS do modal presente")
+check("lead_id) > 0" in js_m, "modal distingue conversa vinculada vs nao vinculada")
+
 # ============ 6. GUARD DO BUGFIX DE UI ============
 print("\nCONV-BF-UI-04 — guard estatico das abas (seletor dedicado + cache-bust)")
 css = (CONVERSAS_DIR / "static" / "css" / "conversas.css").read_text(encoding="utf-8")

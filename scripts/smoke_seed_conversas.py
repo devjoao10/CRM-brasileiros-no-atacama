@@ -228,6 +228,48 @@ def run() -> dict:
     else:
         counts["reusados"] += 1
 
+    # 7) [CONV-TAGS-UX-01] Conversa VINCULADA a lead — testa o espelho CRM<->Conversas
+    # pela UI. Em dev o banco local nao tem as tabelas do CRM; o seed cria as
+    # tabelas CRM-shaped (IF NOT EXISTS, aditivo, so-dev — mesmas do teste de
+    # sync) para simular a base compartilhada de producao.
+    from sqlalchemy import text as _text
+    SMOKE_LEAD_ID = 990001  # id alto para nao colidir com dados reais de dev
+    db.execute(_text(
+        "CREATE TABLE IF NOT EXISTS tags (id INTEGER PRIMARY KEY, "
+        "nome VARCHAR(100) UNIQUE NOT NULL, cor VARCHAR(7) NOT NULL DEFAULT '#2B6CB0', "
+        "created_at TIMESTAMP)"))
+    db.execute(_text(
+        "CREATE TABLE IF NOT EXISTS lead_tags (lead_id INTEGER NOT NULL, "
+        "tag_id INTEGER NOT NULL, PRIMARY KEY (lead_id, tag_id))"))
+    db.commit()
+    # tag criada "no CRM" e vinculada ao lead (idempotente)
+    row = db.execute(_text("SELECT id FROM tags WHERE nome = :n"),
+                     {"n": "[SMOKE] CRM Origem"}).fetchone()
+    if row:
+        crm_tag_id = row.id
+        counts["reusados"] += 1
+    else:
+        db.execute(_text(
+            "INSERT INTO tags (nome, cor, created_at) VALUES (:n, :c, CURRENT_TIMESTAMP)"),
+            {"n": "[SMOKE] CRM Origem", "c": "#0EA5E9"})
+        crm_tag_id = db.execute(_text("SELECT id FROM tags WHERE nome = :n"),
+                                {"n": "[SMOKE] CRM Origem"}).fetchone().id
+        counts["tags"] += 1
+    if not db.execute(_text(
+            "SELECT 1 FROM lead_tags WHERE lead_id = :l AND tag_id = :t"),
+            {"l": SMOKE_LEAD_ID, "t": crm_tag_id}).fetchone():
+        db.execute(_text("INSERT INTO lead_tags (lead_id, tag_id) VALUES (:l, :t)"),
+                   {"l": SMOKE_LEAD_ID, "t": crm_tag_id})
+        db.commit()
+
+    c7 = conv("5511911110007", "[SMOKE] Lead Vinculado Tags",
+              ultimo="Tags sincronizadas com o CRM", unread=1)
+    if c7.lead_id != SMOKE_LEAD_ID:
+        c7.lead_id = SMOKE_LEAD_ID
+        db.commit()
+    msg(c7, "wamid.SMOKE.C7.1", "inbound",
+        "Abra esta conversa: a tag [SMOKE] CRM Origem vem do lead no CRM", "received", 10)
+
     # Nota interna na conversa atribuida
     note = db.query(ConversationNote).filter(
         ConversationNote.conversation_id == c3.id,

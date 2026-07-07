@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Conversas — Brasileiros no Atacama</title>
     <meta name="description" content="Plataforma de conversas WhatsApp integrada ao CRM">
-    <link rel="stylesheet" href="/static/css/conversas.css?v=conv-ui-04">
+    <link rel="stylesheet" href="/static/css/conversas.css?v=conv-tags-ux-01">
 </head>
 <body>
     <div class="app-layout" id="appLayout">
@@ -219,7 +219,47 @@
         </aside>
     </div>
 
+    <!-- CONV-TAGS-UX-01: modal interno de gestao de tags (substitui o prompt nativo) -->
+    <div class="tag-modal-overlay" id="tagModalOverlay">
+        <div class="tag-modal" role="dialog" aria-modal="true" aria-labelledby="tagModalTitle">
+            <div class="tag-modal-header">
+                <h3 id="tagModalTitle">Gerenciar tags</h3>
+                <button class="tag-modal-close" id="btnTagModalClose" title="Fechar">&times;</button>
+            </div>
+
+            <div class="tag-modal-notice" id="tagModalNotice" style="display:none;">
+                Esta conversa ainda não está vinculada a um lead. As tags abaixo são
+                <strong>locais do Conversas</strong> — vincule um lead para sincronizar com o CRM.
+            </div>
+
+            <div class="tag-modal-section">
+                <div class="tag-modal-label">Tags aplicadas</div>
+                <div class="tag-modal-chips" id="tagModalApplied"></div>
+            </div>
+
+            <div class="tag-modal-section">
+                <div class="tag-modal-label">Tags disponíveis — clique para aplicar</div>
+                <div class="tag-modal-chips" id="tagModalAvailable"></div>
+            </div>
+
+            <div class="tag-modal-section">
+                <div class="tag-modal-label">Criar nova tag</div>
+                <div class="tag-modal-create">
+                    <input type="text" id="tagModalName" maxlength="50" placeholder="Nome da tag (ex: Urgente)">
+                    <input type="color" id="tagModalColor" value="#3B82F6" title="Cor da tag">
+                    <button id="btnTagModalCreate">Criar e aplicar</button>
+                </div>
+            </div>
+
+            <div class="tag-modal-status" id="tagModalStatus"></div>
+
+            <div class="tag-modal-footer">
+                <button class="tag-modal-cancel" id="btnTagModalCancel">Fechar</button>
+            </div>
+        </div>
+    </div>
+
     <script src="/static/js/auth.js"></script>
-    <script src="/static/js/conversas.js?v=conv-ui-04"></script>
+    <script src="/static/js/conversas.js?v=conv-tags-ux-01"></script>
 </body>
 </html>

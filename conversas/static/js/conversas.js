@@ -138,21 +138,16 @@
                 showToast('Falha ao aplicar a tag.');
             }
         });
-        document.getElementById('btnNewTag').addEventListener('click', async () => {
-            const nome = (prompt('Nome da nova tag:') || '').trim();
-            if (!nome) return;
-            const resp = await Auth.apiRequest('/api/tags', {
-                method: 'POST',
-                body: JSON.stringify({ nome: nome, cor: '#3B82F6' }),
-            });
-            if (resp && resp.ok) {
-                showToast('Tag criada');
-                await loadTags();
-            } else {
-                let detail = 'Falha ao criar a tag.';
-                try { const err = await resp.json(); if (err && err.detail) detail = err.detail; } catch (_) { }
-                showToast(detail);
-            }
+        // CONV-TAGS-UX-01: "+ Nova" abre o MODAL interno (nada de prompt nativo)
+        document.getElementById('btnNewTag').addEventListener('click', openTagModal);
+        document.getElementById('btnTagModalClose').addEventListener('click', closeTagModal);
+        document.getElementById('btnTagModalCancel').addEventListener('click', closeTagModal);
+        document.getElementById('tagModalOverlay').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) closeTagModal();  // clique fora fecha
+        });
+        document.getElementById('btnTagModalCreate').addEventListener('click', createAndApplyTagFromModal);
+        document.getElementById('tagModalName').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); createAndApplyTagFromModal(); }
         });
 
         // Responsavel selector in panel
@@ -660,6 +655,130 @@
             loadNotes();
         } else {
             showToast('Falha ao salvar a nota.');
+        }
+    }
+
+    // ─── CONV-TAGS-UX-01: modal de gestao de tags ─────────────────────────
+    // CRM e a fonte de verdade para conversa VINCULADA (lead_id>0): aplicar/
+    // remover/criar aqui replica no lead (endpoints do CONV-TAGS-SYNC-01);
+    // sem lead, as tags sao LOCAIS e o modal avisa — nunca finge sync.
+    function setTagModalStatus(text, isError) {
+        const el = document.getElementById('tagModalStatus');
+        el.textContent = text || '';
+        el.className = 'tag-modal-status' + (isError ? ' error' : '');
+    }
+
+    function openTagModal() {
+        if (!activeConversation) { showToast('Abra uma conversa primeiro'); return; }
+        document.getElementById('tagModalOverlay').classList.add('open');
+        setTagModalStatus('');
+        document.getElementById('tagModalName').value = '';
+        renderTagModal();
+    }
+
+    function closeTagModal() {
+        document.getElementById('tagModalOverlay').classList.remove('open');
+    }
+
+    function renderTagModal() {
+        if (!activeConversation) return;
+        const linked = Number(activeConversation.lead_id) > 0;
+        document.getElementById('tagModalTitle').textContent =
+            linked ? 'Gerenciar tags do lead' : 'Gerenciar tags da conversa';
+        document.getElementById('tagModalNotice').style.display = linked ? 'none' : 'block';
+
+        const applied = activeConversation.tags || [];
+        const appliedIds = new Set(applied.map(t => t.id));
+        const appliedBox = document.getElementById('tagModalApplied');
+        appliedBox.innerHTML = applied.length
+            ? applied.map(t =>
+                `<span class="tag-chip" style="border-color:${safeTagColor(t.cor)};">` +
+                `<span class="chip-dot" style="background:${safeTagColor(t.cor)};"></span>` +
+                `${escapeHtml(t.nome)}` +
+                ` <span class="chip-x" onclick="window._modalRemoveTag(${Number(t.id)})" title="Remover">&times;</span></span>`
+            ).join('')
+            : '<span class="tag-modal-empty">Nenhuma tag aplicada</span>';
+
+        const available = (allTags || []).filter(t => !appliedIds.has(t.id));
+        const availBox = document.getElementById('tagModalAvailable');
+        availBox.innerHTML = available.length
+            ? available.map(t =>
+                `<span class="tag-chip clickable" onclick="window._modalApplyTag(${Number(t.id)})" title="Aplicar tag">` +
+                `<span class="chip-dot" style="background:${safeTagColor(t.cor)};"></span>` +
+                `${escapeHtml(t.nome)}</span>`
+            ).join('')
+            : '<span class="tag-modal-empty">Todas as tags já estão aplicadas</span>';
+    }
+
+    async function refreshAfterTagChange(tagsFromApi) {
+        activeConversation.tags = tagsFromApi;
+        renderConvTags();
+        renderTagModal();
+        loadConversations();
+    }
+
+    window._modalApplyTag = async function (tagId) {
+        if (!activeConversation) return;
+        setTagModalStatus('Aplicando tag...');
+        const resp = await Auth.apiRequest(
+            `/api/conversations/${activeConversation.id}/tags/${Number(tagId)}`, { method: 'POST' });
+        if (resp && resp.ok) {
+            await refreshAfterTagChange(await resp.json());
+            setTagModalStatus('');
+            showToast('Tag aplicada');
+        } else {
+            setTagModalStatus('Não foi possível aplicar a tag. Tente novamente.', true);
+        }
+    };
+
+    window._modalRemoveTag = async function (tagId) {
+        if (!activeConversation) return;
+        setTagModalStatus('Removendo tag...');
+        const resp = await Auth.apiRequest(
+            `/api/conversations/${activeConversation.id}/tags/${Number(tagId)}`, { method: 'DELETE' });
+        if (resp && resp.ok) {
+            await refreshAfterTagChange(await resp.json());
+            setTagModalStatus('');
+            showToast('Tag removida');
+        } else {
+            setTagModalStatus('Não foi possível remover a tag. Tente novamente.', true);
+        }
+    };
+
+    async function createAndApplyTagFromModal() {
+        if (!activeConversation) return;
+        const nameInput = document.getElementById('tagModalName');
+        const nome = (nameInput.value || '').trim();
+        const cor = document.getElementById('tagModalColor').value || '#3B82F6';
+        if (!nome) { setTagModalStatus('Digite o nome da tag.', true); return; }
+
+        const btn = document.getElementById('btnTagModalCreate');
+        btn.disabled = true;
+        setTagModalStatus('Criando tag...');
+        try {
+            let tagId = null;
+            const resp = await Auth.apiRequest('/api/tags', {
+                method: 'POST',
+                body: JSON.stringify({ nome: nome, cor: cor }),
+            });
+            if (resp && resp.ok) {
+                tagId = (await resp.json()).id;
+            } else if (resp && resp.status === 409) {
+                // ja existe com esse nome -> reusa (sem duplicar) e aplica
+                await loadTags();
+                const existing = (allTags || []).find(
+                    t => t.nome.toLowerCase() === nome.toLowerCase());
+                if (existing) tagId = existing.id;
+            }
+            if (!tagId) {
+                setTagModalStatus('Não foi possível criar a tag. Verifique o nome e tente novamente.', true);
+                return;
+            }
+            await loadTags();  // catalogo/filtro da sidebar atualizados
+            await window._modalApplyTag(tagId);  // criar SEMPRE aplica na conversa atual
+            nameInput.value = '';
+        } finally {
+            btn.disabled = false;
         }
     }
 

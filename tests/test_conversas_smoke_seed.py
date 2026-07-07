@@ -81,8 +81,8 @@ check(seed_mod.refuse_reason(dict(os.environ)) is None, "ambiente do teste e ace
 print("\nSEED — primeira execucao cria os dados")
 r1 = seed_mod.run()
 check("refused" not in r1, "seed rodou (nao recusado)")
-check(r1["conversas"] == 6, f"6 conversas criadas (got {r1.get('conversas')})")
-check(r1["tags"] == 3, "3 tags criadas")
+check(r1["conversas"] == 7, f"7 conversas criadas (got {r1.get('conversas')})")
+check(r1["tags"] == 4, "4 tags criadas (3 locais + 1 no lado CRM)")
 check(r1["notas"] == 1, "1 nota interna criada")
 check(r1["midias"] == 3, "3 midias placeholder criadas")
 
@@ -94,7 +94,17 @@ from app.models.note import ConversationNote  # noqa: E402
 s = SessionLocal()
 convs = s.query(Conversation).filter(Conversation.nome.like("[SMOKE]%")).all()
 by_name = {c.nome: c for c in convs}
-check(len(convs) == 6, "6 conversas [SMOKE] no banco")
+check(len(convs) == 7, "7 conversas [SMOKE] no banco")
+
+# CONV-TAGS-UX-01: conversa VINCULADA a lead com tag criada no lado CRM
+linked = by_name.get("[SMOKE] Lead Vinculado Tags")
+check(linked is not None and linked.lead_id > 0, "conversa vinculada a lead (lead_id>0)")
+from sqlalchemy import text as _text  # noqa: E402
+crm_rows = s.execute(_text(
+    "SELECT t.nome FROM tags t JOIN lead_tags lt ON lt.tag_id = t.id WHERE lt.lead_id = :l"),
+    {"l": linked.lead_id}).fetchall()
+check(len(crm_rows) == 1 and crm_rows[0].nome == "[SMOKE] CRM Origem",
+      "tag [SMOKE] CRM Origem vinculada ao lead no lado CRM local")
 
 fila = [c for c in convs if c.status == "aberta" and c.atendente_id is None]
 check(len(fila) >= 3, f"fila tem conversas aguardando ({len(fila)})")
@@ -135,9 +145,33 @@ check(r2["conversas"] == 0 and r2["mensagens"] == 0 and r2["tags"] == 0
       "2a execucao nao cria NADA novo")
 check(r2["reusados"] > 10, f"registros reusados ({r2['reusados']})")
 s = SessionLocal()
-check(s.query(Conversation).filter(Conversation.nome.like("[SMOKE]%")).count() == 6,
-      "continua com exatamente 6 conversas")
+check(s.query(Conversation).filter(Conversation.nome.like("[SMOKE]%")).count() == 7,
+      "continua com exatamente 7 conversas")
 s.close()
+
+# ============ 5b. ESPELHO CRM->CONVERSAS PELA API (abrir a conversa) ============
+print("\nSEED — abrir a conversa vinculada espelha a tag do CRM")
+from fastapi.testclient import TestClient  # noqa: E402
+import app.main as main  # noqa: E402
+from app.auth import get_current_user  # noqa: E402
+
+
+class _U:
+    id = 1
+    email = "tester@local"
+    is_admin = True
+
+
+main.app.dependency_overrides[get_current_user] = lambda: _U()
+client = TestClient(main.app)
+s = SessionLocal()
+linked_id = s.query(Conversation).filter(
+    Conversation.nome == "[SMOKE] Lead Vinculado Tags").first().id
+s.close()
+detail = client.get(f"/api/conversations/{linked_id}").json()
+check(any(t["nome"] == "[SMOKE] CRM Origem" for t in detail.get("tags", [])),
+      "GET detail espelhou a tag do lead (CRM -> Conversas)")
+main.app.dependency_overrides.clear()
 
 
 # ============ 6. SEM OPERACAO DESTRUTIVA ============
