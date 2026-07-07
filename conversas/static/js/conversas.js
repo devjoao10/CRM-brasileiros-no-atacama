@@ -27,12 +27,190 @@
     // persistido — contam como abertas (mesma tolerancia do backend).
     const isOpenStatus = (s) => s === 'aberta' || s === 'aguardando';
 
+    // ─── CONV-NOTIFICATIONS-01: notificacoes leves de novas mensagens ───
+    // Camada 100% frontend sobre o polling existente. Sinais:
+    //  - lista: delta de unread_count por conversa (verdade do servidor para
+    //    inbound; baseline na PRIMEIRA carga — nunca notifica historico);
+    //  - conversa ABERTA: Set de ids de mensagens inbound ja vistas (o poll
+    //    de detail zera unread no backend, entao o delta da lista nao cobre
+    //    a conversa aberta — e por isso a lista PULA a conversa aberta,
+    //    evitando notificacao duplicada da mesma mensagem).
+    // Texto de notificacao do navegador e SEMPRE generico (nunca nome,
+    // telefone ou conteudo do cliente). Sem service worker, sem Web Push.
+    // Qualquer falha aqui e engolida — notificacao nunca quebra o chat.
+    const notificationState = {
+        baselined: false,          // primeira carga da lista ja virou baseline?
+        unreadByConv: new Map(),   // conv.id -> unread_count da ultima carga
+        seenInboundIds: new Set(), // ids inbound ja vistos (conversa aberta)
+        chatBaselined: new Set(),  // conv.ids com historico do chat baselinado
+        pending: 0,                // novas mensagens desde o ultimo "ack"
+        originalTitle: document.title,
+        soundReady: false,         // so toca depois da 1a interacao (autoplay)
+        soundMuted: false,
+        audioCtx: null,
+    };
+
+    function updateConvNotificationUi() {
+        const badge = document.getElementById('convNotificationCount');
+        if (badge) {
+            if (notificationState.pending > 0) {
+                badge.textContent = String(notificationState.pending);
+                badge.style.display = 'inline-flex';
+            } else {
+                badge.style.display = 'none';
+            }
+        }
+        document.title = notificationState.pending > 0
+            ? `(${notificationState.pending}) ${notificationState.originalTitle}`
+            : notificationState.originalTitle;
+    }
+
+    function ackConvNotifications() {
+        notificationState.pending = 0;
+        updateConvNotificationUi();
+    }
+
+    function playNotificationBeep() {
+        if (!notificationState.soundReady || notificationState.soundMuted) return;
+        try {
+            if (!notificationState.audioCtx) {
+                const Ctx = window.AudioContext || window.webkitAudioContext;
+                if (!Ctx) return;
+                notificationState.audioCtx = new Ctx();
+            }
+            const ctx = notificationState.audioCtx;
+            if (ctx.state === 'suspended') ctx.resume();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.frequency.value = 880;
+            gain.gain.value = 0.04;
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+            osc.stop(ctx.currentTime + 0.12);
+        } catch (_) { /* audio bloqueado/sem suporte: silencio, nunca quebra */ }
+    }
+
+    function showBrowserNotification() {
+        try {
+            if (!('Notification' in window)) return;
+            if (Notification.permission !== 'granted') return;
+            if (!document.hidden) return; // OS notification so com a aba oculta
+            // Texto GENERICO fixo — nunca nome, telefone ou mensagem do cliente.
+            new Notification('Nova mensagem no Conversas', {
+                body: 'Há uma nova mensagem aguardando atendimento.',
+                tag: 'conv-nova-mensagem', // colapsa notificacoes repetidas
+            });
+        } catch (_) { /* negado/sem suporte: fallback silencioso p/ titulo */ }
+    }
+
+    function notifyNewInbound(novas) {
+        try {
+            notificationState.pending += novas;
+            updateConvNotificationUi();
+            playNotificationBeep();
+            showBrowserNotification();
+        } catch (err) {
+            console.warn('Notificacao ignorada (nao afeta o chat):', err);
+        }
+    }
+
+    // Delta da LISTA (chamado a cada loadConversations, antes do render).
+    function processListNotifications(convs) {
+        try {
+            const st = notificationState;
+            if (!st.baselined) {
+                convs.forEach(c => st.unreadByConv.set(c.id, c.unread_count || 0));
+                st.baselined = true; // 1a carga = baseline: NUNCA notifica
+                return;
+            }
+            let novas = 0;
+            convs.forEach(c => {
+                const prev = st.unreadByConv.get(c.id);
+                const cur = c.unread_count || 0;
+                st.unreadByConv.set(c.id, cur);
+                // conversa aberta: deteccao pertence ao processChatNotifications
+                if (activeConversation && c.id === activeConversation.id) return;
+                const delta = (prev === undefined) ? cur : cur - prev;
+                if (delta > 0) novas += delta;
+            });
+            if (novas > 0) notifyNewInbound(novas);
+        } catch (err) {
+            console.warn('Notificacao (lista) ignorada:', err);
+        }
+    }
+
+    // Mensagens da conversa ABERTA (loadChat abre = baseline silencioso;
+    // poll de detail = novas inbound notificam apenas com a aba oculta).
+    function processChatNotifications(data, fromPoll) {
+        try {
+            const st = notificationState;
+            let novas = 0;
+            (data.messages || []).forEach(m => {
+                if (m.direction !== 'inbound' || !m.id) return;
+                if (st.seenInboundIds.has(m.id)) return;
+                st.seenInboundIds.add(m.id);
+                if (fromPoll && st.chatBaselined.has(data.id)) novas++;
+            });
+            st.chatBaselined.add(data.id);
+            if (novas > 0 && document.hidden) notifyNewInbound(novas);
+        } catch (err) {
+            console.warn('Notificacao (chat) ignorada:', err);
+        }
+    }
+
+    function setupConvNotificationControls() {
+        try {
+            const btn = document.getElementById('convNotificationEnable');
+            if (btn) {
+                // botao so aparece quando ha suporte E a permissao ainda nao
+                // foi decidida; NUNCA pedimos permissao no load da pagina.
+                if (('Notification' in window) && Notification.permission === 'default') {
+                    btn.style.display = 'inline-flex';
+                }
+                btn.addEventListener('click', async () => {
+                    try {
+                        if (!('Notification' in window)) { btn.style.display = 'none'; return; }
+                        const perm = await Notification.requestPermission();
+                        if (perm !== 'default') btn.style.display = 'none';
+                        showToast(perm === 'granted'
+                            ? 'Notificações do navegador ativadas'
+                            : 'Notificações não autorizadas — o contador na aba continua funcionando');
+                    } catch (_) { /* sem suporte: segue com titulo/badge */ }
+                });
+            }
+            const mute = document.getElementById('convNotificationMute');
+            if (mute) {
+                mute.addEventListener('click', () => {
+                    notificationState.soundMuted = !notificationState.soundMuted;
+                    mute.classList.toggle('muted', notificationState.soundMuted);
+                    mute.title = notificationState.soundMuted
+                        ? 'Som de notificação desativado'
+                        : 'Som de notificação ativado';
+                });
+            }
+            // Autoplay policy: som liberado apenas apos a 1a interacao real.
+            document.addEventListener('pointerdown', () => {
+                notificationState.soundReady = true;
+            }, { once: true });
+            // Focar/voltar para a aba "da o visto" nas novas mensagens.
+            window.addEventListener('focus', ackConvNotifications);
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) ackConvNotifications();
+            });
+        } catch (err) {
+            console.warn('Controles de notificacao indisponiveis:', err);
+        }
+    }
+    // ─── fim CONV-NOTIFICATIONS-01 ───
+
     // ─── Init ───────────────────────────────────
     document.addEventListener('DOMContentLoaded', () => {
         if (!Auth.requireAuth()) return;
 
         loadUsers();
         setupEventListeners();
+        setupConvNotificationControls();  // CONV-NOTIFICATIONS-01
         loadTags();          // CONV-05
         loadConversations();
 
@@ -43,6 +221,8 @@
                 const resp = await Auth.apiRequest(`/api/conversations/${activeConversation.id}`);
                 if (!resp || !resp.ok) return;
                 const data = await resp.json();
+                // CONV-NOTIFICATIONS-01: novas inbound da conversa aberta
+                processChatNotifications(data, true);
                 const oldCount = (activeConversation.messages || []).length;
                 const newCount = (data.messages || []).length;
                 if (newCount !== oldCount) {
@@ -462,6 +642,7 @@
 
         const data = await resp.json();
         conversations = data.conversations || [];
+        processListNotifications(conversations);  // CONV-NOTIFICATIONS-01 (antes do render)
         renderConversationList();
     }
 
@@ -470,6 +651,10 @@
         if (!resp || !resp.ok) return;
 
         activeConversation = await resp.json();
+        // CONV-NOTIFICATIONS-01: abrir a conversa baselina o historico
+        // (silencioso) e "da o visto" no contador global.
+        processChatNotifications(activeConversation, false);
+        ackConvNotifications();
         renderChat();
         renderLeadPanel();
 
