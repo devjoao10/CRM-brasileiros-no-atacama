@@ -498,14 +498,80 @@
         }
     }
 
+    // CONV-04: busca o blob de um asset (baixa da Meta sob demanda). Helper
+    // unico usado por player/imagem/video/download — toast seguro em falha.
+    async function fetchMediaBlob(assetId) {
+        const id = Number(assetId);
+        let resp = await Auth.apiRequest(`/api/media/${id}`);
+        if (resp && resp.status === 409) {
+            const f = await Auth.apiRequest(`/api/media/${id}/fetch`, { method: 'POST' });
+            if (!f || !f.ok) {
+                let detail = 'Falha ao baixar a mídia.';
+                try { const e = await f.json(); if (e && e.detail) detail = e.detail; } catch (_) { }
+                showToast(detail);
+                return null;
+            }
+            resp = await Auth.apiRequest(`/api/media/${id}`);
+        }
+        if (!resp || !resp.ok) { showToast('Mídia indisponível.'); return null; }
+        return await resp.blob();
+    }
+
+    // CONV-04: render inline de imagem/video via blob autenticado
+    window._showInlineMedia = async function (assetId, kind, btn) {
+        if (btn) { btn.disabled = true; btn.textContent = 'Carregando...'; }
+        const blob = await fetchMediaBlob(assetId);
+        if (!blob) {
+            if (btn) { btn.disabled = false; btn.textContent = 'Tentar novamente'; }
+            return;
+        }
+        const url = URL.createObjectURL(blob);
+        let el;
+        if (kind === 'image') {
+            el = document.createElement('img');
+            el.src = url;
+            el.style.maxWidth = '100%';
+            el.style.borderRadius = '8px';
+            el.style.cursor = 'zoom-in';
+            el.onclick = () => window.open(url, '_blank');
+        } else {
+            el = document.createElement('video');
+            el.controls = true;
+            el.src = url;
+            el.style.maxWidth = '260px';
+            el.style.borderRadius = '8px';
+        }
+        if (btn && btn.parentNode) btn.parentNode.replaceChild(el, btn);
+    };
+
+    // CONV-04: download de documento com o filename original (via data-attribute
+    // escapado — nunca interpolado em onclick)
+    window._downloadMedia = async function (assetId, btn) {
+        if (btn) { btn.disabled = true; }
+        const blob = await fetchMediaBlob(assetId);
+        if (btn) { btn.disabled = false; }
+        if (!blob) return;
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = (btn && btn.dataset && btn.dataset.fn) || 'documento';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    };
+
     // CONV-03: envio de midia por upload (multipart). Nao usa Auth.apiRequest
     // porque ele fixa Content-Type: application/json — FormData exige que o
     // browser defina o boundary sozinho. O Bearer vai manualmente.
+    // CONV-04: o texto digitado no input vira caption (imagem/video/documento).
     async function sendMediaFile(file) {
         if (!activeConversation || !file) return;
+        const input = document.getElementById('msgInput');
+        const caption = (input.value || '').trim();
         const fd = new FormData();
         fd.append('file', file, file.name);
-        fd.append('caption', '');
+        fd.append('caption', caption);
+        input.value = '';
+        input.style.height = 'auto';
         showToast('Enviando mídia...');
         const resp = await fetch(`/api/conversations/${activeConversation.id}/messages/media`, {
             method: 'POST',
@@ -740,7 +806,13 @@
 
         let content = escapeHtml(msg.content);
 
-        if (msg.msg_type === 'image' && msg.media_url) {
+        // CONV-04: caption real (esconde placeholders [IMAGE]/[VIDEO]/[DOCUMENT]/[AUDIO])
+        const captionHtml = (msg.content && !/^\[[A-Z]+\]$/.test(msg.content)) ? `<br>${content}` : '';
+
+        if (msg.msg_type === 'image' && msg.media_asset && msg.media_asset.id) {
+            // CONV-04: imagem inline sob demanda via blob autenticado
+            content = `<button class="media-inline-btn" onclick="window._showInlineMedia(${Number(msg.media_asset.id)}, 'image', this)" style="background:var(--dark-100); border:1px solid var(--dark-300); border-radius:8px; cursor:pointer; font-size:12px; padding:18px 26px; color:var(--dark-600);">&#128247; Ver imagem</button>${captionHtml}`;
+        } else if (msg.msg_type === 'image' && msg.media_url) {
             content = `<img src="${escapeHtml(msg.media_url)}" style="max-width:100%; border-radius:8px; margin-bottom:4px;"><br>${content}`;
         } else if (msg.msg_type === 'template') {
             content = `<div style="font-size:10px; color:var(--primary); font-weight:600; margin-bottom:4px; display:flex; align-items:center; gap:4px;"><svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>Template</div>${content}`;
@@ -752,13 +824,25 @@
                 content = '<em>Audio</em>';
             }
         } else if (msg.msg_type === 'document') {
-            content = '<em>Documento</em>';
+            // CONV-04: filename SEMPRE escapado (texto e data-attribute)
+            if (msg.media_asset && msg.media_asset.id) {
+                const fn = escapeHtml(msg.media_asset.filename || 'documento');
+                content = `<div style="display:flex; align-items:center; gap:8px;">&#128196; <span style="font-size:12px;">${fn}</span> <button class="media-download-btn" data-fn="${fn}" onclick="window._downloadMedia(${Number(msg.media_asset.id)}, this)" style="background:none; border:1px solid var(--dark-300); border-radius:6px; cursor:pointer; font-size:11px; padding:2px 8px; color:var(--dark-500);">Baixar</button></div>${captionHtml}`;
+            } else {
+                content = '<em>Documento</em>';
+            }
         } else if (msg.msg_type === 'video') {
-            content = '<em>Video</em>';
+            if (msg.media_asset && msg.media_asset.id) {
+                content = `<button class="media-inline-btn" onclick="window._showInlineMedia(${Number(msg.media_asset.id)}, 'video', this)" style="background:var(--dark-100); border:1px solid var(--dark-300); border-radius:8px; cursor:pointer; font-size:12px; padding:18px 26px; color:var(--dark-600);">&#127909; Ver v&iacute;deo</button>${captionHtml}`;
+            } else {
+                content = '<em>Video</em>';
+            }
         }
 
-        // CONV-02: preview autenticado da midia espelhada (id numerico do banco)
-        if (msg.media_asset && msg.media_asset.id) {
+        // CONV-02: preview generico so para tipos SEM render dedicado
+        // (audio/imagem/video/documento ja tem controles proprios — CONV-03/04)
+        if (msg.media_asset && msg.media_asset.id
+            && !['image', 'video', 'document', 'audio'].includes(msg.msg_type)) {
             content += `<div style="margin-top:4px;"><button class="media-preview-btn" onclick="window._openMedia(${Number(msg.media_asset.id)}, this)" style="background:none; border:1px solid var(--dark-300); border-radius:6px; cursor:pointer; font-size:11px; padding:2px 8px; color:var(--dark-500);">&#128206; Ver m&iacute;dia</button></div>`;
         }
 
