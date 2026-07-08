@@ -6,7 +6,8 @@ Package name:             Safe implementation prep for n8n BIA guardrails
 Package type:             OPS (workflow hardening / backup / controlled change)
 Target module:            n8n/Automations
 Secondary modules:        none
-Status:                   backup/export COMMITADO · safelock AGUARDANDO APROVAÇÃO ·
+Status:                   backup/export COMMITADO · safelock APLICADO (aprovado
+                          por João em 2026-07-08: workflow ARQUIVADO via MCP) ·
                           mudanças em workflows ativos NÃO APLICADAS (design only)
 Data:                     2026-07-08
 Baseline de rollback:     n8n/workflows/live_exports/20260708_1443/ (6/6 workflows)
@@ -61,9 +62,15 @@ executado ou tem credencial alterada.
 - **Verificação pós-mudança:** re-ler via MCP e confirmar `active: false` +
   nome novo.
 
-**Decisão pedida ao João:** Opção 1 (arquivar via MCP), Opção 2 (rename manual
-no UI ou via MCP com reconstrução), ou manter como está. **Sem aprovação
-explícita, nada será aplicado** — o pacote para aqui nesta frente.
+**Decisão do João (2026-07-08): Opção 1 APROVADA e APLICADA.**
+`archive_workflow(rYkKEJ81LghRil42)` executada com sucesso. Verificação
+pós-mudança: a lista de workflows do MCP passou a retornar **5** (o Gerente
+Autônomo saiu da lista ativável); o MCP recusa acesso a workflows arquivados
+("archived and cannot be accessed") — não pode ser ativado/executado por
+engano. Estado no momento do arquivamento: `active: false`,
+`activeVersionId: null` (nunca publicado). **Rollback:** desarquivar no n8n UI;
+definição de referência em
+`live_exports/20260708_1443/Gerente_Autonomo_de_Tarefas_IA.json`.
 
 ---
 

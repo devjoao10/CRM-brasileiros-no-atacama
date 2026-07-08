@@ -20,16 +20,18 @@
 | Notificação WhatsApp | sim | webhook `notificacao` POST — **sem auth** | `live_exports/20260708_1443/Notificacao_WhatsApp.json` |
 | Envio de Tarefas por Responsável | sim | cron `0 8 * * *` | `live_exports/20260708_1443/Envio_de_Tarefas_por_Responsavel.json` |
 | Analista de Métricas | sim | cron `0 7 * * *` | `live_exports/20260708_1443/Analista_de_Metricas.json` |
-| Gerente Autônomo de Tarefas IA | **NÃO** (nunca publicado) | schedule (minutos) | `live_exports/20260708_1443/Gerente_Autonomo_de_Tarefas_IA.json` |
+| Gerente Autônomo de Tarefas IA | **ARQUIVADO** (2026-07-08, safelock aprovado; nunca publicado) | schedule (minutos) | `live_exports/20260708_1443/Gerente_Autonomo_de_Tarefas_IA.json` |
 
 ## Avisos de segurança
 
 - 🔴 **3 webhooks públicos sem autenticação** (paths versionados no repo — o
   path NÃO é segredo; a proteção precisa ser auth). Plano de correção:
   [`docs/n8n_guardrails_plan.md`](../../docs/n8n_guardrails_plan.md).
-- 🔴 **Gerente Autônomo de Tarefas IA: NUNCA ATIVAR como está.** Contém tool
-  onde o LLM monta método+URL livres contra a API autenticada do CRM
-  (inclusive DELETE). Ver subpacote D do plano de guardrails.
+- 🟡 **Gerente Autônomo de Tarefas IA: ARQUIVADO em 2026-07-08** (safelock do
+  subpacote D, aprovado). Continha tool onde o LLM monta método+URL livres
+  contra a API autenticada do CRM (inclusive DELETE). **NUNCA desarquivar/
+  ativar como está** — se voltar, reescrever com tools allowlist GET-only
+  (ver subpacote D do plano de guardrails).
 - 🟠 **Notificação WhatsApp responde sucesso mesmo quando o envio falha**
   (`onError: continueRegularOutput` + resposta fixa). Ver subpacote B.
 - 🟠 **Envio de Tarefas**: e-mail da Júlia é placeholder e os campos
