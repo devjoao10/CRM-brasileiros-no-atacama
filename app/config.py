@@ -38,6 +38,20 @@ if not DATABASE_URL:
 # Em dev local, usa a mesma URL (SQLite não tem users separados)
 DATABASE_READONLY_URL = os.getenv("DATABASE_READONLY_URL", DATABASE_URL)
 
+# ─── Autenticação interna da IA (Perpétua) — PERPETUA-INTERNAL-AUTH-01 ──
+# Segredo BACKEND-ONLY usado para assinar/validar (HMAC-SHA256) as chamadas
+# internas que a Perpétua faz às rotas /api/ em nome do usuário logado.
+# Com isso, qualquer usuário autenticado usa as ferramentas da IA sem precisar
+# gerar manualmente uma API Key.
+#   • NUNCA exponha este valor no frontend nem em respostas de API.
+#   • Sem este valor, as ferramentas internas da IA ficam DESATIVADAS (fail-safe):
+#     a Perpétua ainda responde e faz SELECTs, mas `call_internal_api` recusa.
+#   • Gere com:  openssl rand -base64 32
+INTERNAL_AI_AUTH_SECRET = os.getenv("INTERNAL_AI_AUTH_SECRET", "")
+# Janela máxima de defasagem de relógio (segundos) aceita ao validar o timestamp
+# assinado. Protege contra replay de requisições internas antigas. Default: 300s.
+INTERNAL_AI_AUTH_MAX_SKEW_SECONDS = int(os.getenv("INTERNAL_AI_AUTH_MAX_SKEW_SECONDS", "300"))
+
 # Application
 APP_DOMAIN = os.getenv("APP_DOMAIN", "http://127.0.0.1:8000")
 CONVERSAS_BASE_URL = os.getenv("CONVERSAS_BASE_URL", "http://127.0.0.1:8001")
