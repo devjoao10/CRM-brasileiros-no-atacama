@@ -61,7 +61,7 @@ Você tem duas abordagens principais para consultar e alterar o sistema:
 
 REGRA DE SEGURANÇA:
 - NUNCA tente executar comandos SQL de escrita (INSERT, UPDATE, DELETE). Use sempre `call_internal_api` para alterações.
-- Se `call_internal_api` retornar erro de API Key, oriente o usuário a gerar uma em Configurações > API Key.
+- As ferramentas internas (`call_internal_api`) já agem automaticamente em nome do usuário logado — o usuário NÃO precisa gerar nenhuma API Key. Se `call_internal_api` retornar erro de configuração interna, informe que o administrador precisa verificar a configuração do servidor.
 
 CAPACIDADES DE DOCUMENTOS:
 - Você pode **ler** arquivos enviados pelo usuário (PDF, Excel, CSV, DOCX, TXT). O texto extraído será enviado junto com a mensagem.
@@ -332,24 +332,28 @@ async def download_file(
 @router.post("/chat", summary="Conversar com a IA do sistema")
 @_ai_limiter.limit("20/minute")
 def ai_chat(
-    request: ChatRequest,
-    req: Request,
+    request: Request,
+    chat_request: ChatRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    # NOTA (PERPETUA-INTERNAL-AUTH-01): `request: Request` DEVE ser o primeiro
+    # parâmetro e ser um starlette Request — o decorator @_ai_limiter.limit do
+    # SlowAPI procura um argumento chamado `request` desse tipo. O corpo da
+    # requisição fica em `chat_request: ChatRequest`.
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY não configurada no servidor.")
-    
-    # Propagar contexto do usuário para as ferramentas da IA (C3)
-    if current_user.api_key:
-        set_ai_user_context(current_user.api_key)
-    
+
+    # Propagar contexto do usuário logado para as ferramentas da IA.
+    # Todo usuário autenticado pode usar a Perpétua — NÃO depende de API Key.
+    set_ai_user_context(current_user)
+
     # Buscar ou criar sessão
     session = None
-    if request.session_id:
+    if chat_request.session_id:
         session = (
             db.query(ChatSession)
-            .filter(ChatSession.id == request.session_id, ChatSession.user_id == current_user.id)
+            .filter(ChatSession.id == chat_request.session_id, ChatSession.user_id == current_user.id)
             .first()
         )
     
@@ -360,17 +364,17 @@ def ai_chat(
         db.refresh(session)
     
     # Montar mensagem do usuário com contexto de arquivo se houver
-    user_message = request.message
-    if request.file_context:
-        user_message = f"[O usuário enviou um documento. Conteúdo extraído abaixo]\n\n{request.file_context}\n\n[Mensagem do usuário]: {request.message}"
-    
+    user_message = chat_request.message
+    if chat_request.file_context:
+        user_message = f"[O usuário enviou um documento. Conteúdo extraído abaixo]\n\n{chat_request.file_context}\n\n[Mensagem do usuário]: {chat_request.message}"
+
     # Salvar mensagem do usuário no banco
-    user_msg = ChatMessage(session_id=session.id, role="user", content=request.message)
+    user_msg = ChatMessage(session_id=session.id, role="user", content=chat_request.message)
     db.add(user_msg)
     db.commit()
-    
-    # Injetar dinamicamente a arquitetura de rotas da aplicação  
-    openapi_schema = req.app.openapi()
+
+    # Injetar dinamicamente a arquitetura de rotas da aplicação
+    openapi_schema = request.app.openapi()
     endpoints_info = []
     for path, methods in openapi_schema.get("paths", {}).items():
         if path.startswith("/api/"):
@@ -523,8 +527,8 @@ def ai_chat(
         msg_count = db.query(ChatMessage).filter(ChatMessage.session_id == session.id).count()
         if msg_count <= 2:  # user + model = primeiras 2 mensagens
             # Usar as primeiras palavras da mensagem do usuário como título
-            titulo = request.message[:60]
-            if len(request.message) > 60:
+            titulo = chat_request.message[:60]
+            if len(chat_request.message) > 60:
                 titulo += "..."
             session.titulo = titulo
         
