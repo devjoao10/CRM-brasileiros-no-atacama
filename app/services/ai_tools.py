@@ -1,15 +1,24 @@
+import contextvars
 import logging
 import re
+import time
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 from sqlalchemy import text, create_engine
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from app.database import engine, SessionLocal, IS_SQLITE
 from app.config import DATABASE_URL, DATABASE_READONLY_URL
 from app.models.lead import Lead
 from app.models.tag import Tag
 from app.models.task import Task
 from app.models.user import User
+from app.services.internal_ai_auth import (
+    sign_internal_request,
+    HEADER_USER_ID,
+    HEADER_TIMESTAMP,
+    HEADER_SIGNATURE,
+)
 import json
 import urllib.request
 import urllib.error
@@ -30,18 +39,41 @@ else:
         pool_pre_ping=True,
     )
 
-# Variável global para armazenar o contexto do usuário atual
-# Setado pelo router de AI antes de executar as tools
-_current_user_api_key = None
+# Contexto do usuário que está interagindo com a IA (PERPETUA-INTERNAL-AUTH-01).
+# Usa contextvars (não estado global mutável — resolve ARCH-04/RM-01) para ser
+# seguro sob concorrência async/threads: cada requisição enxerga o seu contexto.
+_ai_user_context: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar(
+    "ai_user_context", default=None
+)
 
-def set_ai_user_context(api_key: str):
-    """Define a API key do usuário que está interagindo com a IA."""
-    global _current_user_api_key
-    _current_user_api_key = api_key
+
+def set_ai_user_context(user=None, *, user_id=None, email=None, role=None):
+    """Define o contexto do usuário logado que está usando a IA.
+
+    Aceita um objeto User (preferencial) ou campos explícitos. Guarda id/email/
+    role para atribuição e para assinar as chamadas internas — NÃO depende mais
+    de o usuário ter gerado uma API Key.
+    """
+    if user is not None:
+        role_val = getattr(user, "role", None)
+        ctx = {
+            "user_id": getattr(user, "id", None),
+            "email": getattr(user, "email", None),
+            "role": getattr(role_val, "value", role_val),
+        }
+    else:
+        ctx = {"user_id": user_id, "email": email, "role": role}
+    _ai_user_context.set(ctx)
+
 
 def clear_ai_user_context():
-    global _current_user_api_key
-    _current_user_api_key = None
+    """Limpa o contexto do usuário da IA de forma segura."""
+    _ai_user_context.set(None)
+
+
+def get_ai_user_context():
+    """Retorna o contexto do usuário atual da IA (ou None)."""
+    return _ai_user_context.get()
 
 # =====================================================================
 # Database Inspector Tool
@@ -94,9 +126,30 @@ def run_select_query(query: str) -> str:
             rows = [dict(row._mapping) for row in result.fetchmany(500)]  # Limitar resultados
             logger.info(f"[AI SQL READ] {query[:200]} -> {len(rows)} rows")
             return json.dumps(rows, default=str)
+    except OperationalError:
+        # Falha de conexão/autenticação no banco read-only (ex.: crm_readonly com
+        # senha inválida, ou DATABASE_READONLY_URL mal configurada). NÃO vazar o
+        # detalhe (pode conter host/usuário) — mensagem segura + log no servidor.
+        logger.error(
+            "[AI SQL READ] Banco read-only indisponível ou credenciais inválidas "
+            "(verifique DATABASE_READONLY_URL / usuário crm_readonly)"
+        )
+        return json.dumps({
+            "error": (
+                "Não foi possível conectar ao banco de dados de leitura. "
+                "Verifique a configuração DATABASE_READONLY_URL e o usuário "
+                "crm_readonly no servidor. (detalhes técnicos registrados no log)"
+            )
+        })
+    except SQLAlchemyError as e:
+        # Erro de SQL (ex.: coluna/tabela inexistente): a mensagem do banco é útil
+        # para a IA se autocorrigir e não contém segredos — mas truncamos.
+        detail = str(getattr(e, "orig", e))
+        logger.warning(f"[AI SQL READ ERROR] {query[:200]} -> {detail[:200]}")
+        return json.dumps({"error": f"Erro na consulta: {detail[:300]}"})
     except Exception as e:
-        logger.warning(f"[AI SQL READ ERROR] {query[:200]} -> {e}")
-        return json.dumps({"error": str(e)})
+        logger.warning(f"[AI SQL READ ERROR] {query[:200]} -> {type(e).__name__}")
+        return json.dumps({"error": "Erro inesperado ao executar a consulta de leitura."})
 
 # run_sql_write_query REMOVIDO por segurança.
 # A IA deve usar call_internal_api para todas as operações de escrita,
@@ -295,23 +348,41 @@ def call_internal_api(method: str, path: str, payload_json: str = None) -> str:
     # Sanitizar path — prevenir SSRF para hosts externos
     if path.startswith("http") or ".." in path:
         return json.dumps({"error": "Path inválido. Use apenas caminhos relativos como /api/leads."})
-    
+
+    # Contexto do usuário logado (setado pelo router de AI). Não depende de API Key.
+    ctx = get_ai_user_context()
+    if not ctx or not ctx.get("user_id"):
+        return json.dumps({
+            "error": "Contexto do usuário da IA ausente. A requisição interna não pôde ser autenticada."
+        })
+
+    # Autenticação interna via HMAC assinado pelo servidor (backend-only secret).
+    from app import config
+    if not config.INTERNAL_AI_AUTH_SECRET:
+        return json.dumps({
+            "error": (
+                "Autenticação interna da IA não está configurada no servidor "
+                "(INTERNAL_AI_AUTH_SECRET ausente). Contate o administrador do sistema."
+            )
+        })
+
+    method_u = method.upper()
+    user_id = str(ctx["user_id"])
+    timestamp = str(int(time.time()))
+    signature = sign_internal_request(
+        config.INTERNAL_AI_AUTH_SECRET, user_id, timestamp, method_u, path
+    )
+
     url = f"http://127.0.0.1:8000{path}"
-    
-    # Usar a API key do usuário atual (setada pelo router de AI)
-    api_key = _current_user_api_key
-    
-    # Sem fallback — cada user usa sua própria API key
-    if not api_key:
-        return json.dumps({"error": "Usuário não possui API Key configurada. Gere uma em Configurações > API Key."})
-    
+
     headers = {
         'Content-Type': 'application/json',
-        'Accept': 'application/json'
+        'Accept': 'application/json',
+        HEADER_USER_ID: user_id,
+        HEADER_TIMESTAMP: timestamp,
+        HEADER_SIGNATURE: signature,
     }
-    if api_key:
-        headers['X-API-Key'] = api_key
-    
+
     data = None
     if payload_json and payload_json.strip():
         data = payload_json.encode('utf-8')
