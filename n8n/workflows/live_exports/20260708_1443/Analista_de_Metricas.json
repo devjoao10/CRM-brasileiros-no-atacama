@@ -1,0 +1,329 @@
+{
+  "_export": {
+    "package": "N8N-BIA-GUARDRAILS-02",
+    "source": "live n8n via official n8n MCP get_workflow_details (read-only)",
+    "instance": "https://n8n.crmbrasileirosnoatacama.cloud/",
+    "exported_at": "2026-07-08T14:43 local",
+    "published_version_matches_draft": true,
+    "trigger_info": "This workflow has the following trigger(s):\n\n\nSchedule trigger(s):\n\n\n\t\t\t\t<trigger 1>\n\t\t\t\t\t - Node name: Schedule Trigger\n\t\t\t\t</trigger 1>\n\nScheduled workflows can be executed directly through MCP clients and do not require external inputs.",
+    "sanitization": "phones/emails not previously versioned in this repo are replaced by __REDACTED_*__; credential BINDINGS are not included by the MCP export (re-link credentials by name in the n8n UI on restore)"
+  },
+  "id": "V8miBkgbY4bUWOns",
+  "name": "Analista de Métricas",
+  "active": true,
+  "isArchived": false,
+  "versionId": "999ab65f-02b5-4ff3-8c98-77aae84a7e9c",
+  "activeVersionId": "999ab65f-02b5-4ff3-8c98-77aae84a7e9c",
+  "triggerCount": 1,
+  "createdAt": "2026-05-21T19:35:37.126Z",
+  "updatedAt": "2026-07-08T16:09:31.582Z",
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Dashboard Hoje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Analista de Métricas",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analista de Métricas": {
+      "main": [
+        [
+          {
+            "node": "Gerar Email com Gráficos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gerar Email com Gráficos": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dashboard Hoje": {
+      "main": [
+        [
+          {
+            "node": "Dashboard Ontem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dashboard Ontem": {
+      "main": [
+        [
+          {
+            "node": "Reports Mês",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reports Mês": {
+      "main": [
+        [
+          {
+            "node": "Consolidar Dados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consolidar Dados": {
+      "main": [
+        [
+          {
+            "node": "Analista de Métricas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -208,
+        -48
+      ],
+      "id": "09b62a67-da6b-4572-a591-1651053240ef",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const hoje = new Date();\nconst ontem = new Date(hoje);\nontem.setDate(ontem.getDate() - 1);\n\nconst fmt = (d) => d.toISOString().split('T')[0];\n\nconst diaSemana = hoje.getDay();\nconst diaDoMes = hoje.getDate();\n\n// Semana atual (segunda a domingo)\nconst inicioSemana = new Date(hoje);\ninicioSemana.setDate(hoje.getDate() - ((diaSemana + 6) % 7));\nconst inicioSemanaPassada = new Date(inicioSemana);\ninicioSemanaPassada.setDate(inicioSemanaPassada.getDate() - 7);\nconst fimSemanaPassada = new Date(inicioSemana);\nfimSemanaPassada.setDate(fimSemanaPassada.getDate() - 1);\n\n// Mês atual e anterior\nconst inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);\nconst inicioMesPassado = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);\nconst fimMesPassado = new Date(hoje.getFullYear(), hoje.getMonth(), 0);\n\nconst tiposRelatorio = ['diario'];\nif (diaSemana === 1) tiposRelatorio.push('semanal');\nif (diaDoMes === 1) tiposRelatorio.push('mensal');\n\nreturn [{\n  json: {\n    tipos_relatorio: tiposRelatorio,\n    is_semanal: diaSemana === 1,\n    is_mensal: diaDoMes === 1,\n    hoje: fmt(hoje),\n    ontem: fmt(ontem),\n    inicio_semana_atual: fmt(inicioSemana),\n    inicio_semana_passada: fmt(inicioSemanaPassada),\n    fim_semana_passada: fmt(fimSemanaPassada),\n    inicio_mes_atual: fmt(inicioMes),\n    inicio_mes_passado: fmt(inicioMesPassado),\n    fim_mes_passado: fmt(fimMesPassado),\n    dia_semana_nome: ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'][diaSemana],\n    mes_nome: ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'][hoje.getMonth()]\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -32,
+        -48
+      ],
+      "id": "38fd7db1-c7fa-47e7-b649-ea0ac38820dd",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "options": {
+          "maxOutputTokens": 2048,
+          "temperature": 1
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        896,
+        160
+      ],
+      "id": "f625c8f3-21ea-4463-9e0f-f8a9b25ec5bf",
+      "name": "Google Gemini Chat Model"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Analise os seguintes dados do CRM \"Brasileiros no Atacama\" para o dia {{ $json.periodos.hoje }} ({{ $json.periodos.dia_semana_nome }}):\n\n📊 DASHBOARD HOJE:\n{{ JSON.stringify($json.dashboard_hoje, null, 2) }}\n\n📊 DASHBOARD ONTEM:\n{{ JSON.stringify($json.dashboard_ontem, null, 2) }}\n\n📈 RELATÓRIO DO MÊS ({{ $json.periodos.mes_nome }}):\n{{ JSON.stringify($json.reports_mes_atual, null, 2) }}\n\n📋 RESUMO:\n- Leads ativos: {{ $json.leads_ativos }}\n- Tarefas pendentes: {{ $json.tarefas_pendentes }}\n- Tarefas concluídas hoje: {{ $json.tarefas_concluidas_hoje }}\n\n{{ $json.dashboard_semana_atual ? '📆 DASHBOARD SEMANA ATUAL:\\n' + JSON.stringify($json.dashboard_semana_atual, null, 2) : '' }}\n{{ $json.dashboard_semana_passada ? '📆 DASHBOARD SEMANA PASSADA:\\n' + JSON.stringify($json.dashboard_semana_passada, null, 2) : '' }}\n{{ $json.dashboard_mes_atual ? '📅 DASHBOARD MÊS ATUAL:\\n' + JSON.stringify($json.dashboard_mes_atual, null, 2) : '' }}\n{{ $json.dashboard_mes_passado ? '📅 RELATÓRIO MÊS PASSADO:\\n' + JSON.stringify($json.dashboard_mes_passado, null, 2) : '' }}\n\nTipos de relatório para gerar: {{ $json.periodos.tipos_relatorio.join(', ') }}\n\nGere a análise completa seguindo as instruções do system prompt.",
+        "options": {
+          "systemMessage": "Você é um Analista Sênior de Métricas Comerciais da agência \"Brasileiros no Atacama\", especializada em turismo no Deserto do Atacama, Chile.\n\nSua função é analisar dados do CRM e gerar relatórios profissionais com insights acionáveis.\n\n## FORMATO DE SAÍDA\n\nRetorne sua análise em formato JSON com esta estrutura EXATA:\n\n{\n  \"resumo_executivo\": \"Parágrafo de 2-3 linhas com o panorama geral do dia\",\n  \"kpis\": {\n    \"leads_hoje\": 0,\n    \"leads_ontem\": 0,\n    \"variacao_leads\": \"+20%\",\n    \"vendas_hoje\": 0,\n    \"vendas_ontem\": 0,\n    \"variacao_vendas\": \"+10%\",\n    \"taxa_conversao\": \"5.2%\",\n    \"tarefas_pendentes\": 0\n  },\n  \"insights\": [\n    \"Insight 1 - observação acionável\",\n    \"Insight 2 - comparação relevante\",\n    \"Insight 3 - alerta ou recomendação\"\n  ],\n  \"alertas\": [\n    \"Alerta sobre situação que precisa de atenção imediata\"\n  ],\n  \"recomendacoes\": [\n    \"Ação específica que deve ser tomada\"\n  ],\n  \"analise_semanal\": null,\n  \"analise_mensal\": null\n}\n\n## REGRAS\n\n1. SEMPRE compare hoje com ontem e calcule variações percentuais\n2. Se for segunda-feira, preencha \"analise_semanal\" com: resumo da semana, comparação com semana anterior, tendências\n3. Se for dia 1 do mês, preencha \"analise_mensal\" com: resumo do mês, mês vs mês anterior, projeções\n4. Os insights devem ser ACIONÁVEIS, não apenas descritivos\n5. Identifique padrões e anomalias nos dados\n6. Use linguagem profissional mas acessível\n7. Se leads_hoje > leads_ontem, destaque como positivo\n8. Se taxa_conversao < 3%, alerte como preocupante\n9. Mencione destinos mais procurados quando relevante\n10. Retorne APENAS o JSON, sem markdown, sem explicações extras"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        896,
+        -48
+      ],
+      "id": "c2066ef7-9d1b-4dde-861f-0623008a1ed8",
+      "name": "Analista de Métricas"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pegar a análise do AI Agent\nconst analiseRaw = $input.first().json.output || $input.first().json.text || '{}';\nlet analise;\ntry {\n  const cleaned = analiseRaw.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n  analise = JSON.parse(cleaned);\n} catch(e) {\n  analise = {\n    resumo_executivo: analiseRaw,\n    kpis: {}, insights: [], alertas: [], recomendacoes: [],\n    analise_semanal: null, analise_mensal: null\n  };\n}\n\n// ⬇️ AQUI É A MUDANÇA: era 'Buscar Todos os Dados', agora é 'Consolidar Dados'\nconst dados = $('Consolidar Dados').first().json;\nconst p = dados.periodos;\n\n// Helper: gerar URL de gráfico QuickChart.io\nconst chart = (config) => {\n  const encoded = encodeURIComponent(JSON.stringify(config));\n  return `https://quickchart.io/chart?c=${encoded}&w=540&h=300&bkg=white`;\n};\n\nconst kpi = analise.kpis || {};\n\n// Gráfico 1: Leads Hoje vs Ontem\nconst chartLeads = chart({\n  type: 'bar',\n  data: {\n    labels: ['Ontem', 'Hoje'],\n    datasets: [{\n      label: 'Novos Leads',\n      data: [kpi.leads_ontem || 0, kpi.leads_hoje || 0],\n      backgroundColor: ['#94a3b8', '#6366f1']\n    }]\n  },\n  options: {\n    plugins: { title: { display: true, text: 'Leads: Hoje vs Ontem' }},\n    scales: { y: { beginAtZero: true }}\n  }\n});\n\n// Gráfico 2: Vendas Hoje vs Ontem\nconst chartVendas = chart({\n  type: 'bar',\n  data: {\n    labels: ['Ontem', 'Hoje'],\n    datasets: [{\n      label: 'Vendas',\n      data: [kpi.vendas_ontem || 0, kpi.vendas_hoje || 0],\n      backgroundColor: ['#94a3b8', '#10b981']\n    }]\n  },\n  options: {\n    plugins: { title: { display: true, text: 'Vendas: Hoje vs Ontem' }},\n    scales: { y: { beginAtZero: true }}\n  }\n});\n\n// Gráfico 3: Distribuição por Destino\nconst destinos = dados.reports_mes_atual?.breakdown?.destinos || {};\nconst chartDestinos = chart({\n  type: 'doughnut',\n  data: {\n    labels: Object.keys(destinos).slice(0, 6),\n    datasets: [{\n      data: Object.values(destinos).slice(0, 6),\n      backgroundColor: ['#6366f1','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4']\n    }]\n  },\n  options: {\n    plugins: { title: { display: true, text: `Destinos - ${p.mes_nome}` }}\n  }\n});\n\n// Gráfico 4: Evolução do mês\nconst dashChart = dados.reports_mes_atual?.chart || {};\nconst chartEvolucao = chart({\n  type: 'line',\n  data: {\n    labels: (dashChart.labels || []).map(l => l.slice(5)),\n    datasets: [\n      { label: 'Vendas', data: dashChart.vendas || [], borderColor: '#10b981', fill: false },\n      { label: 'Perdas', data: dashChart.perdas || [], borderColor: '#ef4444', fill: false },\n      { label: 'Em Negociação', data: dashChart.em_negociacao || [], borderColor: '#f59e0b', fill: false }\n    ]\n  },\n  options: {\n    plugins: { title: { display: true, text: `Evolução ${p.mes_nome}` }},\n    scales: { y: { beginAtZero: true }}\n  }\n});\n\n// Montar HTML\nconst varColor = (val) => {\n  if (!val) return '#64748b';\n  return val.startsWith('+') ? '#10b981' : val.startsWith('-') ? '#ef4444' : '#64748b';\n};\n\nlet html = `\n<div style=\"font-family:'Segoe UI',Arial,sans-serif;max-width:600px;margin:0 auto;background:#f8fafc;padding:20px;\">\n  \n  <div style=\"background:linear-gradient(135deg,#6366f1,#8b5cf6);padding:24px;border-radius:12px;color:white;text-align:center;\">\n    <h1 style=\"margin:0;font-size:22px;\">📊 Relatório ${p.dia_semana_nome} — ${p.hoje}</h1>\n    <p style=\"margin:8px 0 0;opacity:0.9;font-size:14px;\">Brasileiros no Atacama</p>\n  </div>\n\n  <div style=\"background:white;border-radius:12px;padding:20px;margin-top:16px;border:1px solid #e2e8f0;\">\n    <h2 style=\"color:#1e293b;font-size:16px;margin:0 0 12px;\">📝 Resumo Executivo</h2>\n    <p style=\"color:#475569;font-size:14px;line-height:1.6;margin:0;\">${analise.resumo_executivo || 'Sem dados suficientes para análise.'}</p>\n  </div>\n\n  <div style=\"display:flex;gap:12px;margin-top:16px;flex-wrap:wrap;\">\n    <div style=\"flex:1;min-width:120px;background:white;border-radius:12px;padding:16px;text-align:center;border:1px solid #e2e8f0;\">\n      <div style=\"font-size:24px;font-weight:700;color:#6366f1;\">${kpi.leads_hoje ?? '—'}</div>\n      <div style=\"font-size:12px;color:#64748b;\">Leads Hoje</div>\n      <div style=\"font-size:12px;font-weight:600;color:${varColor(kpi.variacao_leads)};\">${kpi.variacao_leads || ''}</div>\n    </div>\n    <div style=\"flex:1;min-width:120px;background:white;border-radius:12px;padding:16px;text-align:center;border:1px solid #e2e8f0;\">\n      <div style=\"font-size:24px;font-weight:700;color:#10b981;\">${kpi.vendas_hoje ?? '—'}</div>\n      <div style=\"font-size:12px;color:#64748b;\">Vendas Hoje</div>\n      <div style=\"font-size:12px;font-weight:600;color:${varColor(kpi.variacao_vendas)};\">${kpi.variacao_vendas || ''}</div>\n    </div>\n    <div style=\"flex:1;min-width:120px;background:white;border-radius:12px;padding:16px;text-align:center;border:1px solid #e2e8f0;\">\n      <div style=\"font-size:24px;font-weight:700;color:#f59e0b;\">${kpi.taxa_conversao || '—'}</div>\n      <div style=\"font-size:12px;color:#64748b;\">Conversão</div>\n    </div>\n    <div style=\"flex:1;min-width:120px;background:white;border-radius:12px;padding:16px;text-align:center;border:1px solid #e2e8f0;\">\n      <div style=\"font-size:24px;font-weight:700;color:#ef4444;\">${kpi.tarefas_pendentes ?? '—'}</div>\n      <div style=\"font-size:12px;color:#64748b;\">Tarefas Pendentes</div>\n    </div>\n  </div>\n\n  <div style=\"background:white;border-radius:12px;padding:20px;margin-top:16px;border:1px solid #e2e8f0;\">\n    <h2 style=\"color:#1e293b;font-size:16px;margin:0 0 12px;\">📊 Comparativo Diário</h2>\n    <img src=\"${chartLeads}\" alt=\"Leads\" style=\"width:100%;border-radius:8px;margin-bottom:12px;\" />\n    <img src=\"${chartVendas}\" alt=\"Vendas\" style=\"width:100%;border-radius:8px;\" />\n  </div>\n\n  <div style=\"background:white;border-radius:12px;padding:20px;margin-top:16px;border:1px solid #e2e8f0;\">\n    <h2 style=\"color:#1e293b;font-size:16px;margin:0 0 12px;\">🗺️ Destinos & Evolução</h2>\n    <img src=\"${chartDestinos}\" alt=\"Destinos\" style=\"width:100%;border-radius:8px;margin-bottom:12px;\" />\n    <img src=\"${chartEvolucao}\" alt=\"Evolução\" style=\"width:100%;border-radius:8px;\" />\n  </div>`;\n\nif (analise.insights?.length) {\n  html += `<div style=\"background:white;border-radius:12px;padding:20px;margin-top:16px;border:1px solid #e2e8f0;\">\n    <h2 style=\"color:#1e293b;font-size:16px;margin:0 0 12px;\">💡 Insights</h2>\n    <ul style=\"color:#475569;font-size:14px;padding-left:20px;margin:0;\">\n      ${analise.insights.map(i => `<li style=\"margin-bottom:8px;\">${i}</li>`).join('')}\n    </ul>\n  </div>`;\n}\n\nif (analise.alertas?.length) {\n  html += `<div style=\"background:#fef2f2;border-radius:12px;padding:20px;margin-top:16px;border:1px solid #fecaca;\">\n    <h2 style=\"color:#dc2626;font-size:16px;margin:0 0 12px;\">🚨 Alertas</h2>\n    <ul style=\"color:#991b1b;font-size:14px;padding-left:20px;margin:0;\">\n      ${analise.alertas.map(a => `<li style=\"margin-bottom:8px;\">${a}</li>`).join('')}\n    </ul>\n  </div>`;\n}\n\nif (analise.recomendacoes?.length) {\n  html += `<div style=\"background:#f0fdf4;border-radius:12px;padding:20px;margin-top:16px;border:1px solid #bbf7d0;\">\n    <h2 style=\"color:#16a34a;font-size:16px;margin:0 0 12px;\">✅ Recomendações</h2>\n    <ul style=\"color:#166534;font-size:14px;padding-left:20px;margin:0;\">\n      ${analise.recomendacoes.map(r => `<li style=\"margin-bottom:8px;\">${r}</li>`).join('')}\n    </ul>\n  </div>`;\n}\n\nif (analise.analise_semanal) {\n  html += `<div style=\"background:#eff6ff;border-radius:12px;padding:20px;margin-top:16px;border:1px solid #bfdbfe;\">\n    <h2 style=\"color:#1d4ed8;font-size:16px;margin:0 0 12px;\">📆 Análise Semanal</h2>\n    <p style=\"color:#1e40af;font-size:14px;line-height:1.6;margin:0;\">${typeof analise.analise_semanal === 'string' ? analise.analise_semanal : JSON.stringify(analise.analise_semanal)}</p>\n  </div>`;\n}\n\nif (analise.analise_mensal) {\n  html += `<div style=\"background:#fdf4ff;border-radius:12px;padding:20px;margin-top:16px;border:1px solid #e9d5ff;\">\n    <h2 style=\"color:#7e22ce;font-size:16px;margin:0 0 12px;\">📅 Análise Mensal</h2>\n    <p style=\"color:#6b21a8;font-size:14px;line-height:1.6;margin:0;\">${typeof analise.analise_mensal === 'string' ? analise.analise_mensal : JSON.stringify(analise.analise_mensal)}</p>\n  </div>`;\n}\n\nhtml += `\n  <div style=\"text-align:center;margin-top:20px;padding:16px;color:#94a3b8;font-size:12px;\">\n    Gerado automaticamente por IA — ${p.hoje} às 07:00<br>\n    Brasileiros no Atacama • CRM Analytics\n  </div>\n</div>`;\n\nlet assunto = `📊 Relatório Diário — ${p.hoje}`;\nif (p.is_semanal) assunto = `📆 Relatório Semanal + Diário — ${p.hoje}`;\nif (p.is_mensal) assunto = `📅 Relatório Mensal + Diário — ${p.hoje}`;\n\nreturn [{ json: { assunto, html, analise } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        -48
+      ],
+      "id": "24a21367-757a-487d-9eaf-49874aea4d3c",
+      "name": "Gerar Email com Gráficos"
+    },
+    {
+      "parameters": {
+        "sendTo": "joaopedro.fig.baldo@gmail.com",
+        "subject": "={{ $json.assunto }}",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1616,
+        -48
+      ],
+      "id": "1a2f57af-61b0-439d-b513-df238d2d3c10",
+      "name": "Send a message",
+      "webhookId": "d572d2ab-4ec0-4891-862c-43b7c5647a57"
+    },
+    {
+      "parameters": {
+        "url": "http://crm:8000/api/analytics/dashboard",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "start_date",
+              "value": "={{ $json.hoje }}"
+            },
+            {
+              "name": "end_date",
+              "value": "={{ $json.hoje }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        160,
+        -48
+      ],
+      "id": "c24a8bd3-75e3-4cb9-9c06-afc45870c961",
+      "name": "Dashboard Hoje"
+    },
+    {
+      "parameters": {
+        "url": "http://crm:8000/api/analytics/dashboard",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "start_date",
+              "value": "={{ $('Code in JavaScript').first().json.ontem }}"
+            },
+            {
+              "name": "end_date",
+              "value": "={{ $('Code in JavaScript').first().json.ontem }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        352,
+        -48
+      ],
+      "id": "62060e45-2965-425e-90fa-6a4ad967877d",
+      "name": "Dashboard Ontem"
+    },
+    {
+      "parameters": {
+        "url": "http://crm:8000/api/analytics/reports",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "start_date",
+              "value": "={{ $('Code in JavaScript').first().json.inicio_mes_atual }}"
+            },
+            {
+              "name": "end_date",
+              "value": "={{ $('Code in JavaScript').first().json.hoje }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        544,
+        -48
+      ],
+      "id": "6c053548-067e-4541-ac52-ac4d3a44b6d2",
+      "name": "Reports Mês"
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $('Code in JavaScript').first().json;\nconst dashHoje = $('Dashboard Hoje').first().json;\nconst dashOntem = $('Dashboard Ontem').first().json;\nconst reports = $('Reports Mês').first().json;\n\nreturn [{\n  json: {\n    periodos: p,\n    dashboard_hoje: dashHoje,\n    dashboard_ontem: dashOntem,\n    reports_mes_atual: reports\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        -48
+      ],
+      "id": "07dc1377-e594-4be8-9275-711d6167af0d",
+      "name": "Consolidar Dados"
+    }
+  ],
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "parentFolderId": null
+}

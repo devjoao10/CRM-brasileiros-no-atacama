@@ -1,0 +1,281 @@
+{
+  "_export": {
+    "package": "N8N-BIA-GUARDRAILS-02",
+    "source": "live n8n via official n8n MCP get_workflow_details (read-only)",
+    "instance": "https://n8n.crmbrasileirosnoatacama.cloud/",
+    "exported_at": "2026-07-08T14:43 local",
+    "published_version_matches_draft": null,
+    "trigger_info": "This workflow has the following trigger(s):\n\n\nSchedule trigger(s):\n\n\n\t\t\t\t<trigger 1>\n\t\t\t\t\t - Node name: A Cada 5 Minutos\n\t\t\t\t</trigger 1>\n\nScheduled workflows can be executed directly through MCP clients and do not require external inputs.",
+    "sanitization": "phones/emails not previously versioned in this repo are replaced by __REDACTED_*__; credential BINDINGS are not included by the MCP export (re-link credentials by name in the n8n UI on restore)"
+  },
+  "id": "rYkKEJ81LghRil42",
+  "name": "Gerente Autônomo de Tarefas IA",
+  "active": false,
+  "isArchived": false,
+  "versionId": "72d940b3-5617-41ab-bfb1-5e37383499ff",
+  "activeVersionId": null,
+  "triggerCount": 0,
+  "createdAt": "2026-05-21T14:04:08.907Z",
+  "updatedAt": "2026-07-08T16:09:29.837Z",
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "connections": {
+    "A Cada 5 Minutos": {
+      "main": [
+        [
+          {
+            "node": "Buscar Tarefas IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Tarefas IA": {
+      "main": [
+        [
+          {
+            "node": "Tem Tarefas?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tem Tarefas?": {
+      "main": [
+        [
+          {
+            "node": "Marcar Em Andamento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marcar Em Andamento": {
+      "main": [
+        [
+          {
+            "node": "Agente IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agente IA",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM API Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente IA",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agente IA": {
+      "main": [
+        [
+          {
+            "node": "Atualizar Resultado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes"
+            }
+          ]
+        }
+      },
+      "id": "1daf1d9d-c6f8-4a8a-9153-bb6c3a31ba29",
+      "name": "A Cada 5 Minutos",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -304,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://crm:8000/api/tasks",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "status",
+              "value": "pendente"
+            },
+            {
+              "name": "user_filter",
+              "value": "0"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "80b59586-eebb-4196-8e81-75ed0dec6573",
+      "name": "Buscar Tarefas IA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -64,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": ""
+          },
+          "conditions": [
+            {
+              "id": "cond-001",
+              "leftValue": "={{ $input.all().length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a7cb60b4-05de-46ae-ae64-bbfbeb129976",
+      "name": "Tem Tarefas?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        160,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=http://crm:8000/api/tasks/{{ $json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{ \"status\": \"em_andamento\" }",
+        "options": {}
+      },
+      "id": "d1db0444-857b-402a-8de0-689f51ada2f1",
+      "name": "Marcar Em Andamento",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        384,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Processe esta tarefa do CRM:\n\n📋 TAREFA #{{ $json.id }}\n- Título: {{ $json.titulo }}\n- Descrição: {{ $json.descricao || 'Sem descrição detalhada' }}\n- Data Limite: {{ $json.data_vencimento || 'Sem prazo definido' }}\n- Lead Vinculado: {{ $json.lead_id ? 'Lead #' + $json.lead_id : 'Nenhum lead vinculado' }}\n\nUse a ferramenta 'consultar_crm' para buscar dados necessários e execute a tarefa. Retorne APENAS o resultado final em texto claro.",
+        "options": {
+          "systemMessage": "Você é o Gerente Autônomo de Tarefas do CRM 'Brasileiros no Atacama', uma agência de turismo especializada em expedições ao Deserto do Atacama, Chile.\n\nSua função é receber tarefas atribuídas a você e executá-las de forma autônoma usando os dados disponíveis no CRM.\n\n## FERRAMENTAS DISPONÍVEIS\n\nVocê tem acesso à API do CRM através da ferramenta 'consultar_crm'. Endpoints disponíveis:\n\n- Listar todos os leads: GET http://crm:8000/api/leads?limit=500\n- Buscar lead por ID: GET http://crm:8000/api/leads/{id}\n- Listar tarefas: GET http://crm:8000/api/tasks\n- Analytics: GET http://crm:8000/api/analytics/dashboard\n\n## TIPOS DE TAREFAS QUE VOCÊ PODE EXECUTAR\n\n1. **Listas Personalizadas**: Filtrar leads por critérios (destino, data de viagem, número de passageiros, status no funil, etc.)\n2. **Follow-up**: Identificar leads que precisam de acompanhamento\n3. **Relatórios**: Gerar resumos e análises dos dados\n4. **Qualificação**: Avaliar e classificar leads\n5. **Pesquisa**: Buscar informações específicas nos dados\n\n## REGRAS\n\n1. Sempre comece buscando os dados necessários via API\n2. Analise a tarefa cuidadosamente antes de agir\n3. Responda em português brasileiro\n4. Seja objetivo e organizado no resultado\n5. Se a tarefa pedir uma lista, formate como lista com dados relevantes\n6. Se faltam dados para completar a tarefa, informe exatamente o que falta\n7. Não invente dados - use apenas o que está disponível no CRM\n8. Inclua números e estatísticas quando relevante",
+          "maxIterations": 5,
+          "returnIntermediateSteps": false
+        }
+      },
+      "id": "fb1d0405-24f4-47d2-a8eb-b56fdfd6d3e1",
+      "name": "Agente IA",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        624,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "maxOutputTokens": 4000,
+          "temperature": 0.3
+        }
+      },
+      "id": "867fef69-a01c-4571-bda7-28b64786b5ce",
+      "name": "Google Gemini",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        496,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "method": "={{ $fromAI('method', 'HTTP method: GET, POST, PUT', 'string') }}",
+        "url": "={{ $fromAI('url', 'Full URL including http://crm:8000 base', 'string') }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "adf97e9e-c90c-4223-bc8e-99c11101a041",
+      "name": "CRM API Tool",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        896,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=http://crm:8000/api/tasks/{{ $('Marcar Em Andamento').item.json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"concluido\",\n  \"resultado_ia\": {{ JSON.stringify($json.output || $json.text || 'Tarefa processada sem resultado textual') }}\n}",
+        "options": {}
+      },
+      "id": "609305e9-bea6-42d5-8acd-42db62e94049",
+      "name": "Atualizar Resultado",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        976,
+        -16
+      ]
+    }
+  ],
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "parentFolderId": null
+}
