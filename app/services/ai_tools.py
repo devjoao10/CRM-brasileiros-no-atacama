@@ -527,6 +527,7 @@ def generate_pdf_document(filename: str, title: str, content: str) -> str:
     import uuid
     try:
         from fpdf import FPDF
+        from fpdf.enums import XPos, YPos
 
         pdf = FPDF()
         pdf.add_page()
@@ -570,11 +571,14 @@ def generate_pdf_document(filename: str, title: str, content: str) -> str:
                 pdf.set_font("Helvetica", "", 10)
                 pdf.set_text_color(50, 50, 50)
                 pdf.cell(5, 6, txt="-", border=0, ln=0)
-                pdf.multi_cell(0, 6, txt=line[2:])
+                # PERPETUA-PDF-FIX-01: sem new_x/new_y o fpdf2 deixa o cursor na
+                # borda direita e o próximo multi_cell(0, ...) fica sem largura —
+                # "Not enough horizontal space to render a single character".
+                pdf.multi_cell(0, 6, txt=line[2:], new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             else:
                 pdf.set_font("Helvetica", "", 10)
                 pdf.set_text_color(50, 50, 50)
-                pdf.multi_cell(0, 6, txt=line)
+                pdf.multi_cell(0, 6, txt=line, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
         # Rodapé
         pdf.ln(10)
@@ -593,9 +597,13 @@ def generate_pdf_document(filename: str, title: str, content: str) -> str:
             "download_url": download_url,
             "message": f"PDF gerado com sucesso! Link: {download_url}"
         })
-    except Exception as e:
+    except Exception:
+        # Stack trace completo fica só no log interno; o usuário/LLM recebe uma
+        # mensagem estável, sem detalhes de biblioteca, caminhos ou conteúdo.
         logger.exception("Erro ao gerar PDF")
-        return json.dumps({"error": str(e)})
+        return json.dumps({
+            "error": "Não foi possível gerar o PDF. Tente novamente ou solicite o conteúdo como texto no chat."
+        })
 
 
 # List of tools to pass to Gemini
