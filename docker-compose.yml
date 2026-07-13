@@ -57,6 +57,7 @@ services:
       - SECRET_KEY=${SECRET_KEY:?Defina SECRET_KEY no .env}
       - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD:?Defina ADMIN_INITIAL_PASSWORD no .env}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - INTERNAL_AI_AUTH_SECRET=${INTERNAL_AI_AUTH_SECRET:-}
       - CONVERSAS_BASE_URL=http://conversas:8001
     labels:
       - "traefik.enable=true"
