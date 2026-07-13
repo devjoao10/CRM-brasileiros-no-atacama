@@ -300,7 +300,7 @@ def segment_leads(
         total=total,
         skip=skip,
         limit=limit,
-        leads=[_build_lead_response(l, db) for l in leads],
+        leads=[_build_lead_response(l) for l in leads],
     )
 
 
