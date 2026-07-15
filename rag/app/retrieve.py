@@ -91,10 +91,7 @@ def retrieve(query: str, *, top_k=None, categories=None, include_pending=False,
     thr = config.SCORE_THRESHOLD if threshold is None else threshold
     qterms = _salient_terms(query)
     backend = get_backend(backend_name)
-    try:
-        qvec = backend.embed_query(query)  # task_type de PERGUNTA
-    finally:
-        backend.close()
+    qvec = backend.embed([query])[0]
 
     store = SqliteVectorStore(db_path=db_path)
     try:
