@@ -64,6 +64,14 @@ a BIA NÃO usa o dado — escala para humano.
 _meta/               schema, mapa, checklist, pendências, prompt futuro
 ```
 
+## Navegação
+
+- Cada pasta de conteúdo (`00_persona/` … `09_guardrails/`) tem um `README.md`
+  que lista seus arquivos, o arquivo canônico da pasta e o total de pendências.
+- Pendências: visão por tema em `_meta/pendencias_validacao.md`; visão por
+  arquivo (onde abrir) em `_meta/pendencias_index.md`.
+- Mapa completo de arquivos: `_meta/mapa_de_arquivos.md`.
+
 ## Convenções
 
 - Todo arquivo de contexto tem frontmatter YAML (ver

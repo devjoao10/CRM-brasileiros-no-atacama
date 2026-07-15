@@ -38,8 +38,28 @@
 | _meta | schema_frontmatter.md | este schema | — |
 | _meta | mapa_de_arquivos.md | este mapa | — |
 | _meta | checklist_atualizacao.md | como João atualiza | — |
-| _meta | pendencias_validacao.md | TODAS as pendências | — |
+| _meta | pendencias_validacao.md | TODAS as pendências (por tema) | — |
+| _meta | pendencias_index.md | pendências por arquivo (visão de navegação) | — |
 | _meta | system_prompt_futuro_curto.md | esqueleto do prompt ≤6-8k | — |
+
+## Camada de navegação (N8N-BIA-GUARDRAILS-03, 2026-07-14)
+
+Índices de navegação por pasta, ADITIVOS (nenhum arquivo de contexto foi
+movido, renomeado ou apagado). Cada pasta de conteúdo tem um `README.md` que
+lista seus arquivos, marca o arquivo canônico da pasta (ex.:
+`06_saude_seguranca/README.md` aponta `restricoes_e_cuidados.md`;
+`09_guardrails/README.md` aponta `politicas_criticas.md`) e o total de
+pendências.
+
+| Pasta | Índice |
+|---|---|
+| raiz | 00_README.md (visão geral do vault) |
+| 00_persona … 09_guardrails | README.md em cada pasta (10 no total) |
+| _meta | pendencias_index.md (mapa de pendências por arquivo) |
+
+Convenção: `README.md` (raiz `00_README.md` ou `<pasta>/README.md`) e os
+arquivos de `_meta/` são índices — isentos de frontmatter no validator. Todo
+o resto continua exigindo o frontmatter de 9 campos.
 
 Nota de desvio: `objecoes_seguranca.md` (ASCII) em vez de
 `objecoes_segurança.md` — nomes de arquivo sem acento para não quebrar
