@@ -14,11 +14,25 @@ DB_PATH = Path(os.getenv("BIA_RAG_DB_PATH", str(_DEFAULT_DB)))
 COLLECTION = os.getenv("BIA_RAG_COLLECTION", "bia_context_v1")
 
 # Backend de embeddings: "gemini" (produção) ou "deterministic" (testes/offline).
-EMBEDDING_BACKEND = os.getenv("BIA_RAG_EMBEDDING_BACKEND", "deterministic")
-GEMINI_EMBEDDING_MODEL = os.getenv("BIA_RAG_GEMINI_EMBED_MODEL", "models/text-embedding-004")
+# Aceita BIA_RAG_EMBEDDING_BACKEND (legado) ou BIA_RAG_EMBEDDING_PROVIDER.
+EMBEDDING_BACKEND = os.getenv(
+    "BIA_RAG_EMBEDDING_BACKEND",
+    os.getenv("BIA_RAG_EMBEDDING_PROVIDER", "deterministic"),
+)
 # GEMINI_API_KEY é lido pelo backend Gemini via ambiente; nunca impresso.
 GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
-# Dimensão do backend determinístico (irrelevante para o Gemini, que define a sua).
+
+# Modelo/dimensão/task types do Gemini (SDK google-genai). NÃO usar
+# text-embedding-004 (descontinuado, 404 na API). Defaults seguros → o operador
+# não precisa adicionar essas variáveis manualmente.
+EMBEDDING_MODEL = os.getenv("BIA_RAG_EMBEDDING_MODEL", "gemini-embedding-001")
+EMBEDDING_DIMENSIONS = int(os.getenv("BIA_RAG_EMBEDDING_DIMENSIONS", "768"))
+DOCUMENT_TASK_TYPE = os.getenv("BIA_RAG_DOCUMENT_TASK_TYPE", "RETRIEVAL_DOCUMENT")
+QUERY_TASK_TYPE = os.getenv("BIA_RAG_QUERY_TASK_TYPE", "QUESTION_ANSWERING")
+QUERY_FALLBACK_TASK_TYPE = os.getenv("BIA_RAG_QUERY_FALLBACK_TASK_TYPE", "RETRIEVAL_QUERY")
+EMBEDDING_BATCH_SIZE = int(os.getenv("BIA_RAG_EMBEDDING_BATCH_SIZE", "32"))
+
+# Dimensão do backend determinístico (offline/testes; independente do Gemini).
 DETERMINISTIC_DIM = int(os.getenv("BIA_RAG_DETERMINISTIC_DIM", "256"))
 
 # Autenticação interna do serviço (header). Valor só no ambiente do container.
