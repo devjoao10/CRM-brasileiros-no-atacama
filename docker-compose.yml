@@ -130,37 +130,7 @@ services:
       - "traefik.http.routers.conversas.tls.certresolver=letsencrypt"
       - "traefik.http.services.conversas.loadbalancer.server.port=8001"
 
-  # BIA-RAG-CONTEXT-01: serviço RAG interno para a BIA consultar o contexto
-  # canônico. SEM Traefik/label → NÃO exposto publicamente; acessível apenas na
-  # rede Docker interna (n8n chama http://bia_rag:8100). Corpus montado
-  # read-only; vetores em volume persistente.
-  bia_rag:
-    build:
-      context: .
-      dockerfile: rag/Dockerfile
-    container_name: bia_rag
-    restart: always
-    expose:
-      - "8100"
-    environment:
-      - ENVIRONMENT=production
-      - BIA_RAG_EMBEDDING_BACKEND=${BIA_RAG_EMBEDDING_BACKEND:-gemini}
-      - BIA_RAG_DB_PATH=/data/bna_bia_context.sqlite3
-      - BIA_RAG_CORPUS_DIR=/corpus
-      - BIA_RAG_COLLECTION=bia_context_v1
-      - BIA_RAG_INDEX_VERSION=bia_context_v1
-      # Reusa a credencial Gemini já existente (embeddings text-embedding-004).
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      # Secret de auth interna do serviço (header X-BIA-RAG-Token). Sem valor no repo.
-      - BIA_RAG_INTERNAL_SECRET=${BIA_RAG_INTERNAL_SECRET:-}
-    volumes:
-      # Corpus: fonte de verdade, montado SOMENTE-LEITURA (o serviço nunca escreve nele).
-      - ./bna_agent_context:/corpus:ro
-      # Vetores persistentes (sobrevive a rebuild/restart).
-      - bia_rag_data:/data
-
 volumes:
   pgdata:
   n8n_data:
   conversas_media:
-  bia_rag_data:

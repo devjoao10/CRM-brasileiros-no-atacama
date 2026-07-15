@@ -1,5 +1,0 @@
-# Índice vetorial (derivado, reconstruível) e caches — não versionar
-data/
-*.sqlite3
-__pycache__/
-*.pyc
