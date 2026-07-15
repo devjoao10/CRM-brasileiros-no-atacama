@@ -1,5 +1,7 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.0
 pydantic>=2.9
-google-generativeai>=0.8.2
+# SDK oficial atual do Gemini. Substitui google-generativeai (descontinuado;
+# text-embedding-004 retorna 404 na API). Limite superior p/ builds reproduzíveis.
+google-genai>=1.0.0,<2.0.0
 # sqlite3, hashlib, json, math, re: stdlib (vector store e embeddings deterministicos)
