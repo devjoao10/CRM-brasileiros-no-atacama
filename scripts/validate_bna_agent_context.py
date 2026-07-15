@@ -46,6 +46,12 @@ REQUIRED_FILES = [
     "_meta/schema_frontmatter.md", "_meta/mapa_de_arquivos.md",
     "_meta/checklist_atualizacao.md", "_meta/pendencias_validacao.md",
     "_meta/system_prompt_futuro_curto.md",
+    "_meta/pendencias_index.md",
+    # Indices de navegacao por pasta (N8N-BIA-GUARDRAILS-03).
+    "00_persona/README.md", "01_empresa/README.md", "02_destinos/README.md",
+    "03_tours/README.md", "04_precos/README.md", "05_politicas/README.md",
+    "06_saude_seguranca/README.md", "07_faq_objecoes/README.md",
+    "08_operacao_agente/README.md", "09_guardrails/README.md",
 ]
 
 MIN_TOUR_FILES = 14
@@ -112,7 +118,10 @@ def main() -> int:
         text = p.read_text(encoding="utf-8")
 
         # frontmatter obrigatorio fora de README/_meta
-        if rel != "00_README.md" and not rel.startswith("_meta/"):
+        # READMEs de navegacao (raiz 00_README.md ou <pasta>/README.md) e os
+        # arquivos de _meta/ sao indices, nao arquivos de contexto: isentos.
+        is_readme = rel == "00_README.md" or rel.endswith("/README.md")
+        if not is_readme and not rel.startswith("_meta/"):
             ok, missing = has_frontmatter(text)
             if not ok:
                 failures.append(f"{rel}: sem frontmatter")
@@ -127,9 +136,11 @@ def main() -> int:
 
         pendencias_total += text.count("[PENDENTE_VALIDACAO]")
 
-        # consistencia status vs marcador
-        if "[PENDENTE_VALIDACAO]" in text and 'status: "validado"' in text:
-            warnings.append(f"{rel}: contem [PENDENTE_VALIDACAO] mas status=validado (marcadores sao pontuais? conferir)")
+        # consistencia status vs marcador (so em arquivos de contexto; indices
+        # README/_meta citam os tokens ao documenta-los e nao tem status proprio)
+        if not is_readme and not rel.startswith("_meta/"):
+            if "[PENDENTE_VALIDACAO]" in text and 'status: "validado"' in text:
+                warnings.append(f"{rel}: contem [PENDENTE_VALIDACAO] mas status=validado (marcadores sao pontuais? conferir)")
 
     # prompt futuro: existe, nao e gigante, nao tem tabela de precos
     fp = ROOT / "_meta/system_prompt_futuro_curto.md"
