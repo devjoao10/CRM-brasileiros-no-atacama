@@ -1,0 +1,66 @@
+{
+  "name": "BIA Context Ingestion (RAG reindex)",
+  "nodes": [
+    {
+      "parameters": { "rule": { "interval": [ { "field": "cronExpression", "expression": "0 5 * * *" } ] } },
+      "id": "c0a11111-0000-4000-8000-000000000001",
+      "name": "Reindex Diario 05:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0],
+      "notes": "Cron 05:00 America/Sao_Paulo (fora das janelas 07:00/08:00 dos outros crons). Reindexacao incremental por hash."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://bia_rag:8100/ingest",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"mode\": \"incremental\" }",
+        "options": { "timeout": 120000 }
+      },
+      "id": "c0a11111-0000-4000-8000-000000000002",
+      "name": "Ingest Incremental",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [260, 0],
+      "onError": "continueErrorOutput",
+      "notes": "POST /ingest incremental. So chunks novos/alterados sao (re)embeddados. Idempotente."
+    },
+    {
+      "parameters": {},
+      "id": "c0a11111-0000-4000-8000-000000000003",
+      "name": "OK (metricas)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [520, -80]
+    },
+    {
+      "parameters": {},
+      "id": "c0a11111-0000-4000-8000-000000000004",
+      "name": "Falha de Ingestao",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [520, 120],
+      "notes": "Ramo de erro: registrar; NAO reprocessar automaticamente (ingestao e idempotente, mas evitamos loop)."
+    }
+  ],
+  "connections": {
+    "Reindex Diario 05:00": { "main": [[{ "node": "Ingest Incremental", "type": "main", "index": 0 }]] },
+    "Ingest Incremental": {
+      "main": [
+        [{ "node": "OK (metricas)", "type": "main", "index": 0 }],
+        [{ "node": "Falha de Ingestao", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1", "timezone": "America/Sao_Paulo" },
+  "active": false,
+  "_meta": {
+    "package": "BIA-RAG-CONTEXT-01",
+    "purpose": "Reindexacao incremental agendada do corpus (tambem pode ser disparada manualmente no UI).",
+    "import_notes": "Importar INATIVO. Vincular 'BIA RAG Auth' (httpHeaderAuth) no no Ingest. A ingestao tambem roda pelo deploy (bundle) e pelo CLI; este workflow so mantem o indice fresco."
+  }
+}

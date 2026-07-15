@@ -1,0 +1,75 @@
+{
+  "name": "BIA Context Healthcheck (RAG)",
+  "nodes": [
+    {
+      "parameters": { "rule": { "interval": [ { "field": "minutes", "minutesInterval": 30 } ] } },
+      "id": "d0a11111-0000-4000-8000-000000000001",
+      "name": "A cada 30 min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://bia_rag:8100/health",
+        "options": { "timeout": 8000 }
+      },
+      "id": "d0a11111-0000-4000-8000-000000000002",
+      "name": "GET /health",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [260, 0],
+      "onError": "continueErrorOutput",
+      "notes": "Health nao exige auth (endpoint publico interno de liveness). Timeout 8s."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true },
+          "combinator": "and",
+          "conditions": [
+            { "leftValue": "={{ $json.status }}", "rightValue": "healthy", "operator": { "type": "string", "operation": "equals" } }
+          ]
+        }
+      },
+      "id": "d0a11111-0000-4000-8000-000000000003",
+      "name": "Esta healthy?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [520, 0]
+    },
+    { "parameters": {}, "id": "d0a11111-0000-4000-8000-000000000004", "name": "OK", "type": "n8n-nodes-base.noOp", "typeVersion": 1, "position": [760, -80] },
+    {
+      "parameters": {},
+      "id": "d0a11111-0000-4000-8000-000000000005",
+      "name": "Alertar (sem envio externo)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [760, 120],
+      "notes": "Ponto de integracao de alerta. NAO envia WhatsApp/e-mail neste pacote (fora de escopo). Operador liga a um canal de alerta seguro depois."
+    }
+  ],
+  "connections": {
+    "A cada 30 min": { "main": [[{ "node": "GET /health", "type": "main", "index": 0 }]] },
+    "GET /health": {
+      "main": [
+        [{ "node": "Esta healthy?", "type": "main", "index": 0 }],
+        [{ "node": "Alertar (sem envio externo)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Esta healthy?": {
+      "main": [
+        [{ "node": "OK", "type": "main", "index": 0 }],
+        [{ "node": "Alertar (sem envio externo)", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1", "timezone": "America/Sao_Paulo" },
+  "active": false,
+  "_meta": {
+    "package": "BIA-RAG-CONTEXT-01",
+    "purpose": "Liveness do servico RAG a cada 30 min. Sem envio externo neste pacote.",
+    "import_notes": "Importar INATIVO."
+  }
+}
