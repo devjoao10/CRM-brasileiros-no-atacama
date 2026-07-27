@@ -277,6 +277,27 @@ check(_last_sent() == "Oi Érica!", f"acentos preservados no primeiro nome (got 
 check(variables_service.first_name("   Ana Maria") == "Ana", "espacos externos ignorados no primeiro nome")
 check(variables_service.first_name("João Pedro Baldo") == "João", "unicode preservado (João)")
 
+# `_is_strict_position` e uma reimplementacao manual dos lookbehinds de
+# TOKEN_PATTERN (a varredura precisa ver tambem as posicoes recusadas).
+# Este cruzamento garante que as duas implementacoes nunca divirjam.
+_amostras = [
+    "@NOMEEMPRESA no inicio", "texto @NOMEEMPRESA no meio", "no fim @NOMEEMPRESA",
+    "*@A_B* _@C1_ ~@DE~", "contato@empresa.com", "CONTATO@EMPRESA.COM",
+    "José@EMPRESA", "Bom dia.@NOME", "@UM@DOIS", "linha1\n@TOK, fim.",
+    "100@NOME", "_@NOME_", "@N", "@", "email a@B.com e @TOK", "@NOME__ x",
+]
+_esperado = {}
+for s in _amostras:
+    vistos = []
+    for m in variables_service.TOKEN_PATTERN.finditer(s):
+        tok = "@" + m.group(1)
+        if tok not in vistos:
+            vistos.append(tok)
+    _esperado[s] = vistos
+_diff = [(s, variables_service.find_tokens(s), _esperado[s])
+         for s in _amostras if variables_service.find_tokens(s) != _esperado[s]]
+check(not _diff, f"varredura concorda com TOKEN_PATTERN em todas as amostras (divergencias: {_diff})")
+
 
 # ============ 4. POSICAO, FORMATACAO E REPETICAO ============
 print("\nVAR — posicao, formatacao e repeticao")

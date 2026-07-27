@@ -57,6 +57,11 @@ _BRT = dt_timezone(timedelta(hours=-3))
 #   _@NOMEEMPRESA_          -> casa (italico preservado)
 #   @nome-com-hifen         -> nao casa (minusculo; nao e token do sistema)
 #   @  /  @A                -> nao casa (minimo de 2 caracteres)
+# TOKEN_PATTERN e a ESPECIFICACAO de referencia da posicao valida. A varredura
+# real usa _scan() + _is_strict_position() (precisa enxergar tambem as posicoes
+# recusadas, veja abaixo), que sao uma reimplementacao manual destes
+# lookbehinds — `tests/test_conversas_variables.py` cruza as duas
+# implementacoes para que nunca divirjam.
 _TOKEN_BODY = r"[A-Z0-9][A-Z0-9_]{0,58}[A-Z0-9]"
 TOKEN_PATTERN = re.compile(r"(?<![^\W_])(?<![.@])@(" + _TOKEN_BODY + r")")
 
