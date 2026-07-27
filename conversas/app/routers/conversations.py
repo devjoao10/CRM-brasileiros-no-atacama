@@ -27,6 +27,7 @@ from app.schemas.conversation import (
 )
 from app.services import whatsapp
 from app.services import crm as crm_service
+from app.services import variables as variables_service
 from app.services.outbound import (
     record_outbound_message,
     classify_wa_response,
@@ -79,6 +80,15 @@ async def send_notification(
     Used by N8N workflows (WF-06, WF-08, WF-09) to send alerts and reports.
 
     Payload: {"to": "5511999999999", "message": "Texto da notificação"}
+
+    CONV-VAR-01-HARD-01 — VARIAVEIS (@TOKEN) NAO SAO SUPORTADAS AQUI.
+    Esta rota recebe apenas um numero de telefone: nao ha `conversation_id`,
+    logo nao existe contexto de conversa (cliente, atendente, protocolo) para
+    resolver token algum. O texto e enviado EXATAMENTE como recebido — um
+    `@TOKEN` no payload chegaria literal ao destinatario.
+    Portanto: quem chama esta rota (n8n) deve montar o texto ja pronto, sem
+    tokens. Suporte futuro exigiria um contrato explicito de contexto
+    (ex.: `conversation_id` obrigatorio no payload) e um pacote proprio.
     """
     result = await whatsapp.send_text_message(data.to, data.message, db)
 
@@ -422,12 +432,26 @@ async def update_conversation(
             AutoReply.is_active == True,
         ).first()
         if reply and reply.message and reply.message.strip():
-            # CONV-08b: status fiel ao resultado do envio (nunca 'sent' em falha).
-            wa_response = await whatsapp.send_text_message(conversation.whatsapp, reply.message, db)
-            record_outbound_message(
-                db, conversation, reply.message, "text", wa_response,
-                update_preview=False,
+            # CONV-VAR-01-HARD-01: resolucao TUDO OU NADA. Se qualquer
+            # variavel nao resolver, a frase de encerramento inteira e pulada
+            # — melhor nao enviar nada do que enviar texto mutilado
+            # ("Obrigado , volte sempre"). Nunca levanta excecao, entao o PUT
+            # de status segue normalmente.
+            auto_text = variables_service.render_auto_reply(
+                db,
+                reply.message,
+                variables_service.VariableContext(db, conversation=conversation, user=current_user),
+                trigger="end_service",
             )
+            if auto_text:
+                # CONV-08b: status fiel ao resultado do envio (nunca 'sent' em falha).
+                wa_response = await whatsapp.send_text_message(conversation.whatsapp, auto_text, db)
+                record_outbound_message(
+                    db, conversation, auto_text, "text", wa_response,
+                    update_preview=False,
+                )
+            # auto_text None -> resposta pulada; render_auto_reply ja registrou
+            # o log estruturado (trigger, conversa, token, problema).
 
     return ConversationResponse.model_validate(conversation)
 
@@ -519,11 +543,34 @@ async def send_message(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversa nao encontrada")
 
+    # CONV-VAR-01: variaveis (@TOKEN) sao resolvidas AQUI, no backend, ANTES de
+    # qualquer chamada ao provider e ANTES de persistir. Se algum token nao
+    # puder ser resolvido, o envio e BLOQUEADO (422) e NADA e persistido — o
+    # token nunca vai literalmente para o cliente. O texto original continua
+    # intacto na mensagem rapida/template de origem; o historico guarda o
+    # texto renderizado (foi o que o cliente recebeu) e por isso o retry
+    # reenvia exatamente o mesmo conteudo.
+    # CONV-VAR-01-HARD-01: cobre TAMBEM o branch de midia por `media_url`
+    # (usado por chamadas diretas a API), onde `content` e a legenda. Fica de
+    # fora apenas `msg_type='template'`: o corpo do template e renderizado nos
+    # servidores da Meta a partir de placeholders posicionais {{1}}, entao
+    # substituicao textual nao se aplica — e escopo do CONV-VAR-02.
+    content = data.content
+    if data.msg_type != "template":
+        try:
+            content = variables_service.render_strict(
+                db,
+                data.content,
+                variables_service.VariableContext(db, conversation=conversation, user=current_user),
+            )
+        except variables_service.VariableResolutionError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
     # Send via WhatsApp API
     wa_response = None
 
     if data.msg_type == "text":
-        wa_response = await whatsapp.send_text_message(conversation.whatsapp, data.content, db)
+        wa_response = await whatsapp.send_text_message(conversation.whatsapp, content, db)
     elif data.msg_type == "template" and data.template_name:
         # Puxa o template do banco para checar o idioma (default pt_BR)
         from app.models.template import MessageTemplate
@@ -538,14 +585,14 @@ async def send_message(
         )
     elif data.media_url:
         wa_response = await whatsapp.send_media_message(
-            conversation.whatsapp, data.msg_type, data.media_url, data.content, db
+            conversation.whatsapp, data.msg_type, data.media_url, content, db
         )
 
     # CONV-08/CONV-08b: persistencia centralizada com status fiel ao resultado.
     # Sucesso -> 'sent' + wamid + preview/unread; falha -> 'failed' + last_error
     # seguro, preview intacto; simulado (dev) -> 'sent' explicito sem wamid.
     message = record_outbound_message(
-        db, conversation, data.content, data.msg_type, wa_response,
+        db, conversation, content, data.msg_type, wa_response,
         media_url=data.media_url, update_preview=True, reset_unread=True,
     )
 
@@ -664,6 +711,19 @@ async def send_media_message_upload(
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Arquivo vazio")
+
+    # CONV-VAR-01: a legenda vem do MESMO composer que o seletor "@" alimenta,
+    # entao ela passa pela mesma resolucao do envio de texto — sem isto, anexar
+    # um arquivo enviaria o token literal ao cliente. Bloqueia ANTES de ler a
+    # politica de midia e de qualquer chamada a Meta.
+    try:
+        caption = variables_service.render_strict(
+            db,
+            caption or "",
+            variables_service.VariableContext(db, conversation=conversation, user=current_user),
+        )
+    except variables_service.VariableResolutionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     try:
         message, _asset = await send_media_upload(

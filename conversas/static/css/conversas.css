@@ -1150,6 +1150,102 @@ body {
 .qr-palette-empty { padding: 14px 12px; font-size: 12px; color: var(--dark-400); }
 
 /* ============================================================
+   CONV-VAR-01: variaveis dinamicas (@TOKEN)
+   Reaproveita os tokens visuais existentes (cores, raios, sombras);
+   nenhuma regra pre-existente e alterada.
+   ============================================================ */
+
+/* Seletor no composer (mesma anatomia da paleta de mensagens rapidas) */
+.var-palette {
+    position: absolute; bottom: 65px; left: 70px; width: 320px;
+    max-height: 260px; overflow-y: auto;
+    background: var(--white); border: 1px solid var(--dark-200);
+    border-radius: var(--radius-md); box-shadow: var(--shadow-lg); z-index: 100;
+}
+.var-palette-header {
+    padding: 8px 12px; border-bottom: 1px solid var(--dark-100);
+    font-size: 11px; font-weight: 600; color: var(--dark-400);
+    text-transform: uppercase; letter-spacing: 0.4px;
+}
+.var-palette-item {
+    padding: 10px 12px; cursor: pointer; border-bottom: 1px solid var(--dark-100);
+}
+.var-palette-item:last-child { border-bottom: none; }
+.var-palette-item:hover { background: var(--light); }
+.var-palette-token { font-size: 12px; font-weight: 700; color: var(--primary); }
+.var-palette-name { font-size: 12px; color: var(--dark-500); }
+.var-palette-empty { padding: 14px 12px; font-size: 12px; color: var(--dark-400); }
+#btnVars:hover { background: var(--light) !important; color: var(--primary) !important; }
+
+/* Lista de variaveis na tela de configuracoes */
+.var-item {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 12px 20px; border-bottom: 1px solid var(--dark-100);
+}
+.var-item:last-child { border-bottom: none; }
+.var-item.inactive { opacity: 0.55; }
+.var-item-main { min-width: 0; }
+.var-token { font-size: 13px; font-weight: 700; color: var(--primary); }
+.var-name { font-size: 13px; color: var(--dark-600); }
+.var-origin {
+    font-size: 12px; color: var(--dark-400); margin-top: 2px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px;
+}
+.var-origin.missing { color: #b3261e; }
+.var-meta-line { font-size: 10px; color: var(--dark-400); margin-top: 4px; }
+.var-item-meta { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.var-kind-badge {
+    font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px;
+    background: var(--light); color: var(--dark-500); white-space: nowrap;
+}
+.var-kind-badge.dynamic { background: #e8f1f5; color: #366B85; }
+.var-kind-badge.inactive { background: #f3f3f3; color: var(--dark-400); }
+.var-item-actions { display: flex; gap: 4px; }
+
+/* Formulario da variavel */
+.var-token-field { display: flex; align-items: center; gap: 6px; }
+.var-token-prefix {
+    font-size: 15px; font-weight: 700; color: var(--primary);
+    flex-shrink: 0; line-height: 1;
+}
+.var-token-field input { flex: 1; text-transform: uppercase; }
+.var-kind-options { display: flex; flex-direction: column; gap: 8px; }
+.var-kind-option {
+    display: flex; align-items: center; gap: 8px; font-size: 13px;
+    color: var(--dark-600); cursor: pointer; font-weight: 400;
+}
+.var-active-row { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 400; }
+.var-error {
+    margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-md);
+    background: #fdeded; color: #b3261e; font-size: 12px;
+}
+.var-insert-row { margin-bottom: 6px; }
+.var-insert-select { width: 100%; font-size: 12px; }
+
+/* CONV-VAR-01-HARD-01: prévia da mensagem no composer */
+#btnPreview:hover { background: var(--light) !important; color: var(--primary) !important; }
+.preview-block { margin-bottom: 14px; }
+.preview-label {
+    font-size: 11px; font-weight: 600; color: var(--dark-400);
+    text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 4px;
+}
+.preview-text {
+    white-space: pre-wrap; word-break: break-word; font-size: 13px;
+    color: var(--dark-600); background: var(--light);
+    border-radius: var(--radius-md); padding: 10px 12px;
+}
+.preview-text.preview-original { color: var(--dark-400); }
+.preview-status {
+    font-size: 12px; font-weight: 600; padding: 8px 12px;
+    border-radius: var(--radius-md); margin-top: 4px;
+}
+.preview-status.ok { background: #e8f5ec; color: #1e6b39; }
+.preview-status.has-problems { background: #fdeded; color: #b3261e; }
+.preview-problems { margin: 8px 0 0 18px; font-size: 12px; color: var(--dark-600); }
+.preview-problems li { margin-bottom: 4px; }
+.preview-problem-token { font-weight: 700; color: var(--primary); }
+
+/* ============================================================
    CONV-MOBILE-PWA-01: mobile-first (completa o fluxo parcial)
    O breakpoint 640px pre-existente ja faz da .conv-sidebar um
    drawer off-canvas (.open o exibe) e o #mobileBack ja tem
@@ -1207,6 +1303,10 @@ body {
 
     /* paleta "/" cabe na largura do viewport, acima do composer */
     .qr-palette { left: 8px; right: 8px; width: auto; }
+    /* CONV-VAR-01: seletor de variaveis acompanha a paleta no mobile */
+    .var-palette { left: 8px; right: 8px; width: auto; }
+    .var-item { flex-direction: column; align-items: flex-start; }
+    .var-origin { max-width: 100%; }
 
     /* dropdown de templates tem width/left INLINE no markup */
     #templatesDropdown { left: 8px !important; right: 8px; width: auto !important; }

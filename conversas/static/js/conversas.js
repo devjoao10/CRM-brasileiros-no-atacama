@@ -542,6 +542,28 @@
         // Send message
         document.getElementById('btnSend').addEventListener('click', sendMessage);
 
+        // CONV-VAR-01: gatilho do seletor de variaveis (secao logica mais abaixo)
+        document.getElementById('btnVars').addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleVarPalette();
+        });
+        document.addEventListener('click', (e) => {
+            const palette = document.getElementById('varPalette');
+            const button = document.getElementById('btnVars');
+            if (varPaletteOpen && !palette.contains(e.target) && !button.contains(e.target)) {
+                closeVarPalette();
+            }
+        });
+
+        // CONV-VAR-01-HARD-01: previa (secao logica mais abaixo). Apenas
+        // exibe — jamais envia.
+        document.getElementById('btnPreview').addEventListener('click', openPreview);
+        document.getElementById('previewModalClose').addEventListener('click', closePreview);
+        document.getElementById('btnPreviewClose').addEventListener('click', closePreview);
+        document.getElementById('previewModalOverlay').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) closePreview();
+        });
+
         // CONV-BF-UI-03: drag-to-scroll das abas de filtro — ESCOPADO ao
         // container das abas (nao sequestra eventos globais; arrasto real
         // nao dispara troca de aba; roda do mouse rola horizontalmente).
@@ -872,9 +894,16 @@
             try {
                 if (resp) {
                     const err = await resp.json();
-                    if (err && err.detail) detail = err.detail;
+                    if (err && typeof err.detail === 'string') detail = err.detail;
                 }
             } catch (_) { /* resposta sem corpo JSON */ }
+            // CONV-VAR-01: 422 = variavel nao resolvida. O backend BLOQUEOU o
+            // envio e nao persistiu nada, entao devolvemos o texto original ao
+            // composer para o vendedor corrigir o token sem reescrever tudo.
+            if (resp && resp.status === 422 && !input.value) {
+                input.value = content;
+                input.focus();
+            }
             showToast(detail);
             loadChat(activeConversation.id);
         }
@@ -1737,6 +1766,189 @@
 
         const botBtn = document.getElementById('btnToggleBotText');
         botBtn.textContent = conv.is_bot_active ? 'Desativar Bot' : 'Ativar Bot';
+    }
+
+    // ─── CONV-VAR-01: seletor de variaveis (@TOKEN) no composer ───
+    // Fonte: /api/variables (somente ativas). Clicar insere o token na posicao
+    // atual do cursor — NUNCA envia a mensagem. A resolucao do valor acontece
+    // no BACKEND, no momento do envio; aqui so inserimos o token.
+    // Itens renderizados com createElement/textContent (nome/token sao
+    // controlados por administradores — nunca interpolados como HTML).
+    let varPaletteOpen = false;
+    let varPaletteItems = [];
+    let varFetchSeq = 0;
+
+    function insertAtCursor(field, textToInsert) {
+        const start = field.selectionStart ?? field.value.length;
+        const end = field.selectionEnd ?? field.value.length;
+        field.value = field.value.slice(0, start) + textToInsert + field.value.slice(end);
+        const caret = start + textToInsert.length;
+        field.focus();
+        field.setSelectionRange(caret, caret);
+    }
+
+    async function fetchVariables() {
+        const seq = ++varFetchSeq;
+        const resp = await Auth.apiRequest('/api/variables');
+        if (!resp || !resp.ok || seq !== varFetchSeq) return;
+        const data = await resp.json();
+        varPaletteItems = data.variables || [];
+        if (varPaletteOpen) renderVarPalette();
+    }
+
+    function toggleVarPalette() {
+        if (varPaletteOpen) {
+            closeVarPalette();
+            return;
+        }
+        varPaletteOpen = true;
+        document.getElementById('varPalette').style.display = 'block';
+        document.getElementById('btnVars').setAttribute('aria-expanded', 'true');
+        renderVarPalette();
+        fetchVariables();   // recarrega a cada abertura (pega edicoes do settings)
+    }
+
+    function closeVarPalette() {
+        varPaletteOpen = false;
+        document.getElementById('varPalette').style.display = 'none';
+        document.getElementById('btnVars').setAttribute('aria-expanded', 'false');
+    }
+
+    function renderVarPalette() {
+        const palette = document.getElementById('varPalette');
+        palette.replaceChildren();
+
+        const header = document.createElement('div');
+        header.className = 'var-palette-header';
+        header.textContent = 'Inserir variável';
+        palette.appendChild(header);
+
+        if (varPaletteItems.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'var-palette-empty';
+            empty.textContent = 'Nenhuma variável cadastrada (crie em Configurações).';
+            palette.appendChild(empty);
+            return;
+        }
+
+        varPaletteItems.forEach(v => {
+            const item = document.createElement('div');
+            item.className = 'var-palette-item';
+            item.setAttribute('role', 'option');
+            const token = document.createElement('div');
+            token.className = 'var-palette-token';
+            token.textContent = v.token || '';
+            const name = document.createElement('div');
+            name.className = 'var-palette-name';
+            name.textContent = v.name || '';
+            item.appendChild(token);
+            item.appendChild(name);
+            item.addEventListener('click', () => {
+                insertAtCursor(document.getElementById('msgInput'), v.token);
+                closeVarPalette();
+            });
+            palette.appendChild(item);
+        });
+    }
+
+    // ─── CONV-VAR-01-HARD-01: previa da mensagem ───
+    // O texto renderizado vem SEMPRE de POST /api/variables/preview, que usa o
+    // MESMO `render()` do envio. O JS nao reimplementa resolucao nenhuma e
+    // NUNCA envia a mensagem — o backend segue sendo a validacao final.
+    const PREVIEW_PROBLEM_LABELS = {
+        unknown: 'não é uma variável cadastrada',
+        inactive: 'variável desativada',
+        empty_fixed: 'sem valor configurado',
+        empty_dynamic: 'sem valor para este contato',
+        invalid_source: 'origem inválida',
+        ambiguous: 'colada a outro texto',
+    };
+
+    function previewBlock(titulo, texto, extraClass) {
+        const wrap = document.createElement('div');
+        wrap.className = 'preview-block';
+        const label = document.createElement('div');
+        label.className = 'preview-label';
+        label.textContent = titulo;
+        const body = document.createElement('div');
+        body.className = 'preview-text' + (extraClass ? ' ' + extraClass : '');
+        body.textContent = texto;
+        wrap.appendChild(label);
+        wrap.appendChild(body);
+        return wrap;
+    }
+
+    async function openPreview() {
+        const input = document.getElementById('msgInput');
+        const original = input.value;
+        if (!original.trim() || !activeConversation) {
+            showToast('Escreva a mensagem antes de visualizar.');
+            return;
+        }
+
+        const resp = await Auth.apiRequest('/api/variables/preview', {
+            method: 'POST',
+            body: JSON.stringify({ text: original, conversation_id: activeConversation.id }),
+        });
+        if (!resp || !resp.ok) {
+            showToast('Não foi possível gerar a prévia.');
+            return;
+        }
+        const data = await resp.json();
+        renderPreview(original, data);
+    }
+
+    function renderPreview(original, data) {
+        const body = document.getElementById('previewModalBody');
+        body.replaceChildren();
+
+        const problems = data.problems || [];
+        const semVariavel = data.rendered === original && problems.length === 0;
+
+        if (semVariavel) {
+            // Sem variaveis: um bloco so, texto inalterado.
+            body.appendChild(previewBlock('Mensagem (sem variáveis)', original));
+        } else {
+            body.appendChild(previewBlock('Texto original', original, 'preview-original'));
+            // Com problemas, o texto NAO sera enviado — rotula-lo como "o que
+            // o cliente vai receber" seria mentira (e contradiria o aviso
+            // logo abaixo).
+            body.appendChild(previewBlock(
+                problems.length ? 'Resultado parcial (não será enviado)' : 'Como o cliente vai receber',
+                data.rendered,
+                problems.length ? 'preview-original' : ''
+            ));
+        }
+
+        const status = document.createElement('div');
+        status.className = 'preview-status ' + (problems.length ? 'has-problems' : 'ok');
+        status.textContent = problems.length
+            ? 'Esta mensagem NÃO pode ser enviada até corrigir:'
+            : 'Tudo certo — a mensagem pode ser enviada.';
+        body.appendChild(status);
+
+        if (problems.length) {
+            const list = document.createElement('ul');
+            list.className = 'preview-problems';
+            problems.forEach(p => {
+                const item = document.createElement('li');
+                const tok = document.createElement('span');
+                tok.className = 'preview-problem-token';
+                tok.textContent = p.token;
+                const why = document.createElement('span');
+                why.textContent = ' — ' + (PREVIEW_PROBLEM_LABELS[p.code] || p.short || p.code);
+                item.appendChild(tok);
+                item.appendChild(why);
+                list.appendChild(item);
+            });
+            body.appendChild(list);
+        }
+
+        document.getElementById('previewModalOverlay').style.display = 'flex';
+    }
+
+    function closePreview() {
+        document.getElementById('previewModalOverlay').style.display = 'none';
     }
 
     // ─── Helpers ─────────────────────────────────

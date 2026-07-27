@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Configuracoes — Conversas</title>
-    <link rel="stylesheet" href="/static/css/conversas.css?v=conv-mobile-resp-02">
+    <link rel="stylesheet" href="/static/css/conversas.css?v=conv-var-hard-01">
 </head>
 <body>
     <div class="page-layout">
@@ -60,6 +60,7 @@
                 <button class="settings-tab" data-tab="auto-replies">Frases Automaticas</button>
                 <button class="settings-tab" data-tab="business-hours">Horario Comercial</button>
                 <button class="settings-tab" data-tab="quick-replies">Mensagens Rapidas</button>
+                <button class="settings-tab" data-tab="variables">Variaveis</button>
             </div>
 
             <!-- Tab: API Config -->
@@ -192,6 +193,25 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Tab: Variaveis (CONV-VAR-01) -->
+            <div class="settings-panel" id="panel-variables">
+                <div class="settings-card">
+                    <div class="settings-card-header" style="display:flex; align-items:center; justify-content:space-between;">
+                        <div>
+                            <h3>Variaveis</h3>
+                            <p>Trechos que mudam de acordo com o contato, o atendente ou a empresa. Escreva o token (ex.: @PRIMEIRONOMECLIENTE) na mensagem e o sistema troca pelo valor certo na hora do envio.</p>
+                        </div>
+                        <button class="btn-primary btn-sm" id="btnNewVariable">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                            Nova
+                        </button>
+                    </div>
+                    <div class="variables-list" id="variablesList">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
         </main>
     </div>
 
@@ -222,6 +242,12 @@
                     </div>
                     <div class="form-group">
                         <label for="qrContent">Conteudo da mensagem</label>
+                        <!-- CONV-VAR-01: insere o token na posicao do cursor -->
+                        <div class="var-insert-row">
+                            <select id="qrVarInsert" class="var-insert-select" aria-label="Inserir variavel">
+                                <option value="">Inserir variavel...</option>
+                            </select>
+                        </div>
                         <textarea id="qrContent" rows="5" required placeholder="Ola! Seja bem-vindo..."></textarea>
                     </div>
                 </div>
@@ -233,11 +259,79 @@
         </div>
     </div>
 
+    <!-- Modal: Variavel (CONV-VAR-01) -->
+    <div class="modal-overlay" id="varModalOverlay" style="display:none;">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="varModalTitle">Nova Variavel</h3>
+                <button class="modal-close" id="varModalClose">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                </button>
+            </div>
+            <form id="varForm">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="varToken">Variavel</label>
+                        <div class="var-token-field">
+                            <span class="var-token-prefix">@</span>
+                            <input type="text" id="varToken" required placeholder="PRIMEIRONOMECLIENTE" autocomplete="off">
+                        </div>
+                        <small class="form-hint">Apenas letras, numeros e underscore. Sem espacos e sem acentos.</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="varName">Nome (para a equipe reconhecer)</label>
+                        <input type="text" id="varName" required placeholder="Primeiro Nome do Cliente">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Valor de Atribuicao</label>
+                        <div class="var-kind-options">
+                            <label class="var-kind-option">
+                                <input type="radio" name="varKind" value="fixed" checked>
+                                <span>Fixo — sempre o mesmo texto</span>
+                            </label>
+                            <label class="var-kind-option">
+                                <input type="radio" name="varKind" value="dynamic">
+                                <span>Variavel — busca a informacao no sistema</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="form-group" id="varFixedGroup">
+                        <label for="varFixedValue">Valor</label>
+                        <input type="text" id="varFixedValue" placeholder="Brasileiros no Atacama">
+                    </div>
+
+                    <div class="form-group" id="varDynamicGroup" style="display:none;">
+                        <label for="varSourceKey">Propriedade do sistema</label>
+                        <select id="varSourceKey"></select>
+                    </div>
+
+                    <div class="form-group" id="varActiveGroup" style="display:none;">
+                        <label class="var-active-row">
+                            <span class="toggle-switch">
+                                <input type="checkbox" id="varIsActive" checked>
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span>Variavel ativa</span>
+                        </label>
+                    </div>
+
+                    <div class="var-error" id="varFormError" style="display:none;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" id="btnCancelVar">Cancelar</button>
+                    <button type="submit" class="btn-primary" id="btnSaveVar">Salvar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- CONV-MOBILE-RESPONSIVE-02: backdrop do drawer mobile (toque fecha) -->
     <div class="page-drawer-backdrop" id="pageDrawerBackdrop"></div>
 
     <script src="/static/js/auth.js"></script>
-    <script src="/static/js/settings.js"></script>
+    <script src="/static/js/settings.js?v=conv-var-hard-01"></script>
     <script src="/static/js/page-shell.js?v=conv-mobile-resp-02"></script>
 </body>
 </html>
