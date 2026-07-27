@@ -8,6 +8,10 @@
     const WEEKDAYS = ['Segunda', 'Terca', 'Quarta', 'Quinta', 'Sexta', 'Sabado', 'Domingo'];
     let quickReplies = [];
     let editingQRId = null;
+    // CONV-VAR-01
+    let variables = [];
+    let variableCatalog = [];
+    let editingVarId = null;
 
     document.addEventListener('DOMContentLoaded', () => {
         if (!Auth.requireAuth()) return;
@@ -16,6 +20,8 @@
         loadAutoReplies();
         loadBusinessHours();
         loadQuickReplies();
+        loadVariableCatalog();
+        loadVariables();
     });
 
     function setupEventListeners() {
@@ -56,6 +62,33 @@
             if (e.target === e.currentTarget) closeQRModal();
         });
         document.getElementById('qrForm').addEventListener('submit', handleSaveQR);
+
+        // CONV-VAR-01: variaveis
+        document.getElementById('btnNewVariable').addEventListener('click', () => openVarModal());
+        document.getElementById('varModalClose').addEventListener('click', () => closeVarModal());
+        document.getElementById('btnCancelVar').addEventListener('click', () => closeVarModal());
+        document.getElementById('varModalOverlay').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) closeVarModal();
+        });
+        document.getElementById('varForm').addEventListener('submit', handleSaveVar);
+        document.querySelectorAll('input[name="varKind"]').forEach(radio => {
+            radio.addEventListener('change', updateVarKindFields);
+        });
+        // Inserir variavel no editor de mensagem rapida (na posicao do cursor)
+        document.getElementById('qrVarInsert').addEventListener('change', function () {
+            if (this.value) insertAtCursor(document.getElementById('qrContent'), this.value);
+            this.value = '';
+        });
+    }
+
+    /** Insere texto na posicao atual do cursor, preservando o restante. */
+    function insertAtCursor(field, textToInsert) {
+        const start = field.selectionStart ?? field.value.length;
+        const end = field.selectionEnd ?? field.value.length;
+        field.value = field.value.slice(0, start) + textToInsert + field.value.slice(end);
+        const caret = start + textToInsert.length;
+        field.focus();
+        field.setSelectionRange(caret, caret);
     }
 
     // ─── API Configuration ──────────────────────────
@@ -422,12 +455,212 @@
         }
     };
 
+    // ─── CONV-VAR-01: Variaveis dinamicas (@TOKEN) ───────────
+    async function loadVariableCatalog() {
+        const resp = await Auth.apiRequest('/api/variables/catalog');
+        if (!resp || !resp.ok) return;
+        const data = await resp.json();
+        variableCatalog = data.groups || [];
+        renderCatalogSelect();
+    }
+
+    function renderCatalogSelect() {
+        const select = document.getElementById('varSourceKey');
+        select.replaceChildren();
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = 'Escolha a informacao...';
+        select.appendChild(placeholder);
+        variableCatalog.forEach(group => {
+            const optgroup = document.createElement('optgroup');
+            optgroup.label = group.group;
+            (group.options || []).forEach(opt => {
+                const option = document.createElement('option');
+                option.value = opt.key;
+                option.textContent = opt.label;
+                optgroup.appendChild(option);
+            });
+            select.appendChild(optgroup);
+        });
+    }
+
+    async function loadVariables() {
+        const resp = await Auth.apiRequest('/api/variables?active_only=false');
+        if (!resp || !resp.ok) return;
+        const data = await resp.json();
+        variables = data.variables || [];
+        renderVariables();
+        renderVarInsertSelect();
+    }
+
+    /** Popula o seletor "Inserir variavel..." do editor de mensagem rapida. */
+    function renderVarInsertSelect() {
+        const select = document.getElementById('qrVarInsert');
+        select.replaceChildren();
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = 'Inserir variavel...';
+        select.appendChild(placeholder);
+        variables.filter(v => v.is_active).forEach(v => {
+            const option = document.createElement('option');
+            option.value = v.token;
+            option.textContent = `${v.token} — ${v.name}`;
+            select.appendChild(option);
+        });
+    }
+
+    function varOriginLabel(v) {
+        if (v.kind === 'dynamic') return v.source_label || 'Propriedade removida';
+        return v.fixed_value ? v.fixed_value : 'Sem valor configurado';
+    }
+
+    function renderVariables() {
+        const list = document.getElementById('variablesList');
+        if (variables.length === 0) {
+            list.innerHTML = '<div class="empty-state"><p>Nenhuma variavel cadastrada</p></div>';
+            return;
+        }
+
+        list.innerHTML = variables.map(v => {
+            const kindLabel = v.kind === 'dynamic' ? 'Variavel' : 'Fixo';
+            const missing = v.kind === 'fixed' && !v.fixed_value;
+            const author = v.created_by_nome ? `por ${escapeHtml(v.created_by_nome)}` : '';
+            const when = v.created_at ? formatDate(v.created_at) : '';
+            return `
+            <div class="var-item ${!v.is_active ? 'inactive' : ''}">
+                <div class="var-item-main">
+                    <div class="var-token">${escapeHtml(v.token)}</div>
+                    <div class="var-name">${escapeHtml(v.name)}</div>
+                    <div class="var-origin ${missing ? 'missing' : ''}">${escapeHtml(varOriginLabel(v))}</div>
+                    ${author || when ? `<div class="var-meta-line">${author} ${when}</div>` : ''}
+                </div>
+                <div class="var-item-meta">
+                    <span class="var-kind-badge ${v.kind}">${kindLabel}</span>
+                    ${!v.is_active ? '<span class="var-kind-badge inactive">Inativa</span>' : ''}
+                    <div class="var-item-actions">
+                        <button class="btn-icon" title="Editar" onclick="window._editVar(${Number(v.id)})">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+                        </button>
+                        <button class="btn-icon danger" title="Excluir" onclick="window._deleteVar(${Number(v.id)})">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>`;
+        }).join('');
+    }
+
+    function updateVarKindFields() {
+        const kind = document.querySelector('input[name="varKind"]:checked').value;
+        document.getElementById('varFixedGroup').style.display = kind === 'fixed' ? '' : 'none';
+        document.getElementById('varDynamicGroup').style.display = kind === 'dynamic' ? '' : 'none';
+    }
+
+    function openVarModal(v = null) {
+        editingVarId = v ? v.id : null;
+        document.getElementById('varModalTitle').textContent = v ? 'Editar Variavel' : 'Nova Variavel';
+        // O token e exibido sem o "@" (o prefixo fica fixo ao lado do campo).
+        document.getElementById('varToken').value = v ? (v.token || '').replace(/^@/, '') : '';
+        document.getElementById('varName').value = v ? v.name : '';
+        document.getElementById('varFixedValue').value = v ? (v.fixed_value || '') : '';
+        document.getElementById('varSourceKey').value = v ? (v.source_key || '') : '';
+        const kind = v ? v.kind : 'fixed';
+        document.querySelectorAll('input[name="varKind"]').forEach(radio => {
+            radio.checked = radio.value === kind;
+        });
+        document.getElementById('varIsActive').checked = v ? !!v.is_active : true;
+        document.getElementById('varActiveGroup').style.display = v ? '' : 'none';
+        setVarError('');
+        updateVarKindFields();
+        document.getElementById('varModalOverlay').style.display = 'flex';
+    }
+
+    function closeVarModal() {
+        document.getElementById('varModalOverlay').style.display = 'none';
+        editingVarId = null;
+    }
+
+    function setVarError(message) {
+        const box = document.getElementById('varFormError');
+        box.textContent = message || '';
+        box.style.display = message ? '' : 'none';
+    }
+
+    /** Extrai a mensagem de erro do backend (detail string OU erros do Pydantic). */
+    function backendError(err, fallback) {
+        if (!err) return fallback;
+        if (typeof err.detail === 'string') return err.detail;
+        if (Array.isArray(err.detail) && err.detail.length) {
+            const first = err.detail[0];
+            if (first && typeof first.msg === 'string') return first.msg.replace(/^Value error, /, '');
+        }
+        return fallback;
+    }
+
+    async function handleSaveVar(e) {
+        e.preventDefault();
+        const kind = document.querySelector('input[name="varKind"]:checked').value;
+        const payload = {
+            token: '@' + document.getElementById('varToken').value.trim().toUpperCase(),
+            name: document.getElementById('varName').value.trim(),
+            kind: kind,
+            fixed_value: kind === 'fixed' ? document.getElementById('varFixedValue').value : null,
+            source_key: kind === 'dynamic' ? (document.getElementById('varSourceKey').value || null) : null,
+        };
+        if (editingVarId) {
+            payload.is_active = document.getElementById('varIsActive').checked;
+        }
+
+        const url = editingVarId ? `/api/variables/${editingVarId}` : '/api/variables';
+        const method = editingVarId ? 'PUT' : 'POST';
+
+        const resp = await Auth.apiRequest(url, { method, body: JSON.stringify(payload) });
+        if (resp && resp.ok) {
+            showToast(editingVarId ? 'Variavel atualizada' : 'Variavel criada');
+            closeVarModal();
+            loadVariables();
+        } else {
+            const err = resp ? await resp.json().catch(() => null) : null;
+            let message = backendError(err, 'Erro ao salvar a variavel');
+            if (resp && resp.status === 403) message = 'Apenas administradores podem criar ou editar variaveis.';
+            setVarError(message);
+        }
+    }
+
+    window._editVar = function (id) {
+        const v = variables.find(x => x.id === id);
+        if (v) openVarModal(v);
+    };
+
+    window._deleteVar = async function (id) {
+        const v = variables.find(x => x.id === id);
+        const label = v ? v.token : 'esta variavel';
+        if (!confirm(`Excluir ${label}? As mensagens que usam esse token deixarao de ser enviadas ate serem corrigidas.`)) return;
+        const resp = await Auth.apiRequest(`/api/variables/${id}`, { method: 'DELETE' });
+        if (resp && resp.ok) {
+            showToast('Variavel excluida');
+            loadVariables();
+        } else if (resp && resp.status === 403) {
+            showToast('Apenas administradores podem excluir variaveis.');
+        } else {
+            showToast('Erro ao excluir a variavel');
+        }
+    };
+
     // ─── Helpers ─────────────────────────────────
     function escapeHtml(text) {
-        if (!text) return '';
+        // SEC-CONV-01: escapa tambem aspas simples/duplas (protege contexto de
+        // atributo). Toda interpolacao em innerHTML DEVE passar por aqui.
+        if (text === null || text === undefined) return '';
         const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        div.textContent = String(text);
+        return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function formatDate(iso) {
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return '';
+        return d.toLocaleDateString('pt-BR');
     }
 
     function showToast(message) {

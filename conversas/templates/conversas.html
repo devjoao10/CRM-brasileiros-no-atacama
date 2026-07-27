@@ -8,7 +8,7 @@
     <!-- CONV-MOBILE-PWA-01: fundacao PWA (manifest + theme-color; SEM service worker) -->
     <link rel="manifest" href="/static/manifest.json">
     <meta name="theme-color" content="#366B85">
-    <link rel="stylesheet" href="/static/css/conversas.css?v=conv-mobile-resp-02">
+    <link rel="stylesheet" href="/static/css/conversas.css?v=conv-var-01">
 </head>
 <body>
     <div class="app-layout" id="appLayout">
@@ -127,6 +127,11 @@
                         <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></svg>
                     </button>
                     <input type="file" id="mediaFileInput" accept="audio/*,image/jpeg,image/png,image/webp,video/mp4,video/3gpp,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt" style="display:none;">
+
+                    <!-- CONV-VAR-01: seletor de variaveis (@TOKEN). Itens populados
+                         pelo JS com createElement/textContent (nunca innerHTML). -->
+                    <button class="btn-action" id="btnVars" title="Inserir variável" aria-haspopup="listbox" aria-expanded="false" style="width: 42px; height: 42px; border: none; background: transparent; color: var(--dark-400); border-radius: var(--radius-full); cursor: pointer; transition: all var(--transition); display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-weight: 700; font-size: 19px;">@</button>
+                    <div id="varPalette" class="var-palette" role="listbox" aria-label="Variáveis disponíveis" style="display:none;"></div>
 
                     <!-- CONV-HOTFIX-QUICK-REPLIES-01: paleta de mensagens rapidas ("/" no composer).
                          Itens populados pelo JS com createElement/textContent (nunca innerHTML). -->
@@ -281,6 +286,6 @@
     </div>
 
     <script src="/static/js/auth.js"></script>
-    <script src="/static/js/conversas.js?v=conv-mobile-resp-02"></script>
+    <script src="/static/js/conversas.js?v=conv-var-01"></script>
 </body>
 </html>

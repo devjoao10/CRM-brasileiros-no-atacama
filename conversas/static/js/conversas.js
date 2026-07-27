@@ -542,6 +542,19 @@
         // Send message
         document.getElementById('btnSend').addEventListener('click', sendMessage);
 
+        // CONV-VAR-01: gatilho do seletor de variaveis (secao logica mais abaixo)
+        document.getElementById('btnVars').addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleVarPalette();
+        });
+        document.addEventListener('click', (e) => {
+            const palette = document.getElementById('varPalette');
+            const button = document.getElementById('btnVars');
+            if (varPaletteOpen && !palette.contains(e.target) && !button.contains(e.target)) {
+                closeVarPalette();
+            }
+        });
+
         // CONV-BF-UI-03: drag-to-scroll das abas de filtro — ESCOPADO ao
         // container das abas (nao sequestra eventos globais; arrasto real
         // nao dispara troca de aba; roda do mouse rola horizontalmente).
@@ -872,9 +885,16 @@
             try {
                 if (resp) {
                     const err = await resp.json();
-                    if (err && err.detail) detail = err.detail;
+                    if (err && typeof err.detail === 'string') detail = err.detail;
                 }
             } catch (_) { /* resposta sem corpo JSON */ }
+            // CONV-VAR-01: 422 = variavel nao resolvida. O backend BLOQUEOU o
+            // envio e nao persistiu nada, entao devolvemos o texto original ao
+            // composer para o vendedor corrigir o token sem reescrever tudo.
+            if (resp && resp.status === 422 && !input.value) {
+                input.value = content;
+                input.focus();
+            }
             showToast(detail);
             loadChat(activeConversation.id);
         }
@@ -1737,6 +1757,89 @@
 
         const botBtn = document.getElementById('btnToggleBotText');
         botBtn.textContent = conv.is_bot_active ? 'Desativar Bot' : 'Ativar Bot';
+    }
+
+    // ─── CONV-VAR-01: seletor de variaveis (@TOKEN) no composer ───
+    // Fonte: /api/variables (somente ativas). Clicar insere o token na posicao
+    // atual do cursor — NUNCA envia a mensagem. A resolucao do valor acontece
+    // no BACKEND, no momento do envio; aqui so inserimos o token.
+    // Itens renderizados com createElement/textContent (nome/token sao
+    // controlados por administradores — nunca interpolados como HTML).
+    let varPaletteOpen = false;
+    let varPaletteItems = [];
+    let varFetchSeq = 0;
+
+    function insertAtCursor(field, textToInsert) {
+        const start = field.selectionStart ?? field.value.length;
+        const end = field.selectionEnd ?? field.value.length;
+        field.value = field.value.slice(0, start) + textToInsert + field.value.slice(end);
+        const caret = start + textToInsert.length;
+        field.focus();
+        field.setSelectionRange(caret, caret);
+    }
+
+    async function fetchVariables() {
+        const seq = ++varFetchSeq;
+        const resp = await Auth.apiRequest('/api/variables');
+        if (!resp || !resp.ok || seq !== varFetchSeq) return;
+        const data = await resp.json();
+        varPaletteItems = data.variables || [];
+        if (varPaletteOpen) renderVarPalette();
+    }
+
+    function toggleVarPalette() {
+        if (varPaletteOpen) {
+            closeVarPalette();
+            return;
+        }
+        varPaletteOpen = true;
+        document.getElementById('varPalette').style.display = 'block';
+        document.getElementById('btnVars').setAttribute('aria-expanded', 'true');
+        renderVarPalette();
+        fetchVariables();   // recarrega a cada abertura (pega edicoes do settings)
+    }
+
+    function closeVarPalette() {
+        varPaletteOpen = false;
+        document.getElementById('varPalette').style.display = 'none';
+        document.getElementById('btnVars').setAttribute('aria-expanded', 'false');
+    }
+
+    function renderVarPalette() {
+        const palette = document.getElementById('varPalette');
+        palette.replaceChildren();
+
+        const header = document.createElement('div');
+        header.className = 'var-palette-header';
+        header.textContent = 'Inserir variável';
+        palette.appendChild(header);
+
+        if (varPaletteItems.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'var-palette-empty';
+            empty.textContent = 'Nenhuma variável cadastrada (crie em Configurações).';
+            palette.appendChild(empty);
+            return;
+        }
+
+        varPaletteItems.forEach(v => {
+            const item = document.createElement('div');
+            item.className = 'var-palette-item';
+            item.setAttribute('role', 'option');
+            const token = document.createElement('div');
+            token.className = 'var-palette-token';
+            token.textContent = v.token || '';
+            const name = document.createElement('div');
+            name.className = 'var-palette-name';
+            name.textContent = v.name || '';
+            item.appendChild(token);
+            item.appendChild(name);
+            item.addEventListener('click', () => {
+                insertAtCursor(document.getElementById('msgInput'), v.token);
+                closeVarPalette();
+            });
+            palette.appendChild(item);
+        });
     }
 
     // ─── Helpers ─────────────────────────────────
