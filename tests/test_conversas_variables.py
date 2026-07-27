@@ -44,7 +44,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.database import engine, Base, SessionLocal  # noqa: E402
-from app.auth import get_current_user, require_admin  # noqa: E402
+from app.auth import get_current_user  # noqa: E402
 from app.models.auto_reply import AutoReply, BusinessHours  # noqa: E402
 from app.models.conversation import Conversation, Message  # noqa: E402
 from app.models.quick_reply import QuickReply  # noqa: E402
@@ -80,7 +80,10 @@ class _AdminUser:
     id = 1
     nome = "Julia Atendente"
     email = "julia@bna.local"
-    role = "admin"
+    # CONV-VAR-01-HOTFIX-ADMIN-01: usa a forma REAL de producao ("ADMIN", o
+    # NOME do membro do enum, que e o que o SQLAlchemy grava na coluna). Com
+    # "admin" minusculo esta suite passaria mesmo com o bug de volta.
+    role = "ADMIN"
     is_active = True
 
 
@@ -99,17 +102,12 @@ def _current_user():
     return CURRENT["user"]
 
 
-async def _require_admin_override():
-    from fastapi import HTTPException
-
-    user = CURRENT["user"]
-    if getattr(user, "role", None) != "admin":
-        raise HTTPException(status_code=403, detail="Acesso restrito a administradores")
-    return user
-
-
+# CONV-VAR-01-HOTFIX-ADMIN-01: apenas `get_current_user` e substituido. O
+# `require_admin` REAL roda (ele depende de get_current_user, entao recebe o
+# usuario injetado). Antes havia um duble de require_admin aqui que replicava
+# a comparacao literal `role != "admin"` — ele reproduzia o bug e por isso a
+# suite passava enquanto producao devolvia 403 para administradores.
 main.app.dependency_overrides[get_current_user] = _current_user
-main.app.dependency_overrides[require_admin] = _require_admin_override
 client = TestClient(main.app)
 
 
@@ -949,13 +947,11 @@ check(len(sent_payloads) == before + 1, "apenas o envio valido chegou ao WhatsAp
 
 # sem autenticacao -> 401
 main.app.dependency_overrides.pop(get_current_user)
-main.app.dependency_overrides.pop(require_admin)
 anon = TestClient(main.app)
 check(anon.get("/api/variables").status_code == 401, "listar sem autenticacao -> 401")
 check(anon.post("/api/variables", json={"token": "@X1", "name": "x", "kind": "fixed"}).status_code == 401,
       "criar sem autenticacao -> 401")
 main.app.dependency_overrides[get_current_user] = _current_user
-main.app.dependency_overrides[require_admin] = _require_admin_override
 
 
 # ============ 12. FRONTEND — guards estaticos ============

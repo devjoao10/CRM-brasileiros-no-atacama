@@ -4,7 +4,9 @@ CONV-VAR-01 — CRUD de variaveis dinamicas + catalogo + preview.
 Permissoes (padrao ja existente do Conversas, ver api_config.py):
   - leitura (listar, detalhe, catalogo, preview): `get_current_user`
     — o vendedor precisa ver as variaveis para inseri-las na mensagem;
-  - criar/editar/excluir: `require_admin` (role == 'admin' -> 403).
+  - criar/editar/excluir: `require_admin`, que normaliza o papel via
+    `auth.is_admin_role()` (aceita "ADMIN"/"admin", string ou enum); qualquer
+    outro papel -> 403.
 """
 
 import logging
