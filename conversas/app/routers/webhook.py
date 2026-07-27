@@ -156,29 +156,40 @@ def _is_within_business_hours(db: Session) -> bool:
     return True
 
 
-def _get_auto_reply(trigger: str, db: Session, conversation: Conversation | None = None) -> str | None:
+def _resolve_auto_reply(
+    trigger: str, db: Session, conversation: Conversation | None = None
+) -> tuple[bool, str | None]:
     """
-    Get an active auto-reply message by trigger, com as variaveis (@TOKEN) ja
-    resolvidas para a conversa atual.
+    Resolve a resposta automatica de um trigger.
 
-    CONV-VAR-01-HARD-01: resolucao TUDO OU NADA. Se qualquer variavel nao
-    resolver, `render_auto_reply` devolve None e ESTA resposta automatica e
-    pulada — nunca sai token literal, texto mutilado ou string vazia. O
-    webhook segue processando normalmente (a funcao nao levanta excecao).
+    Retorna `(configurada, texto)`:
+      - (False, None) -> NAO existe resposta ativa para este trigger;
+      - (True,  texto) -> existe e resolveu;
+      - (True,  None)  -> existe mas NAO resolveu (variavel sem valor,
+                          desconhecida, inativa...) e deve ser PULADA.
+
+    A distincao entre "nao configurada" e "configurada mas pulada" e o que
+    impede que pular uma resposta promova OUTRA no lugar dela: se o
+    `out_of_hours` do cliente falha na resolucao, ele nao pode receber a
+    saudacao de boas-vindas as 3h da manha.
+
+    CONV-VAR-01-HARD-01: resolucao TUDO OU NADA — nunca token literal, texto
+    mutilado ou string vazia; nunca levanta excecao.
     """
     reply = db.query(AutoReply).filter(
         AutoReply.trigger == trigger,
         AutoReply.is_active == True,
     ).first()
 
-    if reply and reply.message and reply.message.strip():
-        return variables_service.render_auto_reply(
-            db,
-            reply.message,
-            variables_service.VariableContext(db, conversation=conversation, user=None),
-            trigger=trigger,
-        )
-    return None
+    if not (reply and reply.message and reply.message.strip()):
+        return False, None
+
+    return True, variables_service.render_auto_reply(
+        db,
+        reply.message,
+        variables_service.VariableContext(db, conversation=conversation, user=None),
+        trigger=trigger,
+    )
 
 
 async def _send_auto_reply_if_needed(
@@ -194,27 +205,33 @@ async def _send_auto_reply_if_needed(
     """
     phone = conversation.whatsapp
 
+    # CONV-VAR-01-HARD-01: o `return` acontece quando o trigger ESTA
+    # CONFIGURADO, mesmo que a resposta tenha sido pulada por variavel nao
+    # resolvida. Pular uma resposta nunca pode promover a resposta seguinte.
+
     # Check business hours first
     if not _is_within_business_hours(db):
-        message = _get_auto_reply("out_of_hours", db, conversation)
-        if message:
-            wa_response = await whatsapp.send_text_message(phone, message, db)
-            _save_outbound_message(conversation, message, db, wa_response)
-            logger.info(f"Auto-reply (fora do expediente) processado para {phone}")
+        configured, message = _resolve_auto_reply("out_of_hours", db, conversation)
+        if configured:
+            if message:
+                wa_response = await whatsapp.send_text_message(phone, message, db)
+                _save_outbound_message(conversation, message, db, wa_response)
+                logger.info(f"Auto-reply (fora do expediente) processado para {phone}")
             return
 
     # New conversation — send greeting
     if is_new_conversation:
-        message = _get_auto_reply("greeting", db, conversation)
-        if message:
-            wa_response = await whatsapp.send_text_message(phone, message, db)
-            _save_outbound_message(conversation, message, db, wa_response)
-            logger.info(f"Auto-reply (saudação) processado para {phone}")
+        configured, message = _resolve_auto_reply("greeting", db, conversation)
+        if configured:
+            if message:
+                wa_response = await whatsapp.send_text_message(phone, message, db)
+                _save_outbound_message(conversation, message, db, wa_response)
+                logger.info(f"Auto-reply (saudação) processado para {phone}")
             return
 
     # Existing conversation without attendant — send waiting message
     if not conversation.atendente_id:
-        message = _get_auto_reply("waiting", db, conversation)
+        _configured, message = _resolve_auto_reply("waiting", db, conversation)
         if message:
             # Only send if we haven't sent a waiting message recently (avoid spam)
             recent_outbound = db.query(Message).filter(

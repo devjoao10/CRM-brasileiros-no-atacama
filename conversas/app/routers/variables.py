@@ -155,6 +155,15 @@ async def update_variable(
         ).first()
         if duplicate:
             raise HTTPException(status_code=409, detail=f"A variável {data.token} já existe")
+        # CONV-VAR-01-HARD-01: renomear o token quebra as mensagens que o usam
+        # EXATAMENTE como excluir a variável quebraria — o mesmo bloqueio vale
+        # aqui, senão a proteção de exclusão seria contornável por um rename.
+        refs = _count_references(db, variable.token)
+        if refs["total"]:
+            raise HTTPException(
+                status_code=409,
+                detail=_in_use_message(variable.token, refs["total"], "renomear"),
+            )
         variable.token = data.token
 
     if data.name is not None:
@@ -191,6 +200,15 @@ async def update_variable(
     db.refresh(variable)
     names = _author_names(db, [variable])
     return MessageVariableResponse.from_model(variable, names.get(variable.created_by))
+
+
+def _in_use_message(token: str, total: int, acao: str) -> str:
+    """Frase única para exclusão e renomeação (mesma causa, mesma orientação)."""
+    plural = "mensagens" if total > 1 else "mensagem"
+    return (
+        f"Não foi possível {acao} {token} porque ela é usada em {total} {plural}. "
+        f"Remova essas referências ou desative a variável."
+    )
 
 
 def _count_references(db: Session, token: str) -> dict:
@@ -236,14 +254,9 @@ async def delete_variable(
     token = variable.token
     refs = _count_references(db, token)
     if refs["total"]:
-        plural = "mensagens" if refs["total"] > 1 else "mensagem"
         raise HTTPException(
             status_code=409,
-            detail=(
-                f"Não foi possível excluir {token} porque ela é usada em "
-                f"{refs['total']} {plural}. Remova essas referências ou "
-                f"desative a variável."
-            ),
+            detail=_in_use_message(token, refs["total"], "excluir"),
         )
 
     db.delete(variable)

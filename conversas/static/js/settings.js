@@ -636,7 +636,27 @@
     window._deleteVar = async function (id) {
         const v = variables.find(x => x.id === id);
         const label = v ? v.token : 'esta variavel';
-        if (!confirm(`Excluir ${label}?`)) return;
+
+        // CONV-VAR-01-HARD-01: mostra ANTES onde a variavel e usada, para o
+        // admin nao descobrir so no 409. O backend continua sendo a decisao
+        // final (a checagem se repete no DELETE).
+        let aviso = `Excluir ${label}?`;
+        const usoResp = await Auth.apiRequest(`/api/variables/${id}/usage`);
+        if (usoResp && usoResp.ok) {
+            const uso = await usoResp.json();
+            if (uso.total > 0) {
+                const partes = [];
+                if (uso.quick_replies) partes.push(`${uso.quick_replies} mensagem(ns) rapida(s)`);
+                if (uso.auto_replies) partes.push(`${uso.auto_replies} frase(s) automatica(s)`);
+                alert(
+                    `${label} esta sendo usada em ${partes.join(' e ')}.\n\n` +
+                    `Remova essas referencias ou desative a variavel — ` +
+                    `a exclusao esta bloqueada enquanto houver uso.`
+                );
+                return;
+            }
+        }
+        if (!confirm(aviso)) return;
         const resp = await Auth.apiRequest(`/api/variables/${id}`, { method: 'DELETE' });
         if (resp && resp.ok) {
             showToast('Variavel excluida');

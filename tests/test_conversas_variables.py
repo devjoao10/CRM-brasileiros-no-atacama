@@ -296,6 +296,9 @@ _amostras = [
     "*@A_B* _@C1_ ~@DE~", "contato@empresa.com", "CONTATO@EMPRESA.COM",
     "José@EMPRESA", "Bom dia.@NOME", "@UM@DOIS", "linha1\n@TOK, fim.",
     "100@NOME", "_@NOME_", "@N", "@", "email a@B.com e @TOK", "@NOME__ x",
+    # escapes: TOKEN_PATTERN ja recusa posicao precedida de '@', entao a
+    # equivalencia continua valendo com a sintaxe nova
+    "@@NOME", "x@@NOME", "@@NOME e @OUTRO", "@@", "texto sem arroba",
 ]
 _esperado = {}
 for s in _amostras:
@@ -424,6 +427,23 @@ _, probs = variables_service.render(
 check(probs == [], f"texto escapado nao gera problema de variavel (got {probs})")
 check(variables_service.find_tokens("@@NOMEEMPRESA") == [],
       "escape nao produz token para a varredura")
+
+# arrobas em sequencia e casos degenerados — o texto sempre sai integro
+_db_esc = SessionLocal()
+_ctx_esc = variables_service.VariableContext(_db_esc)
+for entrada, esperado, rotulo in [
+    ("@@@NOMEEMPRESA", "@Brasileiros no Atacama", "@@@TOKEN = arroba literal + variavel"),
+    ("@@@@NOMEEMPRESA", "@@NOMEEMPRESA", "@@@@TOKEN = duas arrobas literais + texto"),
+    ("@@ @@", "@ @", "escapes separados por espaco"),
+    ("@", "@", "arroba sozinha intacta"),
+    ("texto@", "texto@", "arroba no fim intacta"),
+    ("@1", "@1", "arroba + 1 caractere intacta"),
+    ("@_A", "@_A", "arroba + underscore intacta"),
+    ("", "", "texto vazio"),
+]:
+    saida, _p = variables_service.render(_db_esc, entrada, _ctx_esc)
+    check(saida == esperado, f"{rotulo}: {entrada!r} -> {esperado!r} (got {saida!r})")
+_db_esc.close()
 
 
 # ============ 6. BLOQUEIO: SEM VALOR / DESCONHECIDA / INATIVA ============
@@ -584,8 +604,26 @@ qr_ref = client.post("/api/quick-replies", json={
 r = client.delete(f"/api/variables/{EMUSO_ID}")
 check(r.status_code == 409, f"variavel EM USO nao e excluida -> 409 (got {r.status_code})")
 detalhe = r.json().get("detail", "")
-check("@EMUSO" in detalhe and "1 mensagem" in detalhe, f"mensagem cita token e contagem (got {detalhe!r})")
+check("@EMUSO" in detalhe and "usada em 1 mensagem." in detalhe,
+      f"mensagem cita token e contagem exata (got {detalhe!r})")
 check("desative" in detalhe.lower(), "mensagem orienta a desativar a variavel")
+
+# renomear tambem quebraria as referencias -> mesmo bloqueio (senao a
+# protecao de exclusao seria contornavel por um rename)
+r = client.put(f"/api/variables/{EMUSO_ID}", json={"token": "@EMUSORENOMEADA"})
+check(r.status_code == 409, f"renomear variavel EM USO -> 409 (got {r.status_code})")
+check("renomear" in r.json().get("detail", ""), "mensagem do rename fala em renomear")
+r = client.put(f"/api/variables/{EMUSO_ID}", json={"name": "Novo nome legivel"})
+check(r.status_code == 200, "editar o NOME (sem mexer no token) continua permitido")
+
+# comparacao EXATA: um token que e prefixo de outro nao conta como referencia
+r2 = _create_var({"token": "@EMUSOMAIS", "name": "Prefixo", "kind": "fixed", "fixed_value": "v"})
+PREFIXO_ID = r2.json()["id"]
+uso_prefixo = client.get(f"/api/variables/{PREFIXO_ID}/usage").json()
+check(uso_prefixo["total"] == 0,
+      f"@EMUSOMAIS nao conta a referencia de @EMUSO (comparacao exata, got {uso_prefixo})")
+check(client.delete(f"/api/variables/{PREFIXO_ID}").status_code == 200,
+      "variavel com token prefixado por outra em uso e excluivel")
 
 # referencia tambem em resposta automatica -> contagem soma
 session = SessionLocal()
@@ -741,6 +779,124 @@ client.put(f"/api/conversations/{CONV_A}", json={"status": "aberta"})
 
 check(not hasattr(variables_service, "render_lenient"),
       "render_lenient removido (modo de mutilacao nao existe mais)")
+
+# --- contrato do LOG estruturado (requisito 1) ---
+import logging as _logging  # noqa: E402
+
+
+class _CapturaLog(_logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.linhas = []
+
+    def emit(self, record):
+        self.linhas.append(record.getMessage())
+
+
+_captura = _CapturaLog()
+_svc_logger = _logging.getLogger("app.services.variables")
+_svc_logger.addHandler(_captura)
+_svc_logger.setLevel(_logging.INFO)
+
+db_log = SessionLocal()
+conv_log = db_log.query(Conversation).filter(Conversation.id == CONV_A).first()
+variables_service.render_auto_reply(
+    db_log, "Somos a @SEMVALOR.",
+    variables_service.VariableContext(db_log, conversation=conv_log, user=None),
+    trigger="out_of_hours")
+db_log.close()
+_log = " | ".join(_captura.linhas)
+check("trigger=out_of_hours" in _log, f"log estruturado traz o tipo da resposta (got {_log!r})")
+check("token=@SEMVALOR" in _log, "log estruturado traz o token")
+check("problema=empty_fixed" in _log, "log estruturado traz o codigo do problema")
+check(f"conversation_id={CONV_A}" in _log, "log estruturado traz a conversa")
+check("João" not in _log and "Brasileiros no Atacama" not in _log,
+      f"log NAO contem valor resolvido (got {_log!r})")
+
+# --- a resposta automatica NUNCA levanta (nao derruba o webhook) ---
+_captura.linhas.clear()
+_render_original = variables_service.render
+
+
+def _render_explode(*a, **k):
+    raise RuntimeError("falha simulada no resolver")
+
+
+variables_service.render = _render_explode
+db_log = SessionLocal()
+try:
+    resultado = variables_service.render_auto_reply(
+        db_log, "Qualquer texto @PRIMEIRONOMECLIENTE",
+        variables_service.VariableContext(db_log), trigger="greeting")
+    check(resultado is None, "erro inesperado no resolver -> resposta pulada, sem excecao")
+except Exception as exc:
+    check(False, f"render_auto_reply levantou excecao: {type(exc).__name__}")
+finally:
+    variables_service.render = _render_original
+    db_log.close()
+check(any("motivo=erro_inesperado" in l for l in _captura.linhas),
+      "erro inesperado e registrado como tal")
+check(not any("RuntimeError: falha simulada" in l for l in _captura.linhas),
+      "log NAO expoe o texto bruto da excecao")
+_svc_logger.removeHandler(_captura)
+
+
+# --- webhook: pular uma resposta NAO pode promover outra ---
+print("\nVAR — webhook: resposta pulada nao promove outra")
+from app.routers import webhook as webhook_router  # noqa: E402
+
+session = SessionLocal()
+session.query(AutoReply).delete()
+session.add_all([
+    AutoReply(trigger="out_of_hours", title="Fora do expediente",
+              message="Estamos fechados. Fale com @NOMEATENDENTE.", is_active=True),
+    AutoReply(trigger="greeting", title="Saudacao",
+              message="Bem-vindo a @NOMEEMPRESA!", is_active=True),
+])
+session.commit()
+session.close()
+
+db_wh = SessionLocal()
+conv_wh = db_wh.query(Conversation).filter(Conversation.id == CONV_A).first()
+# @NOMEATENDENTE e insoluvel no webhook (user=None) -> out_of_hours e pulada
+conf_ooh, txt_ooh = webhook_router._resolve_auto_reply("out_of_hours", db_wh, conv_wh)
+check(conf_ooh is True and txt_ooh is None,
+      f"trigger configurado mas insoluvel -> (True, None) (got {conf_ooh}, {txt_ooh!r})")
+conf_nada, txt_nada = webhook_router._resolve_auto_reply("break_time", db_wh, conv_wh)
+check(conf_nada is False and txt_nada is None,
+      "trigger sem resposta cadastrada -> (False, None)")
+conf_ok, txt_ok = webhook_router._resolve_auto_reply("greeting", db_wh, conv_wh)
+check(conf_ok is True and txt_ok == "Bem-vindo a Brasileiros no Atacama!",
+      f"trigger resolvido -> (True, texto) (got {txt_ok!r})")
+
+# escape tambem vale em resposta automatica
+session = SessionLocal()
+session.query(AutoReply).filter(AutoReply.trigger == "greeting").update(
+    {"message": "Bem-vindo! Siga @@BRASILEIROSNOATACAMA"})
+session.commit()
+session.close()
+db_wh2 = SessionLocal()
+conv_wh2 = db_wh2.query(Conversation).filter(Conversation.id == CONV_A).first()
+_, txt_esc = webhook_router._resolve_auto_reply("greeting", db_wh2, conv_wh2)
+check(txt_esc == "Bem-vindo! Siga @BRASILEIROSNOATACAMA",
+      f"escape @@ funciona em resposta automatica (got {txt_esc!r})")
+db_wh2.close()
+db_wh.close()
+
+# o dispatcher retorna quando o trigger esta configurado, mesmo pulado
+import inspect as _inspect  # noqa: E402
+_disp = _inspect.getsource(webhook_router._send_auto_reply_if_needed)
+check("if configured:" in _disp,
+      "dispatcher decide pelo trigger CONFIGURADO, nao pelo texto resolvido")
+check(_disp.count("_resolve_auto_reply") == 3,
+      "os 3 gatilhos usam o resolvedor com distincao configurada/pulada")
+
+session = SessionLocal()
+session.query(AutoReply).delete()
+session.add(AutoReply(trigger="end_service", title="Encerramento",
+                      message="Obrigado @PRIMEIRONOMECLIENTE! Volte sempre.", is_active=True))
+session.commit()
+session.close()
 
 
 # ============ 11. SEGURANCA — sem execucao arbitraria / sem segredo ============

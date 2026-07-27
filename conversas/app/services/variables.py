@@ -129,6 +129,7 @@ def _scan(text: Optional[str]) -> List[_Piece]:
         return []
     pieces: List[_Piece] = []
     index, length = 0, len(text)
+    escape_ended_at = -1   # fim do escape imediatamente anterior
     while index < length:
         if text[index] != "@":
             index += 1
@@ -136,6 +137,7 @@ def _scan(text: Optional[str]) -> List[_Piece]:
         if text.startswith(ESCAPE_SEQUENCE, index):
             pieces.append(_Piece("escape", index, index + 2, None, False))
             index += 2
+            escape_ended_at = index
             continue
         match = _LAX_TOKEN_PATTERN.match(text, index)
         if match:
@@ -143,12 +145,20 @@ def _scan(text: Optional[str]) -> List[_Piece]:
             # "_@NOME_" o token e "@NOME" e o "_" final volta ao texto.
             token = match.group(0).rstrip("_")
             if len(token) >= 3:  # '@' + minimo de 2 caracteres
+                # Logo apos um escape a posicao e VALIDA: em "@@@NOME" o
+                # usuario escreveu uma arroba literal seguida da variavel.
+                # Olhar o caractere cru veria o '@' do escape ja consumido e
+                # acusaria "colada a outro texto" — erro enganoso.
+                strict = (
+                    escape_ended_at == index
+                    or _is_strict_position(text, index)
+                )
                 pieces.append(_Piece(
                     kind="token",
                     start=index,
                     end=index + len(token),
                     token=token,
-                    strict=_is_strict_position(text, index),
+                    strict=strict,
                 ))
                 index += len(token)
                 continue
@@ -175,9 +185,11 @@ def count_token_references(text: Optional[str], token: str) -> int:
       - arroba escapada  `@@TOKEN`  (o scanner nem gera candidato);
       - e-mail e mencao  `a@TOKEN.com`, `100@TOKEN` (posicao recusada).
 
-    Ocorrencia ambigua (`dia.@TOKEN`) tambem NAO conta: hoje ela bloqueia o
-    envio justamente por ser suspeita, e excluir a variavel apenas a devolve
-    ao texto como literal — nao quebra mensagem nenhuma.
+    Ocorrencia ambigua (`dia.@TOKEN`) tambem NAO conta. Consequencia a ter em
+    mente: hoje ela BLOQUEIA o envio (token cadastrado em posicao suspeita);
+    apos excluir a variavel ela deixa de bloquear e passa a ser enviada como
+    texto LITERAL. A mensagem so muda de um estado quebrado para outro, e
+    corrigi-la ja era necessario — por isso nao impede a exclusao.
     """
     return sum(
         1 for piece in _scan(text)

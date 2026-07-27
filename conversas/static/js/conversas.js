@@ -1910,7 +1910,14 @@
             body.appendChild(previewBlock('Mensagem (sem variáveis)', original));
         } else {
             body.appendChild(previewBlock('Texto original', original, 'preview-original'));
-            body.appendChild(previewBlock('Como o cliente vai receber', data.rendered));
+            // Com problemas, o texto NAO sera enviado — rotula-lo como "o que
+            // o cliente vai receber" seria mentira (e contradiria o aviso
+            // logo abaixo).
+            body.appendChild(previewBlock(
+                problems.length ? 'Resultado parcial (não será enviado)' : 'Como o cliente vai receber',
+                data.rendered,
+                problems.length ? 'preview-original' : ''
+            ));
         }
 
         const status = document.createElement('div');
