@@ -601,7 +601,8 @@
         e.preventDefault();
         const kind = document.querySelector('input[name="varKind"]:checked').value;
         const payload = {
-            token: '@' + document.getElementById('varToken').value.trim().toUpperCase(),
+            // remove um '@' colado pelo usuario: o prefixo ja e fixo ao lado do campo
+            token: '@' + document.getElementById('varToken').value.trim().replace(/^@+/, '').toUpperCase(),
             name: document.getElementById('varName').value.trim(),
             kind: kind,
             fixed_value: kind === 'fixed' ? document.getElementById('varFixedValue').value : null,

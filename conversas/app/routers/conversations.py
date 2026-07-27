@@ -432,12 +432,21 @@ async def update_conversation(
                 reply.message,
                 variables_service.VariableContext(db, conversation=conversation, user=current_user),
             )
-            # CONV-08b: status fiel ao resultado do envio (nunca 'sent' em falha).
-            wa_response = await whatsapp.send_text_message(conversation.whatsapp, auto_text, db)
-            record_outbound_message(
-                db, conversation, auto_text, "text", wa_response,
-                update_preview=False,
-            )
+            # Se a frase inteira era um token insoluvel, nao sobra texto algum:
+            # enviar string vazia seria rejeitado pela Meta e persistiria uma
+            # mensagem 'failed' sem sentido (mesmo guard de webhook.py).
+            if auto_text.strip():
+                # CONV-08b: status fiel ao resultado do envio (nunca 'sent' em falha).
+                wa_response = await whatsapp.send_text_message(conversation.whatsapp, auto_text, db)
+                record_outbound_message(
+                    db, conversation, auto_text, "text", wa_response,
+                    update_preview=False,
+                )
+            else:
+                logger.info(
+                    f"Frase automatica de encerramento vazia apos resolucao de "
+                    f"variaveis na conversa {conversation.id}; envio ignorado."
+                )
 
     return ConversationResponse.model_validate(conversation)
 
@@ -692,6 +701,19 @@ async def send_media_message_upload(
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Arquivo vazio")
+
+    # CONV-VAR-01: a legenda vem do MESMO composer que o seletor "@" alimenta,
+    # entao ela passa pela mesma resolucao do envio de texto — sem isto, anexar
+    # um arquivo enviaria o token literal ao cliente. Bloqueia ANTES de ler a
+    # politica de midia e de qualquer chamada a Meta.
+    try:
+        caption = variables_service.render_strict(
+            db,
+            caption or "",
+            variables_service.VariableContext(db, conversation=conversation, user=current_user),
+        )
+    except variables_service.VariableResolutionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     try:
         message, _asset = await send_media_upload(

@@ -144,7 +144,7 @@ class CatalogResponse(BaseModel):
 
 
 class PreviewRequest(BaseModel):
-    text: str = Field(..., max_length=10000)
+    text: str = Field(..., max_length=5000)  # mesmo limite de MessageCreate.content
     conversation_id: Optional[int] = None
 
 

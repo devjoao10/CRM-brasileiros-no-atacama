@@ -125,10 +125,17 @@ conv_b = Conversation(
     lead_id=0, whatsapp="5511911112222", nome="Érica  Souza",
     status="aberta", responsavel_nome="Outro Responsavel",
 )
-session.add_all([conv_a, conv_b])
+# lead_id REAL: a tabela `leads` (do CRM) nao existe no banco de teste do
+# Conversas, entao a leitura do CRM levanta de verdade — e so assim o caminho
+# de rollback de VariableContext.lead() e realmente exercitado.
+conv_crm = Conversation(
+    lead_id=42, whatsapp="5511933334444", nome="Carlos Lead CRM",
+    status="aberta", responsavel_nome="Julia Atendente",
+)
+session.add_all([conv_a, conv_b, conv_crm])
 session.add(BusinessHours(weekday=0, is_open=True, open_time="13:00", close_time="19:00"))
 session.commit()
-CONV_A, CONV_B = conv_a.id, conv_b.id
+CONV_A, CONV_B, CONV_CRM = conv_a.id, conv_b.id, conv_crm.id
 session.close()
 
 
@@ -199,6 +206,20 @@ r = client.put(f"/api/variables/{VAR_EMPRESA}", json={"fixed_value": "Brasileiro
 check(r.status_code == 200 and r.json()["fixed_value"] == "Brasileiros no Atacama LTDA",
       "editar variavel -> 200")
 client.put(f"/api/variables/{VAR_EMPRESA}", json={"fixed_value": "Brasileiros no Atacama"})
+
+# troca de tipo exige o campo do NOVO tipo na mesma requisicao — senao a
+# variavel ficaria salva sem valor e passaria a bloquear todo envio em silencio
+r = _create_var({"token": "@TROCATIPO", "name": "Troca de tipo",
+                 "kind": "dynamic", "source_key": "cliente.primeiro_nome"})
+TROCA_ID = r.json()["id"]
+r = client.put(f"/api/variables/{TROCA_ID}", json={"kind": "fixed"})
+check(r.status_code == 422, f"dynamic->fixed sem valor -> 422 (got {r.status_code})")
+r = client.put(f"/api/variables/{TROCA_ID}", json={"kind": "fixed", "fixed_value": "Valor novo"})
+check(r.status_code == 200 and r.json()["source_key"] is None,
+      "dynamic->fixed com valor -> 200 e limpa a origem")
+r = client.put(f"/api/variables/{TROCA_ID}", json={"kind": "dynamic"})
+check(r.status_code == 422, "fixed->dynamic sem origem -> 422 (simetrico)")
+client.delete(f"/api/variables/{TROCA_ID}")
 
 # exclusao
 r = _create_var({"token": "@DESCARTAVEL", "name": "Descartavel", "kind": "fixed", "fixed_value": "x"})
@@ -306,6 +327,29 @@ r = _send(CONV_A, "Custo: 100@ unidade.")
 check(_last_sent() == "Custo: 100@ unidade.", "'@' solto intacto")
 
 
+# ============ 5b. TOKEN COLADO A OUTRO TEXTO (posicao ambigua) ============
+# Achado da code review: sem a varredura larga, um token em posicao recusada
+# pelo padrao estrito era IGNORADO e chegava LITERAL ao cliente.
+print("\nVAR — token colado a outro texto")
+
+for texto, rotulo in (
+    ("@PRIMEIRONOMECLIENTE@NOMEEMPRESA", "dois tokens colados"),
+    ("Bom dia.@PRIMEIRONOMECLIENTE", "token colado a um ponto"),
+    ("Pedido 100@NOMEEMPRESA", "token colado a um numero"),
+):
+    before = len(sent_payloads)
+    r = _send(CONV_A, texto)
+    check(r.status_code == 422, f"{rotulo} -> bloqueia o envio (got {r.status_code})")
+    check("colada a outro texto" in r.json().get("detail", ""),
+          f"{rotulo}: mensagem explica como corrigir")
+    check(len(sent_payloads) == before, f"{rotulo}: nada foi enviado ao WhatsApp")
+
+# e-mail MAIUSCULO cujo dominio NAO e token cadastrado segue literal
+r = _send(CONV_A, "Envie para JOAO@GMAIL.COM hoje.")
+check(r.status_code == 200 and _last_sent() == "Envie para JOAO@GMAIL.COM hoje.",
+      f"e-mail com dominio nao cadastrado permanece literal (got {_last_sent()!r})")
+
+
 # ============ 6. BLOQUEIO: SEM VALOR / DESCONHECIDA / INATIVA ============
 print("\nVAR — bloqueio de envio")
 
@@ -387,6 +431,36 @@ _send(CONV_A, "Oi @PRIMEIRONOMECLIENTE")
 check(_last_sent() == "Oi João", "voltar para A nao reaproveita o contexto de B (sem cache entre envios)")
 
 
+# ============ 8b. LEGENDA DE MIDIA USA A MESMA RESOLUCAO ============
+# Achado da code review: a legenda vem do MESMO composer que o seletor "@"
+# alimenta — sem resolucao, anexar um arquivo enviaria o token literal.
+print("\nVAR — legenda de midia")
+
+_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d494844520000000100000001080600000"
+    "01f15c4890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+)
+
+
+def _send_media(conversation_id, caption):
+    return client.post(
+        f"/api/conversations/{conversation_id}/messages/media",
+        files={"file": ("foto.png", _PNG, "image/png")},
+        data={"caption": caption},
+    )
+
+
+r = _send_media(CONV_A, "Olha isso @VARIAVELINEXISTENTE!")
+check(r.status_code == 422, f"legenda com token desconhecido bloqueia -> 422 (got {r.status_code})")
+check("@VARIAVELINEXISTENTE" in r.json().get("detail", ""),
+      "legenda bloqueada informa o token nao reconhecido")
+
+session = SessionLocal()
+leaked = session.query(Message).filter(Message.content.like("%VARIAVELINEXISTENTE%")).count()
+session.close()
+check(leaked == 0, "legenda bloqueada nao persiste mensagem nem asset")
+
+
 # ============ 9. PREVIEW COERENTE COM O ENVIO ============
 print("\nVAR — preview")
 
@@ -414,8 +488,6 @@ session.add(AutoReply(trigger="end_service", title="Encerramento",
 session.commit()
 session.close()
 
-ctx_sem_atendente = variables_service.VariableContext(
-    SessionLocal(), conversation=None, user=None)
 db_tmp = SessionLocal()
 conv = db_tmp.query(Conversation).filter(Conversation.id == CONV_A).first()
 lenient = variables_service.render_lenient(
@@ -433,6 +505,20 @@ check(r.status_code == 200, "encerrar conversa -> 200 (frase automatica NAO bloq
 check(len(sent_payloads) > before and "João" in sent_payloads[-1]["message"],
       f"frase automatica enviada com a variavel resolvida (got {sent_payloads[-1]['message']!r})")
 client.put(f"/api/conversations/{CONV_A}", json={"status": "aberta"})
+
+# Frase automatica que vira texto VAZIO apos a resolucao nao pode ser enviada
+# (a Meta rejeita string vazia e persistiria uma mensagem 'failed' sem sentido).
+session = SessionLocal()
+session.query(AutoReply).filter(AutoReply.trigger == "end_service").update(
+    {"message": "@EMAILCLIENTE"})   # insoluvel: CONV_B nao tem lead no CRM
+session.commit()
+session.close()
+before = len(sent_payloads)
+r = client.put(f"/api/conversations/{CONV_B}", json={"status": "encerrada"})
+check(r.status_code == 200, "encerrar conversa segue funcionando com frase vazia")
+check(len(sent_payloads) == before,
+      "frase automatica vazia apos resolucao NAO e enviada (sem mensagem em branco)")
+client.put(f"/api/conversations/{CONV_B}", json={"status": "aberta"})
 
 
 # ============ 11. SEGURANCA — sem execucao arbitraria / sem segredo ============
@@ -464,16 +550,23 @@ check("test-secret-key" not in body, "resposta sem SECRET_KEY")
 # Integridade: falha ao ler o CRM faz rollback (senao, no PostgreSQL, a
 # transacao abortada derrubaria o commit de record_outbound_message DEPOIS
 # do envio ja aceito pela Meta — mensagem entregue e nao persistida).
-svc_lead_src = svc_src[svc_src.find("def lead("):svc_src.find("# ─── Helpers de valor")]
-check("self.db.rollback()" in svc_lead_src,
-      "leitura do CRM faz rollback na falha (padrao de services/crm.py)")
+# CONV_CRM tem lead_id=42 e a tabela `leads` NAO existe aqui: a query
+# levanta de verdade e o bloco de rollback e realmente executado.
+db_probe = SessionLocal()
+conv_probe = db_probe.query(Conversation).filter(Conversation.id == CONV_CRM).first()
+ctx_probe = variables_service.VariableContext(db_probe, conversation=conv_probe, user=None)
+check(ctx_probe.lead() is None, "leitura do CRM indisponivel retorna None (nao propaga erro)")
+# A sessao precisa continuar utilizavel DEPOIS da falha — e o que o rollback garante.
+check(db_probe.query(Conversation).count() >= 3,
+      "sessao continua utilizavel apos a falha (rollback limpou a transacao)")
+db_probe.close()
 
 before = len(sent_payloads)
-r = _send(CONV_A, "Confirma o e-mail @EMAILCLIENTE?")   # dispara a leitura do CRM
-check(r.status_code == 422, "envio bloqueado quando o CRM nao responde")
-r = _send(CONV_A, "Oi @PRIMEIRONOMECLIENTE, seguimos.")  # sessao continua utilizavel
-check(r.status_code == 200 and _last_sent() == "Oi João, seguimos.",
-      f"sessao continua utilizavel apos falha de leitura do CRM (got {_last_sent()!r})")
+r = _send(CONV_CRM, "Confirma o e-mail @EMAILCLIENTE?")   # dispara a leitura do CRM
+check(r.status_code == 422, "envio bloqueado quando o dado do CRM nao esta disponivel")
+r = _send(CONV_CRM, "Oi @PRIMEIRONOMECLIENTE, seguimos.")  # mesma sessao de request
+check(r.status_code == 200 and _last_sent() == "Oi Carlos, seguimos.",
+      f"envio seguinte funciona apos falha de leitura do CRM (got {_last_sent()!r})")
 check(len(sent_payloads) == before + 1, "apenas o envio valido chegou ao WhatsApp")
 
 # sem autenticacao -> 401

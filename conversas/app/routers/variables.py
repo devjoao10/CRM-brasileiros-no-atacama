@@ -8,7 +8,6 @@ Permissoes (padrao ja existente do Conversas, ver api_config.py):
 """
 
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -167,7 +166,10 @@ async def update_variable(
     if data.is_active is not None:
         variable.is_active = data.is_active
 
-    # Coerência final: o tipo manda sobre os campos de valor/origem.
+    # Coerência final: o tipo manda sobre os campos de valor/origem. A troca de
+    # tipo exige o campo do NOVO tipo na mesma requisição — senão a variável
+    # ficaria salva sem valor e todo envio que a usasse passaria a ser
+    # bloqueado, sem o administrador perceber.
     if variable.kind == "dynamic":
         if not variable.source_key:
             raise HTTPException(
@@ -176,6 +178,11 @@ async def update_variable(
             )
         variable.fixed_value = None
     else:
+        if data.kind == "fixed" and not (variable.fixed_value or "").strip():
+            raise HTTPException(
+                status_code=422,
+                detail="Informe o valor da variável ao mudar o tipo para Fixo.",
+            )
         variable.source_key = None
 
     db.commit()

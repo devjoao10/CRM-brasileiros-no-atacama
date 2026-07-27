@@ -63,20 +63,69 @@ TOKEN_PATTERN = re.compile(r"(?<![^\W_])(?<![.@])@(" + _TOKEN_BODY + r")")
 # Formato completo aceito no cadastro (validacao do CRUD).
 TOKEN_FULL_PATTERN = re.compile(r"^@" + _TOKEN_BODY + r"$")
 
+# Varredura LARGA: encontra qualquer coisa com cara de token, INCLUSIVE nas
+# posicoes que o padrao estrito recusa (colado a letra/digito, a um ponto ou a
+# outro token). Sem ela, um token em posicao recusada seria simplesmente
+# ignorado — e iria LITERALMENTE ao cliente, quebrando o invariante do modulo.
+#   "@NOMECLIENTE@NOMEEMPRESA"  -> o 2o token e detectado como ambiguo
+#   "Bom dia.@NOMECLIENTE"      -> detectado como ambiguo
+#   "contato@empresa.com"       -> nao e candidato (minusculo)
+#   "CONTATO@EMPRESA.COM"       -> candidato, mas @EMPRESA nao esta cadastrado
+#                                  -> permanece LITERAL (e-mail intacto)
+_LAX_TOKEN_PATTERN = re.compile(r"@[A-Z0-9][A-Z0-9_]*")
+
 # Tokens reservados pelo sistema. Hoje o sistema nao reserva nenhum token;
 # a lista existe para que uma reserva futura seja aplicada em um unico lugar.
 RESERVED_TOKENS: frozenset = frozenset()
 
 
-def find_tokens(text: Optional[str]) -> List[str]:
-    """Tokens do sistema presentes no texto, unicos e na ordem de aparicao."""
+class _Candidate(NamedTuple):
+    start: int    # indice do '@'
+    end: int      # fim do TOKEN (exclui underscores finais)
+    token: str
+    strict: bool  # True = posicao valida para substituicao
+
+
+def _is_strict_position(text: str, at: int) -> bool:
+    """
+    Equivalente aos lookbehinds de TOKEN_PATTERN: a posicao e valida quando o
+    caractere anterior NAO e alfanumerico (Unicode), ponto ou `@`. Underscore
+    e permitido — sem isso o italico do WhatsApp `_@TOKEN_` nao funcionaria.
+    """
+    if at == 0:
+        return True
+    prev = text[at - 1]
+    if prev in ".@":
+        return False
+    return not prev.isalnum()
+
+
+def _scan(text: Optional[str]) -> List[_Candidate]:
+    """Todos os candidatos a token, estritos e ambiguos, na ordem do texto."""
     if not text:
         return []
-    seen = []
-    for match in TOKEN_PATTERN.finditer(text):
-        token = "@" + match.group(1)
-        if token not in seen:
-            seen.append(token)
+    found = []
+    for match in _LAX_TOKEN_PATTERN.finditer(text):
+        # O token nunca termina em underscore (ver TOKEN_FULL_PATTERN): em
+        # "_@NOME_" o token e "@NOME" e o "_" final volta ao texto.
+        token = match.group(0).rstrip("_")
+        if len(token) < 3:  # '@' + minimo de 2 caracteres
+            continue
+        found.append(_Candidate(
+            start=match.start(),
+            end=match.start() + len(token),
+            token=token,
+            strict=_is_strict_position(text, match.start()),
+        ))
+    return found
+
+
+def find_tokens(text: Optional[str]) -> List[str]:
+    """Tokens em posicao VALIDA, unicos e na ordem de aparicao."""
+    seen: List[str] = []
+    for candidate in _scan(text):
+        if candidate.strict and candidate.token not in seen:
+            seen.append(candidate.token)
     return seen
 
 
@@ -216,10 +265,6 @@ def _cliente_nome_completo(ctx: VariableContext) -> Optional[str]:
     return lead_nome.strip() if lead_nome and lead_nome.strip() else None
 
 
-def _src_cliente_nome_completo(ctx: VariableContext) -> Optional[str]:
-    return _cliente_nome_completo(ctx)
-
-
 def _src_cliente_primeiro_nome(ctx: VariableContext) -> Optional[str]:
     return first_name(_cliente_nome_completo(ctx))
 
@@ -267,7 +312,7 @@ CATALOG: "dict[str, SourceProperty]" = {
         SourceProperty("atendente.nome", "Funcionário", "Funcionário: Nome", _src_atendente_nome),
         SourceProperty("atendente.email", "Funcionário", "Funcionário: Email", _src_atendente_email),
         SourceProperty("conversa.responsavel_nome", "Funcionário", "Funcionário: Responsável pela Conversa", _src_responsavel_nome),
-        SourceProperty("cliente.nome_completo", "Cliente", "Cliente: Nome Completo", _src_cliente_nome_completo),
+        SourceProperty("cliente.nome_completo", "Cliente", "Cliente: Nome Completo", _cliente_nome_completo),
         SourceProperty("cliente.primeiro_nome", "Cliente", "Cliente: Primeiro Nome", _src_cliente_primeiro_nome),
         SourceProperty("cliente.telefone", "Cliente", "Cliente: Telefone", _src_cliente_telefone),
         SourceProperty("cliente.email", "Cliente", "Cliente: Email", _src_cliente_email),
@@ -332,6 +377,12 @@ def _problem(token: str, code: str) -> VariableProblem:
             token, code, "origem inválida",
             f"{_BLOCK_PREFIX} A variável {token} está ligada a uma propriedade que não existe mais.",
         )
+    if code == "ambiguous":
+        return VariableProblem(
+            token, code, "colada a outro texto",
+            f"{_BLOCK_PREFIX} A variável {token} está colada a outro texto. "
+            f"Deixe um espaço antes dela.",
+        )
     return VariableProblem(
         token, code, "sem valor para este contato",
         f"{_BLOCK_PREFIX} A variável {token} não possui valor para este contato.",
@@ -346,18 +397,22 @@ def render(db: Session, text: Optional[str], ctx: VariableContext):
     Tokens com problema sao substituidos por string vazia: um token NUNCA vai
     literalmente para o cliente. Quem decide bloquear e o chamador.
     """
-    if not text:
+    candidates = _scan(text)
+    if not candidates:
         return text or "", []
 
-    tokens = find_tokens(text)
-    if not tokens:
-        return text, []
-
-    rows = db.query(MessageVariable).filter(MessageVariable.token.in_(tokens)).all()
+    rows = db.query(MessageVariable).filter(
+        MessageVariable.token.in_({c.token for c in candidates})
+    ).all()
     registered = {row.token: row for row in rows}
 
     values: "dict[str, str]" = {}
     problems: List[VariableProblem] = []
+
+    tokens: List[str] = []
+    for candidate in candidates:
+        if candidate.strict and candidate.token not in tokens:
+            tokens.append(candidate.token)
 
     for token in tokens:
         variable = registered.get(token)
@@ -404,11 +459,42 @@ def render(db: Session, text: Optional[str], ctx: VariableContext):
         else:
             values[token] = resolved
 
-    # Passo unico: o valor substituido NAO e re-escaneado (sem recursao) e
-    # nao sofre interpretacao de backreferences (`\1`) — a lambda devolve
-    # o texto literal.
-    rendered = TOKEN_PATTERN.sub(lambda m: values.get("@" + m.group(1), ""), text)
-    return rendered, problems
+    # Ocorrencia CADASTRADA em posicao recusada (colada a outro texto ou a
+    # outro token): e claramente um token do sistema, entao vira problema e
+    # sai do texto. Ocorrencia NAO cadastrada em posicao recusada permanece
+    # LITERAL — e o que mantem "contato@empresa.com" intacto.
+    for candidate in candidates:
+        if candidate.strict or candidate.token not in registered:
+            continue
+        if not any(p.token == candidate.token and p.code == "ambiguous" for p in problems):
+            problems.append(_problem(candidate.token, "ambiguous"))
+
+    # Passo unico sobre o texto ORIGINAL: o valor substituido NAO e
+    # re-escaneado (sem recursao) e backreferences de regex (`\1`) entram
+    # como texto literal (montagem manual, sem re.sub).
+    out: List[str] = []
+    cursor = 0
+    for candidate in candidates:
+        if candidate.strict:
+            replacement = values.get(candidate.token, "")
+        elif candidate.token in registered:
+            replacement = ""
+        else:
+            continue  # e-mail / mencao comum: preserva literalmente
+
+        start = candidate.start
+        if not replacement:
+            # Remove UM espaco adjacente para nao deixar buraco no texto
+            # ("Oi @TOKEN tudo bem" -> "Oi tudo bem"). Pontuacao e mantida.
+            after = text[candidate.end] if candidate.end < len(text) else ""
+            if start > cursor and text[start - 1] == " " and after in ("", " ", "\n"):
+                start -= 1
+        out.append(text[cursor:start])
+        out.append(replacement)
+        cursor = candidate.end
+
+    out.append(text[cursor:])
+    return "".join(out), problems
 
 
 def render_strict(db: Session, text: Optional[str], ctx: VariableContext) -> str:
@@ -431,6 +517,4 @@ def render_lenient(db: Session, text: Optional[str], ctx: VariableContext) -> st
             "Frase automatica enviada sem %d variavel(is) nao resolvida(s): %s",
             len(problems), ", ".join(p.token for p in problems),
         )
-        rendered = re.sub(r"[ \t]{2,}", " ", rendered)
-        rendered = "\n".join(line.rstrip() for line in rendered.split("\n")).strip()
     return rendered
