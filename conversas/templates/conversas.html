@@ -8,7 +8,7 @@
     <!-- CONV-MOBILE-PWA-01: fundacao PWA (manifest + theme-color; SEM service worker) -->
     <link rel="manifest" href="/static/manifest.json">
     <meta name="theme-color" content="#366B85">
-    <link rel="stylesheet" href="/static/css/conversas.css?v=conv-var-01">
+    <link rel="stylesheet" href="/static/css/conversas.css?v=conv-var-hard-01">
 </head>
 <body>
     <div class="app-layout" id="appLayout">
@@ -132,6 +132,13 @@
                          pelo JS com createElement/textContent (nunca innerHTML). -->
                     <button class="btn-action" id="btnVars" title="Inserir variável" aria-haspopup="listbox" aria-expanded="false" style="width: 42px; height: 42px; border: none; background: transparent; color: var(--dark-400); border-radius: var(--radius-full); cursor: pointer; transition: all var(--transition); display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-weight: 700; font-size: 19px;">@</button>
                     <div id="varPalette" class="var-palette" role="listbox" aria-label="Variáveis disponíveis" style="display:none;"></div>
+
+                    <!-- CONV-VAR-01-HARD-01: prévia do texto que será enviado.
+                         O conteúdo vem SEMPRE do backend (POST /api/variables/preview);
+                         o JS nunca reimplementa a resolução. -->
+                    <button class="btn-action" id="btnPreview" title="Visualizar mensagem" style="width: 42px; height: 42px; border: none; background: transparent; color: var(--dark-400); border-radius: var(--radius-full); cursor: pointer; transition: all var(--transition); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+                    </button>
 
                     <!-- CONV-HOTFIX-QUICK-REPLIES-01: paleta de mensagens rapidas ("/" no composer).
                          Itens populados pelo JS com createElement/textContent (nunca innerHTML). -->
@@ -285,7 +292,25 @@
         </div>
     </div>
 
+    <!-- CONV-VAR-01-HARD-01: modal de prévia (reusa .modal-overlay/.modal já
+         existentes). Conteúdo populado por JS com createElement/textContent;
+         NÃO envia a mensagem — só o botão Enviar do composer envia. -->
+    <div class="modal-overlay" id="previewModalOverlay" style="display:none;">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Como o cliente vai receber</h3>
+                <button class="modal-close" id="previewModalClose">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                </button>
+            </div>
+            <div class="modal-body" id="previewModalBody"></div>
+            <div class="modal-footer">
+                <button type="button" class="btn-secondary" id="btnPreviewClose">Fechar</button>
+            </div>
+        </div>
+    </div>
+
     <script src="/static/js/auth.js"></script>
-    <script src="/static/js/conversas.js?v=conv-var-01"></script>
+    <script src="/static/js/conversas.js?v=conv-var-hard-01"></script>
 </body>
 </html>

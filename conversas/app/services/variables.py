@@ -13,13 +13,18 @@ CONTEXTO — cada envio monta seu proprio `VariableContext` a partir da conversa
 atual. O lead do CRM e buscado por `lead_id` EXATO (nunca por aproximacao de
 telefone), justamente para que o cliente A jamais receba dado do cliente B.
 
+ESCAPE — `@@TEXTO` produz `@TEXTO` literal, processado ANTES da deteccao de
+variaveis e nunca reinterpretado. E como se escreve uma arroba de verdade
+(ex.: `Siga @@BRASILEIROSNOATACAMA`) sem que o sistema a trate como token.
+
 MODOS:
-  - `render(...)`         -> (texto, problemas)  — usado pelo preview
-  - `render_strict(...)`  -> levanta VariableResolutionError no 1o problema
-                             (envio manual: variavel sem valor BLOQUEIA o envio)
-  - `render_lenient(...)` -> nunca levanta; token insoluvel vira '' (frases
-                             automaticas: nao ha atendente logado no webhook e
-                             bloquear deixaria o cliente sem resposta alguma)
+  - `render(...)`           -> (texto, problemas)  — usado pelo preview
+  - `render_strict(...)`    -> levanta VariableResolutionError no 1o problema
+                               (envio manual: BLOQUEIA o envio)
+  - `render_auto_reply(...)`-> texto so quando TUDO resolve; senao `None` e a
+                               resposta automatica inteira e pulada (nunca
+                               token literal, nunca texto mutilado, nunca
+                               string vazia). Nao levanta excecao.
 """
 
 import logging
@@ -84,11 +89,16 @@ _LAX_TOKEN_PATTERN = re.compile(r"@[A-Z0-9][A-Z0-9_]*")
 RESERVED_TOKENS: frozenset = frozenset()
 
 
-class _Candidate(NamedTuple):
-    start: int    # indice do '@'
-    end: int      # fim do TOKEN (exclui underscores finais)
-    token: str
-    strict: bool  # True = posicao valida para substituicao
+ESCAPE_SEQUENCE = "@@"
+
+
+class _Piece(NamedTuple):
+    """Trecho do texto que NAO e texto comum: um escape ou um candidato a token."""
+    kind: str            # 'escape' | 'token'
+    start: int           # indice do primeiro '@'
+    end: int             # fim do trecho (no token, exclui underscores finais)
+    token: Optional[str]
+    strict: bool         # so para 'token': posicao valida para substituicao
 
 
 def _is_strict_position(text: str, at: int) -> bool:
@@ -105,33 +115,74 @@ def _is_strict_position(text: str, at: int) -> bool:
     return not prev.isalnum()
 
 
-def _scan(text: Optional[str]) -> List[_Candidate]:
-    """Todos os candidatos a token, estritos e ambiguos, na ordem do texto."""
+def _scan(text: Optional[str]) -> List[_Piece]:
+    """
+    Varredura ESQUERDA->DIREITA em passo unico: escapes e candidatos a token,
+    na ordem do texto.
+
+    O escape `@@` e reconhecido ANTES de qualquer deteccao de variavel e
+    consome os dois caracteres, entao o que vem depois dele NUNCA e examinado
+    como token — `@@NOMECLIENTE` sai literalmente como `@NOMECLIENTE` mesmo
+    que `@NOMECLIENTE` esteja cadastrada.
+    """
     if not text:
         return []
-    found = []
-    for match in _LAX_TOKEN_PATTERN.finditer(text):
-        # O token nunca termina em underscore (ver TOKEN_FULL_PATTERN): em
-        # "_@NOME_" o token e "@NOME" e o "_" final volta ao texto.
-        token = match.group(0).rstrip("_")
-        if len(token) < 3:  # '@' + minimo de 2 caracteres
+    pieces: List[_Piece] = []
+    index, length = 0, len(text)
+    while index < length:
+        if text[index] != "@":
+            index += 1
             continue
-        found.append(_Candidate(
-            start=match.start(),
-            end=match.start() + len(token),
-            token=token,
-            strict=_is_strict_position(text, match.start()),
-        ))
-    return found
+        if text.startswith(ESCAPE_SEQUENCE, index):
+            pieces.append(_Piece("escape", index, index + 2, None, False))
+            index += 2
+            continue
+        match = _LAX_TOKEN_PATTERN.match(text, index)
+        if match:
+            # O token nunca termina em underscore (ver TOKEN_FULL_PATTERN): em
+            # "_@NOME_" o token e "@NOME" e o "_" final volta ao texto.
+            token = match.group(0).rstrip("_")
+            if len(token) >= 3:  # '@' + minimo de 2 caracteres
+                pieces.append(_Piece(
+                    kind="token",
+                    start=index,
+                    end=index + len(token),
+                    token=token,
+                    strict=_is_strict_position(text, index),
+                ))
+                index += len(token)
+                continue
+        index += 1
+    return pieces
 
 
 def find_tokens(text: Optional[str]) -> List[str]:
-    """Tokens em posicao VALIDA, unicos e na ordem de aparicao."""
+    """Tokens em posicao VALIDA (escapes excluidos), unicos e na ordem."""
     seen: List[str] = []
-    for candidate in _scan(text):
-        if candidate.strict and candidate.token not in seen:
-            seen.append(candidate.token)
+    for piece in _scan(text):
+        if piece.kind == "token" and piece.strict and piece.token not in seen:
+            seen.append(piece.token)
     return seen
+
+
+def count_token_references(text: Optional[str], token: str) -> int:
+    """
+    Quantas vezes `token` aparece em `text` COMO variavel que seria SUBSTITUIDA.
+
+    Comparacao exata (token inteiro, nunca `startswith`) e restrita as
+    ocorrencias ESTRITAS — as mesmas que `render` substituiria. Ficam de fora,
+    por definicao:
+      - arroba escapada  `@@TOKEN`  (o scanner nem gera candidato);
+      - e-mail e mencao  `a@TOKEN.com`, `100@TOKEN` (posicao recusada).
+
+    Ocorrencia ambigua (`dia.@TOKEN`) tambem NAO conta: hoje ela bloqueia o
+    envio justamente por ser suspeita, e excluir a variavel apenas a devolve
+    ao texto como literal — nao quebra mensagem nenhuma.
+    """
+    return sum(
+        1 for piece in _scan(text)
+        if piece.kind == "token" and piece.strict and piece.token == token
+    )
 
 
 def normalize_token(raw: Optional[str]) -> str:
@@ -396,20 +447,25 @@ def _problem(token: str, code: str) -> VariableProblem:
 
 def render(db: Session, text: Optional[str], ctx: VariableContext):
     """
-    Substitui os tokens CADASTRADOS pelo valor do contexto.
-    Retorna `(texto_renderizado, problemas)` — nao levanta excecao.
+    Aplica o escape `@@` e substitui os tokens CADASTRADOS pelo valor do
+    contexto. Retorna `(texto_renderizado, problemas)` — nao levanta excecao.
 
-    Tokens com problema sao substituidos por string vazia: um token NUNCA vai
-    literalmente para o cliente. Quem decide bloquear e o chamador.
+    Tokens com problema sao substituidos por string vazia, mas NENHUM chamador
+    envia um texto com problemas: `render_strict` bloqueia e
+    `render_auto_reply` pula a resposta inteira. Um token NUNCA vai
+    literalmente para o cliente.
     """
-    candidates = _scan(text)
-    if not candidates:
+    pieces = _scan(text)
+    if not pieces:
         return text or "", []
 
-    rows = db.query(MessageVariable).filter(
-        MessageVariable.token.in_({c.token for c in candidates})
-    ).all()
-    registered = {row.token: row for row in rows}
+    candidates = [p for p in pieces if p.kind == "token"]
+    registered = {}
+    if candidates:
+        rows = db.query(MessageVariable).filter(
+            MessageVariable.token.in_({c.token for c in candidates})
+        ).all()
+        registered = {row.token: row for row in rows}
 
     values: "dict[str, str]" = {}
     problems: List[VariableProblem] = []
@@ -476,30 +532,30 @@ def render(db: Session, text: Optional[str], ctx: VariableContext):
 
     # Passo unico sobre o texto ORIGINAL: o valor substituido NAO e
     # re-escaneado (sem recursao) e backreferences de regex (`\1`) entram
-    # como texto literal (montagem manual, sem re.sub).
+    # como texto literal (montagem manual, sem re.sub). Formatacao do
+    # WhatsApp, emojis e quebras de linha atravessam intactos porque tudo
+    # fora dos trechos identificados e copiado byte a byte.
     out: List[str] = []
     cursor = 0
-    for candidate in candidates:
-        if candidate.strict:
-            replacement = values.get(candidate.token, "")
-        elif candidate.token in registered:
-            replacement = ""
+    for piece in pieces:
+        out.append(text[cursor:piece.start])
+        if piece.kind == "escape":
+            out.append("@")                       # '@@' -> exatamente um '@'
+        elif piece.strict:
+            out.append(values.get(piece.token, ""))
+        elif piece.token in registered:
+            out.append("")                        # ambiguo: problema ja registrado
         else:
-            continue  # e-mail / mencao comum: preserva literalmente
-
-        start = candidate.start
-        if not replacement:
-            # Remove UM espaco adjacente para nao deixar buraco no texto
-            # ("Oi @TOKEN tudo bem" -> "Oi tudo bem"). Pontuacao e mantida.
-            after = text[candidate.end] if candidate.end < len(text) else ""
-            if start > cursor and text[start - 1] == " " and after in ("", " ", "\n"):
-                start -= 1
-        out.append(text[cursor:start])
-        out.append(replacement)
-        cursor = candidate.end
+            out.append(text[piece.start:piece.end])  # e-mail/mencao: literal
+        cursor = piece.end
 
     out.append(text[cursor:])
     return "".join(out), problems
+
+
+def _ctx_conversation_id(ctx: VariableContext):
+    """Id da conversa para log, quando disponivel (webhook pode nao ter)."""
+    return getattr(ctx.conversation, "id", None) if ctx.conversation is not None else None
 
 
 def render_strict(db: Session, text: Optional[str], ctx: VariableContext) -> str:
@@ -510,16 +566,54 @@ def render_strict(db: Session, text: Optional[str], ctx: VariableContext) -> str
     return rendered
 
 
-def render_lenient(db: Session, text: Optional[str], ctx: VariableContext) -> str:
+def render_auto_reply(
+    db: Session,
+    text: Optional[str],
+    ctx: VariableContext,
+    *,
+    trigger: str,
+) -> Optional[str]:
     """
-    Frases automaticas: nunca bloqueia (o webhook nao tem atendente logado e
-    um bloqueio deixaria o cliente sem resposta nenhuma). Tokens insoluveis
-    saem do texto e os espacos residuais sao compactados.
+    Respostas automaticas — TUDO OU NADA.
+
+    Devolve o texto renderizado APENAS quando todas as variaveis resolvem.
+    Em qualquer problema (desconhecida, inativa, sem valor fixo, sem valor
+    dinamico, origem invalida, token colado a outro texto) devolve `None`, e
+    o chamador PULA aquela resposta automatica especifica.
+
+    Isso substitui o antigo modo tolerante, que removia o token e podia
+    entregar texto mutilado ("Somos a , prazer."). As garantias agora sao:
+    nunca token literal, nunca texto mutilado, nunca string vazia.
+
+    Nunca levanta excecao: uma resposta automatica com defeito nao pode
+    interromper o processamento do webhook. Falha inesperada tambem devolve
+    `None`.
     """
-    rendered, problems = render(db, text, ctx)
-    if problems:
-        logger.info(
-            "Frase automatica enviada sem %d variavel(is) nao resolvida(s): %s",
-            len(problems), ", ".join(p.token for p in problems),
+    try:
+        rendered, problems = render(db, text, ctx)
+    except Exception as exc:
+        logger.warning(
+            "auto_reply_skipped trigger=%s conversation_id=%s motivo=erro_inesperado erro=%s",
+            trigger, _ctx_conversation_id(ctx), type(exc).__name__,
         )
+        return None
+
+    if problems:
+        # Log ESTRUTURADO e seguro: tipo da resposta, token, codigo do
+        # problema e conversa. NUNCA o valor resolvido (pode ser dado do
+        # cliente) nem o texto final.
+        for problem in problems:
+            logger.warning(
+                "auto_reply_skipped trigger=%s conversation_id=%s token=%s problema=%s",
+                trigger, _ctx_conversation_id(ctx), problem.token, problem.code,
+            )
+        return None
+
+    rendered = (rendered or "").strip()
+    if not rendered:
+        logger.warning(
+            "auto_reply_skipped trigger=%s conversation_id=%s motivo=texto_vazio",
+            trigger, _ctx_conversation_id(ctx),
+        )
+        return None
     return rendered

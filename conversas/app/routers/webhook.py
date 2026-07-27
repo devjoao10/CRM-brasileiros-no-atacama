@@ -161,10 +161,10 @@ def _get_auto_reply(trigger: str, db: Session, conversation: Conversation | None
     Get an active auto-reply message by trigger, com as variaveis (@TOKEN) ja
     resolvidas para a conversa atual.
 
-    CONV-VAR-01: aqui a resolucao e TOLERANTE — o webhook nao tem atendente
-    logado, entao `@NOMEATENDENTE` e insoluvel por natureza; bloquear deixaria
-    o cliente sem saudacao alguma. Token insoluvel sai do texto (nunca vai
-    literalmente ao cliente) e o envio segue.
+    CONV-VAR-01-HARD-01: resolucao TUDO OU NADA. Se qualquer variavel nao
+    resolver, `render_auto_reply` devolve None e ESTA resposta automatica e
+    pulada — nunca sai token literal, texto mutilado ou string vazia. O
+    webhook segue processando normalmente (a funcao nao levanta excecao).
     """
     reply = db.query(AutoReply).filter(
         AutoReply.trigger == trigger,
@@ -172,12 +172,12 @@ def _get_auto_reply(trigger: str, db: Session, conversation: Conversation | None
     ).first()
 
     if reply and reply.message and reply.message.strip():
-        rendered = variables_service.render_lenient(
+        return variables_service.render_auto_reply(
             db,
             reply.message,
             variables_service.VariableContext(db, conversation=conversation, user=None),
+            trigger=trigger,
         )
-        return rendered or None
     return None
 
 

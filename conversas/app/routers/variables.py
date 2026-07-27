@@ -14,8 +14,10 @@ from sqlalchemy.orm import Session
 
 from app.auth import User, get_current_user, require_admin
 from app.database import get_db
+from app.models.auto_reply import AutoReply
 from app.models.conversation import Conversation
 from app.models.message_variable import MessageVariable
+from app.models.quick_reply import QuickReply
 from app.schemas.message_variable import (
     CatalogResponse,
     MessageVariableCreate,
@@ -191,19 +193,73 @@ async def update_variable(
     return MessageVariableResponse.from_model(variable, names.get(variable.created_by))
 
 
+def _count_references(db: Session, token: str) -> dict:
+    """
+    Quantas mensagens salvas usam o token COMO variável.
+
+    Varre mensagens rápidas e respostas automáticas com a MESMA varredura do
+    resolver (`count_token_references`), então e-mail, menção comum e arroba
+    escapada (`@@TOKEN`) não contam como referência. As duas tabelas são
+    pequenas (dezenas de linhas), então a checagem é feita em memória — sem
+    `LIKE`, sem falso positivo por curinga.
+    """
+    quick = sum(
+        1 for row in db.query(QuickReply).all()
+        if variables_service.count_token_references(row.content, token)
+    )
+    auto = sum(
+        1 for row in db.query(AutoReply).all()
+        if variables_service.count_token_references(row.message, token)
+    )
+    return {"quick_replies": quick, "auto_replies": auto, "total": quick + auto}
+
+
 @router.delete("/{variable_id}")
 async def delete_variable(
     variable_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
-    """Excluir variável (somente administradores)."""
+    """
+    Excluir variável (somente administradores).
+
+    CONV-VAR-01-HARD-01: exclusão BLOQUEADA (409) enquanto a variável estiver
+    em uso. Excluir um token ainda referenciado transformaria toda mensagem
+    que o usa em envio bloqueado ("não é uma variável cadastrada") — uma
+    quebra silenciosa que só apareceria na hora em que o vendedor tentasse
+    atender. Desativar continua sendo o caminho reversível.
+    """
     variable = db.query(MessageVariable).filter(MessageVariable.id == variable_id).first()
     if not variable:
         raise HTTPException(status_code=404, detail="Variável não encontrada")
 
     token = variable.token
+    refs = _count_references(db, token)
+    if refs["total"]:
+        plural = "mensagens" if refs["total"] > 1 else "mensagem"
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Não foi possível excluir {token} porque ela é usada em "
+                f"{refs['total']} {plural}. Remova essas referências ou "
+                f"desative a variável."
+            ),
+        )
+
     db.delete(variable)
     db.commit()
     logger.info(f"Variável excluída: {token}")
     return {"message": f"Variável {token} excluída"}
+
+
+@router.get("/{variable_id}/usage")
+async def get_variable_usage(
+    variable_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Onde a variável é usada — consultado pela interface antes de excluir."""
+    variable = db.query(MessageVariable).filter(MessageVariable.id == variable_id).first()
+    if not variable:
+        raise HTTPException(status_code=404, detail="Variável não encontrada")
+    return {"token": variable.token, **_count_references(db, variable.token)}

@@ -555,6 +555,15 @@
             }
         });
 
+        // CONV-VAR-01-HARD-01: previa (secao logica mais abaixo). Apenas
+        // exibe — jamais envia.
+        document.getElementById('btnPreview').addEventListener('click', openPreview);
+        document.getElementById('previewModalClose').addEventListener('click', closePreview);
+        document.getElementById('btnPreviewClose').addEventListener('click', closePreview);
+        document.getElementById('previewModalOverlay').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) closePreview();
+        });
+
         // CONV-BF-UI-03: drag-to-scroll das abas de filtro — ESCOPADO ao
         // container das abas (nao sequestra eventos globais; arrasto real
         // nao dispara troca de aba; roda do mouse rola horizontalmente).
@@ -1840,6 +1849,99 @@
             });
             palette.appendChild(item);
         });
+    }
+
+    // ─── CONV-VAR-01-HARD-01: previa da mensagem ───
+    // O texto renderizado vem SEMPRE de POST /api/variables/preview, que usa o
+    // MESMO `render()` do envio. O JS nao reimplementa resolucao nenhuma e
+    // NUNCA envia a mensagem — o backend segue sendo a validacao final.
+    const PREVIEW_PROBLEM_LABELS = {
+        unknown: 'não é uma variável cadastrada',
+        inactive: 'variável desativada',
+        empty_fixed: 'sem valor configurado',
+        empty_dynamic: 'sem valor para este contato',
+        invalid_source: 'origem inválida',
+        ambiguous: 'colada a outro texto',
+    };
+
+    function previewBlock(titulo, texto, extraClass) {
+        const wrap = document.createElement('div');
+        wrap.className = 'preview-block';
+        const label = document.createElement('div');
+        label.className = 'preview-label';
+        label.textContent = titulo;
+        const body = document.createElement('div');
+        body.className = 'preview-text' + (extraClass ? ' ' + extraClass : '');
+        body.textContent = texto;
+        wrap.appendChild(label);
+        wrap.appendChild(body);
+        return wrap;
+    }
+
+    async function openPreview() {
+        const input = document.getElementById('msgInput');
+        const original = input.value;
+        if (!original.trim() || !activeConversation) {
+            showToast('Escreva a mensagem antes de visualizar.');
+            return;
+        }
+
+        const resp = await Auth.apiRequest('/api/variables/preview', {
+            method: 'POST',
+            body: JSON.stringify({ text: original, conversation_id: activeConversation.id }),
+        });
+        if (!resp || !resp.ok) {
+            showToast('Não foi possível gerar a prévia.');
+            return;
+        }
+        const data = await resp.json();
+        renderPreview(original, data);
+    }
+
+    function renderPreview(original, data) {
+        const body = document.getElementById('previewModalBody');
+        body.replaceChildren();
+
+        const problems = data.problems || [];
+        const semVariavel = data.rendered === original && problems.length === 0;
+
+        if (semVariavel) {
+            // Sem variaveis: um bloco so, texto inalterado.
+            body.appendChild(previewBlock('Mensagem (sem variáveis)', original));
+        } else {
+            body.appendChild(previewBlock('Texto original', original, 'preview-original'));
+            body.appendChild(previewBlock('Como o cliente vai receber', data.rendered));
+        }
+
+        const status = document.createElement('div');
+        status.className = 'preview-status ' + (problems.length ? 'has-problems' : 'ok');
+        status.textContent = problems.length
+            ? 'Esta mensagem NÃO pode ser enviada até corrigir:'
+            : 'Tudo certo — a mensagem pode ser enviada.';
+        body.appendChild(status);
+
+        if (problems.length) {
+            const list = document.createElement('ul');
+            list.className = 'preview-problems';
+            problems.forEach(p => {
+                const item = document.createElement('li');
+                const tok = document.createElement('span');
+                tok.className = 'preview-problem-token';
+                tok.textContent = p.token;
+                const why = document.createElement('span');
+                why.textContent = ' — ' + (PREVIEW_PROBLEM_LABELS[p.code] || p.short || p.code);
+                item.appendChild(tok);
+                item.appendChild(why);
+                list.appendChild(item);
+            });
+            body.appendChild(list);
+        }
+
+        document.getElementById('previewModalOverlay').style.display = 'flex';
+    }
+
+    function closePreview() {
+        document.getElementById('previewModalOverlay').style.display = 'none';
     }
 
     // ─── Helpers ─────────────────────────────────

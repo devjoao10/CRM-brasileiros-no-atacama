@@ -636,16 +636,21 @@
     window._deleteVar = async function (id) {
         const v = variables.find(x => x.id === id);
         const label = v ? v.token : 'esta variavel';
-        if (!confirm(`Excluir ${label}? As mensagens que usam esse token deixarao de ser enviadas ate serem corrigidas.`)) return;
+        if (!confirm(`Excluir ${label}?`)) return;
         const resp = await Auth.apiRequest(`/api/variables/${id}`, { method: 'DELETE' });
         if (resp && resp.ok) {
             showToast('Variavel excluida');
             loadVariables();
-        } else if (resp && resp.status === 403) {
-            showToast('Apenas administradores podem excluir variaveis.');
-        } else {
-            showToast('Erro ao excluir a variavel');
+            return;
         }
+        if (resp && resp.status === 403) {
+            showToast('Apenas administradores podem excluir variaveis.');
+            return;
+        }
+        // CONV-VAR-01-HARD-01: 409 = variavel em uso. O backend ja devolve a
+        // frase pronta, com a contagem de referencias e o que fazer.
+        const err = resp ? await resp.json().catch(() => null) : null;
+        showToast(backendError(err, 'Erro ao excluir a variavel'));
     };
 
     // ─── Helpers ─────────────────────────────────

@@ -54,11 +54,22 @@ from app.services import whatsapp  # noqa: E402
 failures = []
 
 
+def _safe(text: str) -> str:
+    """
+    O console do Windows usa cp1252 e explode ao imprimir emoji. Como algumas
+    mensagens de teste carregam o texto sob teste (que pode ter emoji),
+    imprimimos sempre em uma forma que o terminal aceite. Nao afeta a
+    comparacao — so a exibicao.
+    """
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    return text.encode(encoding, errors="backslashreplace").decode(encoding)
+
+
 def check(cond, msg):
     if cond:
-        print(f"  PASS: {msg}")
+        print(f"  PASS: {_safe(msg)}")
     else:
-        print(f"  FAIL: {msg}")
+        print(f"  FAIL: {_safe(msg)}")
         failures.append(msg)
 
 
@@ -371,6 +382,50 @@ check(r.status_code == 200 and _last_sent() == "Envie para JOAO@GMAIL.COM hoje."
       f"e-mail com dominio nao cadastrado permanece literal (got {_last_sent()!r})")
 
 
+# ============ 5c. ESCAPE DE ARROBA LITERAL (@@) ============
+# CONV-VAR-01-HARD-01: `@@TEXTO` produz `@TEXTO` literal. Processado ANTES da
+# deteccao de variaveis e nunca reinterpretado.
+print("\nVAR — escape de arroba literal (@@)")
+
+escapes = [
+    ("Siga @@BRASILEIROSNOATACAMA",            "Siga @BRASILEIROSNOATACAMA",            "handle em CAIXA ALTA nao vira variavel"),
+    ("@@NOMEEMPRESA",                          "@NOMEEMPRESA",                          "token CADASTRADO escapado sai literal"),
+    ("@@INICIO do texto",                      "@INICIO do texto",                      "escape no INICIO"),
+    ("texto @@MEIO texto",                     "texto @MEIO texto",                     "escape no MEIO"),
+    ("texto no @@FIM",                         "texto no @FIM",                         "escape no FIM"),
+    ("*@@NEGRITO* e _@@ITALICO_",              "*@NEGRITO* e _@ITALICO_",               "escape dentro de negrito e italico"),
+    ("Fale com contato@empresa.com ou @@INSTA", "Fale com contato@empresa.com ou @INSTA", "e-mail junto de escape"),
+    ("@@UM @@DOIS",                            "@UM @DOIS",                             "dois escapes na mesma mensagem"),
+    ("Oi @PRIMEIRONOMECLIENTE, siga @@BNAOFICIAL 🎉",
+     "Oi João, siga @BNAOFICIAL 🎉",                                                     "variavel + escape + emoji"),
+    ("linha1 @@TAG\nlinha2 @@TAG",             "linha1 @TAG\nlinha2 @TAG",              "escape com quebra de linha"),
+]
+for entrada, esperado, rotulo in escapes:
+    r = _send(CONV_A, entrada)
+    ok = r.status_code == 200 and _last_sent() == esperado
+    check(ok, f"{rotulo}: {entrada!r} -> {esperado!r} (got {r.status_code}/{_last_sent()!r})")
+
+# duas arrobas produzem EXATAMENTE uma
+r = _send(CONV_A, "@@")
+check(_last_sent() == "@", f"'@@' sozinho -> '@' (got {_last_sent()!r})")
+
+# escape NAO desliga a variavel simples nem o bloqueio de desconhecida
+r = _send(CONV_A, "@@LITERAL e @PRIMEIRONOMECLIENTE")
+check(_last_sent() == "@LITERAL e João",
+      f"escape e variavel convivem na mesma mensagem (got {_last_sent()!r})")
+r = _send(CONV_A, "Siga @BRASILEIROSNOATACAMA")
+check(r.status_code == 422,
+      "arroba SIMPLES desconhecida em caixa alta continua bloqueada no modo estrito")
+
+# o texto escapado nunca e reinterpretado como variavel
+_, probs = variables_service.render(
+    SessionLocal(), "@@NOMEEMPRESA @@VARIAVELINEXISTENTE",
+    variables_service.VariableContext(SessionLocal()))
+check(probs == [], f"texto escapado nao gera problema de variavel (got {probs})")
+check(variables_service.find_tokens("@@NOMEEMPRESA") == [],
+      "escape nao produz token para a varredura")
+
+
 # ============ 6. BLOQUEIO: SEM VALOR / DESCONHECIDA / INATIVA ============
 print("\nVAR — bloqueio de envio")
 
@@ -400,6 +455,10 @@ check(r.status_code == 201, "criar @EMAILCLIENTE")
 r = _send(CONV_A, "Confirma o e-mail @EMAILCLIENTE?")
 check(r.status_code == 422 and "não possui valor para este contato" in r.json()["detail"],
       f"variavel DINAMICA sem valor bloqueia (got {r.json().get('detail')!r})")
+
+# variavel inativa usada mais adiante (preview e frases automaticas)
+r = _create_var({"token": "@INATIVAAUTO", "name": "Inativa", "kind": "fixed", "fixed_value": "Valor X"})
+client.put(f"/api/variables/{r.json()['id']}", json={"is_active": False})
 
 # desativacao
 r = client.put(f"/api/variables/{VAR_PROTOCOLO}", json={"is_active": False})
@@ -481,6 +540,86 @@ leaked = session.query(Message).filter(Message.content.like("%VARIAVELINEXISTENT
 session.close()
 check(leaked == 0, "legenda bloqueada nao persiste mensagem nem asset")
 
+r = _send_media(CONV_A, "Oi @PRIMEIRONOMECLIENTE, veja @@BNAOFICIAL")
+check(r.status_code == 200, f"legenda valida envia -> 200 (got {r.status_code})")
+check(r.json()["content"] == "Oi João, veja @BNAOFICIAL",
+      f"legenda resolvida e escapada no historico (got {r.json().get('content')!r})")
+
+
+# ============ 8c. BRANCH media_url DO POST /messages ============
+# CONV-VAR-01-HARD-01: branch so-API (o frontend usa multipart), mas tem
+# conversation_id — entao passa pela mesma resolucao estrita.
+print("\nVAR — POST /messages com media_url")
+
+before = len(sent_payloads)
+r = client.post(f"/api/conversations/{CONV_A}/messages", json={
+    "content": "Legenda @VARIAVELINEXISTENTE", "msg_type": "image",
+    "media_url": "https://exemplo.test/foto.png"})
+check(r.status_code == 422, f"media_url com token invalido bloqueia -> 422 (got {r.status_code})")
+check(len(sent_payloads) == before, "media_url bloqueado nao chega ao WhatsApp")
+
+r = client.post(f"/api/conversations/{CONV_A}/messages", json={
+    "content": "Legenda de @PRIMEIRONOMECLIENTE", "msg_type": "image",
+    "media_url": "https://exemplo.test/foto.png"})
+check(r.status_code == 200 and r.json()["content"] == "Legenda de João",
+      f"media_url resolve e persiste renderizado (got {r.status_code}/{r.json().get('content')!r})")
+
+
+# ============ 8d. EXCLUSAO DE VARIAVEL EM USO ============
+print("\nVAR — protecao de exclusao")
+
+r = _create_var({"token": "@EMUSO", "name": "Em uso", "kind": "fixed", "fixed_value": "valor"})
+EMUSO_ID = r.json()["id"]
+r = _create_var({"token": "@SEMUSO", "name": "Sem uso", "kind": "fixed", "fixed_value": "valor"})
+SEMUSO_ID = r.json()["id"]
+
+# sem referencias -> exclui
+r = client.delete(f"/api/variables/{SEMUSO_ID}")
+check(r.status_code == 200, f"variavel SEM uso e excluida -> 200 (got {r.status_code})")
+
+# referencia em mensagem rapida
+qr_ref = client.post("/api/quick-replies", json={
+    "shortcut": "/usaemuso", "title": "Usa em uso",
+    "content": "Bem-vindo a @EMUSO!"}).json()
+r = client.delete(f"/api/variables/{EMUSO_ID}")
+check(r.status_code == 409, f"variavel EM USO nao e excluida -> 409 (got {r.status_code})")
+detalhe = r.json().get("detail", "")
+check("@EMUSO" in detalhe and "1 mensagem" in detalhe, f"mensagem cita token e contagem (got {detalhe!r})")
+check("desative" in detalhe.lower(), "mensagem orienta a desativar a variavel")
+
+# referencia tambem em resposta automatica -> contagem soma
+session = SessionLocal()
+session.add(AutoReply(trigger="greeting", title="Saudacao",
+                      message="Ola! Aqui e a @EMUSO.", is_active=True))
+session.commit()
+session.close()
+r = client.delete(f"/api/variables/{EMUSO_ID}")
+check(r.status_code == 409 and "2 mensagens" in r.json().get("detail", ""),
+      f"conta mensagens rapidas + respostas automaticas (got {r.json().get('detail')!r})")
+
+uso = client.get(f"/api/variables/{EMUSO_ID}/usage").json()
+check(uso["quick_replies"] == 1 and uso["auto_replies"] == 1 and uso["total"] == 2,
+      f"endpoint de uso detalha a origem das referencias (got {uso})")
+
+# arroba ESCAPADA e e-mail NAO contam como referencia
+client.put(f"/api/quick-replies/{qr_ref['id']}", json={"content": "Escapado @@EMUSO e mail a@EMUSO.com"})
+session = SessionLocal()
+session.query(AutoReply).filter(AutoReply.trigger == "greeting").update(
+    {"message": "Sem referencia real: @@EMUSO"})
+session.commit()
+session.close()
+uso = client.get(f"/api/variables/{EMUSO_ID}/usage").json()
+check(uso["total"] == 0, f"escape e e-mail NAO contam como referencia (got {uso})")
+r = client.delete(f"/api/variables/{EMUSO_ID}")
+check(r.status_code == 200, f"sem referencia real, exclui -> 200 (got {r.status_code})")
+
+# limpeza das fixtures deste bloco
+client.delete(f"/api/quick-replies/{qr_ref['id']}")
+session = SessionLocal()
+session.query(AutoReply).filter(AutoReply.trigger == "greeting").delete()
+session.commit()
+session.close()
+
 
 # ============ 9. PREVIEW COERENTE COM O ENVIO ============
 print("\nVAR — preview")
@@ -498,48 +637,110 @@ check(p["ok"] is False and p["problems"][0]["token"] == "@VARIAVELINEXISTENTE",
 check("@VARIAVELINEXISTENTE" not in p["rendered"],
       "preview tambem nao exibe o token literal (coerente com o envio)")
 
+# preview distingue os 3 codigos de problema exigidos
+for texto, code in (("@VARIAVELINEXISTENTE", "unknown"),
+                    ("@SEMVALOR", "empty_fixed"),
+                    ("@EMAILCLIENTE", "empty_dynamic"),
+                    ("@INATIVAAUTO", "inactive")):
+    p = client.post("/api/variables/preview",
+                    json={"text": f"Texto {texto} fim", "conversation_id": CONV_A}).json()
+    check(p["problems"] and p["problems"][0]["code"] == code,
+          f"preview classifica {texto} como '{code}' (got {[x['code'] for x in p['problems']]})")
 
-# ============ 10. FRASE AUTOMATICA — MODO TOLERANTE ============
-print("\nVAR — frase automatica (modo tolerante)")
+# mensagem sem variavel: preview mostra o texto INALTERADO
+p = client.post("/api/variables/preview",
+                json={"text": "Mensagem simples, sem variavel.", "conversation_id": CONV_A}).json()
+check(p["ok"] is True and p["rendered"] == "Mensagem simples, sem variavel.",
+      f"preview de mensagem sem variavel mostra texto inalterado (got {p['rendered']!r})")
+
+# preview aplica o escape igual ao envio
+p = client.post("/api/variables/preview",
+                json={"text": "Siga @@BNAOFICIAL", "conversation_id": CONV_A}).json()
+check(p["ok"] is True and p["rendered"] == "Siga @BNAOFICIAL",
+      f"preview aplica o escape @@ (got {p['rendered']!r})")
+
+# o preview NAO envia nada
+before = len(sent_payloads)
+client.post("/api/variables/preview",
+            json={"text": "Oi @PRIMEIRONOMECLIENTE", "conversation_id": CONV_A})
+check(len(sent_payloads) == before, "preview NUNCA envia mensagem")
+
+
+# ============ 10. FRASE AUTOMATICA — TUDO OU NADA ============
+# CONV-VAR-01-HARD-01: o antigo modo tolerante mutilava o texto
+# ("Somos a , prazer."). Agora: resolve tudo, ou a resposta inteira e pulada.
+print("\nVAR — frase automatica (tudo ou nada)")
 
 session = SessionLocal()
 session.add(AutoReply(trigger="end_service", title="Encerramento",
-                      message="Obrigado @PRIMEIRONOMECLIENTE! Atendido por @NOMEATENDENTE.",
+                      message="Obrigado @PRIMEIRONOMECLIENTE! Volte sempre.",
                       is_active=True))
 session.commit()
 session.close()
 
 db_tmp = SessionLocal()
 conv = db_tmp.query(Conversation).filter(Conversation.id == CONV_A).first()
-lenient = variables_service.render_lenient(
-    db_tmp, "Obrigado @PRIMEIRONOMECLIENTE! Atendido por @NOMEATENDENTE.",
-    variables_service.VariableContext(db_tmp, conversation=conv, user=None))
+
+
+def _auto(texto, conversa=None, usuario=None, trigger="end_service"):
+    return variables_service.render_auto_reply(
+        db_tmp, texto,
+        variables_service.VariableContext(db_tmp, conversation=conversa, user=usuario),
+        trigger=trigger)
+
+
+check(_auto("Obrigado @PRIMEIRONOMECLIENTE!", conv) == "Obrigado João!",
+      "todas resolvem -> texto renderizado")
+check(_auto("Somos a @SEMVALOR, prazer.", conv) is None,
+      "variavel FIXA sem valor -> resposta inteira PULADA (nao mutila)")
+check(_auto("Fale com @VARIAVELINEXISTENTE agora.", conv) is None,
+      "variavel DESCONHECIDA -> resposta inteira PULADA")
+check(_auto("Confirma o e-mail @EMAILCLIENTE?", conv) is None,
+      "variavel DINAMICA sem valor -> resposta inteira PULADA")
+check(_auto("Aviso da @INATIVAAUTO hoje.", conv) is None,
+      "variavel INATIVA -> resposta inteira PULADA")
+check(_auto("@SEMVALOR", conv) is None,
+      "texto que ficaria VAZIO -> resposta PULADA (nunca string vazia)")
+check(_auto("   ", conv) is None, "texto so com espacos -> PULADA")
+check(_auto("Mensagem fixa sem variavel.", conv) == "Mensagem fixa sem variavel.",
+      "mensagem sem variavel passa intacta")
+# Nenhum resultado pode conter token literal nem sobra de mutilacao
+for texto in ("Somos a @SEMVALOR, prazer.", "Fale com @VARIAVELINEXISTENTE agora."):
+    out = _auto(texto, conv)
+    check(out is None, f"nunca devolve texto parcial para {texto!r} (got {out!r})")
 db_tmp.close()
-check("@NOMEATENDENTE" not in lenient and "@PRIMEIRONOMECLIENTE" not in lenient,
-      "modo tolerante NUNCA envia o token literal")
-check("João" in lenient, f"modo tolerante resolve o que da (got {lenient!r})")
-check(lenient == "Obrigado João! Atendido por .", f"texto tolerante previsivel (got {lenient!r})")
 
+# A falha de UMA resposta automatica nao pode derrubar o fluxo
 before = len(sent_payloads)
-r = client.put(f"/api/conversations/{CONV_A}", json={"status": "encerrada"})
-check(r.status_code == 200, "encerrar conversa -> 200 (frase automatica NAO bloqueia)")
-check(len(sent_payloads) > before and "João" in sent_payloads[-1]["message"],
-      f"frase automatica enviada com a variavel resolvida (got {sent_payloads[-1]['message']!r})")
-client.put(f"/api/conversations/{CONV_A}", json={"status": "aberta"})
-
-# Frase automatica que vira texto VAZIO apos a resolucao nao pode ser enviada
-# (a Meta rejeita string vazia e persistiria uma mensagem 'failed' sem sentido).
 session = SessionLocal()
 session.query(AutoReply).filter(AutoReply.trigger == "end_service").update(
-    {"message": "@EMAILCLIENTE"})   # insoluvel: CONV_B nao tem lead no CRM
+    {"message": "Obrigado @VARIAVELINEXISTENTE!"})
+session.commit()
+session.close()
+r = client.put(f"/api/conversations/{CONV_B}", json={"status": "encerrada"})
+check(r.status_code == 200, "encerrar conversa -> 200 mesmo com frase automatica invalida")
+check(len(sent_payloads) == before, "frase automatica invalida NAO e enviada")
+session = SessionLocal()
+conv_b_status = session.query(Conversation).filter(Conversation.id == CONV_B).first().status
+session.close()
+check(conv_b_status == "encerrada", "o encerramento em si funcionou (falha isolada na resposta)")
+client.put(f"/api/conversations/{CONV_B}", json={"status": "aberta"})
+
+# Caminho feliz continua enviando
+session = SessionLocal()
+session.query(AutoReply).filter(AutoReply.trigger == "end_service").update(
+    {"message": "Obrigado @PRIMEIRONOMECLIENTE! Volte sempre."})
 session.commit()
 session.close()
 before = len(sent_payloads)
-r = client.put(f"/api/conversations/{CONV_B}", json={"status": "encerrada"})
-check(r.status_code == 200, "encerrar conversa segue funcionando com frase vazia")
-check(len(sent_payloads) == before,
-      "frase automatica vazia apos resolucao NAO e enviada (sem mensagem em branco)")
-client.put(f"/api/conversations/{CONV_B}", json={"status": "aberta"})
+r = client.put(f"/api/conversations/{CONV_A}", json={"status": "encerrada"})
+check(r.status_code == 200, "encerrar conversa -> 200")
+check(len(sent_payloads) > before and sent_payloads[-1]["message"] == "Obrigado João! Volte sempre.",
+      f"frase automatica valida enviada resolvida (got {sent_payloads[-1]['message']!r})")
+client.put(f"/api/conversations/{CONV_A}", json={"status": "aberta"})
+
+check(not hasattr(variables_service, "render_lenient"),
+      "render_lenient removido (modo de mutilacao nao existe mais)")
 
 
 # ============ 11. SEGURANCA — sem execucao arbitraria / sem segredo ============
@@ -639,6 +840,32 @@ check("resp.status === 422" in js_conv,
       "frontend devolve o texto ao composer quando o backend bloqueia (422)")
 check("&quot;" in js_set and "&#39;" in js_set,
       "escapeHtml do settings.js escapa aspas (SEC-CONV-01)")
+
+# CONV-VAR-01-HARD-01: previa visivel no composer
+check('id="btnPreview"' in html_conv, "botao de visualizar presente no composer")
+check('id="previewModalOverlay"' in html_conv and 'class="modal-overlay"' in html_conv,
+      "modal de previa reusa o componente .modal-overlay existente")
+check(".preview-block" in css and ".preview-status" in css, "CSS da previa presente")
+
+p_start = js_conv.find("CONV-VAR-01-HARD-01: previa da mensagem")
+p_end = js_conv.find("─── Helpers", p_start)
+check(p_start != -1 and p_end > p_start, "secao da previa presente no conversas.js")
+preview_section = js_conv[p_start:p_end]
+check("/api/variables/preview" in preview_section,
+      "previa busca o texto renderizado no BACKEND")
+check("innerHTML" not in preview_section, "NENHUM innerHTML na secao da previa")
+check("createElement" in preview_section and ".textContent =" in preview_section,
+      "previa renderizada com createElement/textContent")
+check("sendMessage" not in preview_section and "msg_type" not in preview_section,
+      "previa NUNCA envia a mensagem")
+check("replaceChildren()" in preview_section, "limpeza da previa via replaceChildren")
+# a previa nao pode reimplementar a resolucao no JS
+for proibido in ("@PRIMEIRONOME", "replace(/@", "fixed_value", "source_key"):
+    check(proibido not in preview_section,
+          f"previa nao reimplementa resolucao no JS (sem {proibido!r})")
+check("unknown:" in preview_section and "empty_fixed:" in preview_section
+      and "inactive:" in preview_section and "empty_dynamic:" in preview_section,
+      "previa distingue desconhecida / sem valor fixo / inativa / sem valor dinamico")
 
 # a paleta de mensagens rapidas continua intacta (regressao)
 qr_start = js_conv.find("CONV-HOTFIX-QUICK-REPLIES-01: paleta")

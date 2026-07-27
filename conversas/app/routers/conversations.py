@@ -80,6 +80,15 @@ async def send_notification(
     Used by N8N workflows (WF-06, WF-08, WF-09) to send alerts and reports.
 
     Payload: {"to": "5511999999999", "message": "Texto da notificação"}
+
+    CONV-VAR-01-HARD-01 — VARIAVEIS (@TOKEN) NAO SAO SUPORTADAS AQUI.
+    Esta rota recebe apenas um numero de telefone: nao ha `conversation_id`,
+    logo nao existe contexto de conversa (cliente, atendente, protocolo) para
+    resolver token algum. O texto e enviado EXATAMENTE como recebido — um
+    `@TOKEN` no payload chegaria literal ao destinatario.
+    Portanto: quem chama esta rota (n8n) deve montar o texto ja pronto, sem
+    tokens. Suporte futuro exigiria um contrato explicito de contexto
+    (ex.: `conversation_id` obrigatorio no payload) e um pacote proprio.
     """
     result = await whatsapp.send_text_message(data.to, data.message, db)
 
@@ -423,30 +432,26 @@ async def update_conversation(
             AutoReply.is_active == True,
         ).first()
         if reply and reply.message and reply.message.strip():
-            # CONV-VAR-01: frase automatica resolve variaveis em modo TOLERANTE
-            # (nunca bloqueia — bloquear um encerramento automatico deixaria o
-            # cliente sem resposta). Token insoluvel sai do texto; nunca vai
-            # literalmente ao cliente.
-            auto_text = variables_service.render_lenient(
+            # CONV-VAR-01-HARD-01: resolucao TUDO OU NADA. Se qualquer
+            # variavel nao resolver, a frase de encerramento inteira e pulada
+            # — melhor nao enviar nada do que enviar texto mutilado
+            # ("Obrigado , volte sempre"). Nunca levanta excecao, entao o PUT
+            # de status segue normalmente.
+            auto_text = variables_service.render_auto_reply(
                 db,
                 reply.message,
                 variables_service.VariableContext(db, conversation=conversation, user=current_user),
+                trigger="end_service",
             )
-            # Se a frase inteira era um token insoluvel, nao sobra texto algum:
-            # enviar string vazia seria rejeitado pela Meta e persistiria uma
-            # mensagem 'failed' sem sentido (mesmo guard de webhook.py).
-            if auto_text.strip():
+            if auto_text:
                 # CONV-08b: status fiel ao resultado do envio (nunca 'sent' em falha).
                 wa_response = await whatsapp.send_text_message(conversation.whatsapp, auto_text, db)
                 record_outbound_message(
                     db, conversation, auto_text, "text", wa_response,
                     update_preview=False,
                 )
-            else:
-                logger.info(
-                    f"Frase automatica de encerramento vazia apos resolucao de "
-                    f"variaveis na conversa {conversation.id}; envio ignorado."
-                )
+            # auto_text None -> resposta pulada; render_auto_reply ja registrou
+            # o log estruturado (trigger, conversa, token, problema).
 
     return ConversationResponse.model_validate(conversation)
 
@@ -545,8 +550,13 @@ async def send_message(
     # intacto na mensagem rapida/template de origem; o historico guarda o
     # texto renderizado (foi o que o cliente recebeu) e por isso o retry
     # reenvia exatamente o mesmo conteudo.
+    # CONV-VAR-01-HARD-01: cobre TAMBEM o branch de midia por `media_url`
+    # (usado por chamadas diretas a API), onde `content` e a legenda. Fica de
+    # fora apenas `msg_type='template'`: o corpo do template e renderizado nos
+    # servidores da Meta a partir de placeholders posicionais {{1}}, entao
+    # substituicao textual nao se aplica — e escopo do CONV-VAR-02.
     content = data.content
-    if data.msg_type == "text":
+    if data.msg_type != "template":
         try:
             content = variables_service.render_strict(
                 db,
