@@ -1,4 +1,5 @@
 import hashlib
+from enum import Enum
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status, Header, Request
@@ -112,11 +113,47 @@ async def get_current_user(
     raise credentials_exception
 
 
+# CONV-VAR-01-HOTFIX-ADMIN-01
+# Papel administrativo oficial. Comparacao SEMPRE via `is_admin_role()`.
+ADMIN_ROLE = "admin"
+
+
+def is_admin_role(role) -> bool:
+    """
+    Normalizacao CENTRAL do papel administrativo.
+
+    Causa raiz do 403 indevido: o CRM declara `users.role` como
+    `SAEnum(UserRole)` e o SQLAlchemy grava na coluna o NOME do membro
+    ("ADMIN"), nao o `value` ("admin"). O Conversas espelha a MESMA tabela
+    declarando `role = Column(String(20))`, entao le a string CRUA "ADMIN" —
+    e a comparacao literal `role != "admin"` negava acesso a administradores
+    reais. No CRM o mesmo codigo funciona porque o SAEnum reconverte para
+    `UserRole.ADMIN`, que e subclasse de `str` com valor "admin".
+
+    Aceita, portanto: "ADMIN", "admin", ou enum cujo `.value` seja qualquer
+    uma das duas formas (o `.value` e extraido ANTES da comparacao, senao um
+    enum comum viraria "UserRole.ADMIN" no `str()`).
+
+    NAO amplia para nenhum outro papel: a comparacao continua sendo de
+    igualdade exata com "admin" apos normalizar caixa e espacos. MANAGER,
+    SELLER, USER, vazio e None seguem fora.
+
+    O desempacotamento usa `isinstance(role, Enum)` em vez de
+    `getattr(role, "value", role)`: um objeto NAO-enum que exponha um atributo
+    `.value` valendo "admin" seria promovido a administrador pela forma com
+    getattr. Hoje isso e inalcancavel (a coluna e String, entao chega `str` ou
+    `None`), mas em um guard de autorizacao nao se deixa caminho de escalonamento
+    aberto por acaso.
+    """
+    raw = role.value if isinstance(role, Enum) else role
+    return str(raw).strip().lower() == ADMIN_ROLE
+
+
 async def require_admin(
     current_user: User = Depends(get_current_user),
 ) -> User:
     """Require an authenticated admin user. Returns 403 if not admin."""
-    if current_user.role != "admin":
+    if not is_admin_role(current_user.role):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Acesso restrito a administradores",
