@@ -27,6 +27,7 @@ from app.schemas.conversation import (
 )
 from app.services import whatsapp
 from app.services import crm as crm_service
+from app.services import variables as variables_service
 from app.services.outbound import (
     record_outbound_message,
     classify_wa_response,
@@ -422,10 +423,19 @@ async def update_conversation(
             AutoReply.is_active == True,
         ).first()
         if reply and reply.message and reply.message.strip():
+            # CONV-VAR-01: frase automatica resolve variaveis em modo TOLERANTE
+            # (nunca bloqueia — bloquear um encerramento automatico deixaria o
+            # cliente sem resposta). Token insoluvel sai do texto; nunca vai
+            # literalmente ao cliente.
+            auto_text = variables_service.render_lenient(
+                db,
+                reply.message,
+                variables_service.VariableContext(db, conversation=conversation, user=current_user),
+            )
             # CONV-08b: status fiel ao resultado do envio (nunca 'sent' em falha).
-            wa_response = await whatsapp.send_text_message(conversation.whatsapp, reply.message, db)
+            wa_response = await whatsapp.send_text_message(conversation.whatsapp, auto_text, db)
             record_outbound_message(
-                db, conversation, reply.message, "text", wa_response,
+                db, conversation, auto_text, "text", wa_response,
                 update_preview=False,
             )
 
@@ -519,11 +529,29 @@ async def send_message(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversa nao encontrada")
 
+    # CONV-VAR-01: variaveis (@TOKEN) sao resolvidas AQUI, no backend, ANTES de
+    # qualquer chamada ao provider e ANTES de persistir. Se algum token nao
+    # puder ser resolvido, o envio e BLOQUEADO (422) e NADA e persistido — o
+    # token nunca vai literalmente para o cliente. O texto original continua
+    # intacto na mensagem rapida/template de origem; o historico guarda o
+    # texto renderizado (foi o que o cliente recebeu) e por isso o retry
+    # reenvia exatamente o mesmo conteudo.
+    content = data.content
+    if data.msg_type == "text":
+        try:
+            content = variables_service.render_strict(
+                db,
+                data.content,
+                variables_service.VariableContext(db, conversation=conversation, user=current_user),
+            )
+        except variables_service.VariableResolutionError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
     # Send via WhatsApp API
     wa_response = None
 
     if data.msg_type == "text":
-        wa_response = await whatsapp.send_text_message(conversation.whatsapp, data.content, db)
+        wa_response = await whatsapp.send_text_message(conversation.whatsapp, content, db)
     elif data.msg_type == "template" and data.template_name:
         # Puxa o template do banco para checar o idioma (default pt_BR)
         from app.models.template import MessageTemplate
@@ -538,14 +566,14 @@ async def send_message(
         )
     elif data.media_url:
         wa_response = await whatsapp.send_media_message(
-            conversation.whatsapp, data.msg_type, data.media_url, data.content, db
+            conversation.whatsapp, data.msg_type, data.media_url, content, db
         )
 
     # CONV-08/CONV-08b: persistencia centralizada com status fiel ao resultado.
     # Sucesso -> 'sent' + wamid + preview/unread; falha -> 'failed' + last_error
     # seguro, preview intacto; simulado (dev) -> 'sent' explicito sem wamid.
     message = record_outbound_message(
-        db, conversation, data.content, data.msg_type, wa_response,
+        db, conversation, content, data.msg_type, wa_response,
         media_url=data.media_url, update_preview=True, reset_unread=True,
     )
 

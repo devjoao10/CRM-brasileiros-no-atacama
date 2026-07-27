@@ -22,6 +22,7 @@ from app.models.auto_reply import AutoReply, BusinessHours
 from app.models.api_config import ApiConfig
 from app.services import whatsapp
 from app.services import crm as crm_service
+from app.services import variables as variables_service
 from app.services.outbound import record_outbound_message
 from app.models.media_asset import MediaAsset
 
@@ -155,15 +156,28 @@ def _is_within_business_hours(db: Session) -> bool:
     return True
 
 
-def _get_auto_reply(trigger: str, db: Session) -> str | None:
-    """Get an active auto-reply message by trigger."""
+def _get_auto_reply(trigger: str, db: Session, conversation: Conversation | None = None) -> str | None:
+    """
+    Get an active auto-reply message by trigger, com as variaveis (@TOKEN) ja
+    resolvidas para a conversa atual.
+
+    CONV-VAR-01: aqui a resolucao e TOLERANTE — o webhook nao tem atendente
+    logado, entao `@NOMEATENDENTE` e insoluvel por natureza; bloquear deixaria
+    o cliente sem saudacao alguma. Token insoluvel sai do texto (nunca vai
+    literalmente ao cliente) e o envio segue.
+    """
     reply = db.query(AutoReply).filter(
         AutoReply.trigger == trigger,
         AutoReply.is_active == True,
     ).first()
 
     if reply and reply.message and reply.message.strip():
-        return reply.message
+        rendered = variables_service.render_lenient(
+            db,
+            reply.message,
+            variables_service.VariableContext(db, conversation=conversation, user=None),
+        )
+        return rendered or None
     return None
 
 
@@ -182,7 +196,7 @@ async def _send_auto_reply_if_needed(
 
     # Check business hours first
     if not _is_within_business_hours(db):
-        message = _get_auto_reply("out_of_hours", db)
+        message = _get_auto_reply("out_of_hours", db, conversation)
         if message:
             wa_response = await whatsapp.send_text_message(phone, message, db)
             _save_outbound_message(conversation, message, db, wa_response)
@@ -191,7 +205,7 @@ async def _send_auto_reply_if_needed(
 
     # New conversation — send greeting
     if is_new_conversation:
-        message = _get_auto_reply("greeting", db)
+        message = _get_auto_reply("greeting", db, conversation)
         if message:
             wa_response = await whatsapp.send_text_message(phone, message, db)
             _save_outbound_message(conversation, message, db, wa_response)
@@ -200,7 +214,7 @@ async def _send_auto_reply_if_needed(
 
     # Existing conversation without attendant — send waiting message
     if not conversation.atendente_id:
-        message = _get_auto_reply("waiting", db)
+        message = _get_auto_reply("waiting", db, conversation)
         if message:
             # Only send if we haven't sent a waiting message recently (avoid spam)
             recent_outbound = db.query(Message).filter(
