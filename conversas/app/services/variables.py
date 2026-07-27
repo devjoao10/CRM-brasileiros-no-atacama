@@ -1,0 +1,425 @@
+"""
+CONV-VAR-01 — Catalogo, parser e resolver de variaveis dinamicas (@TOKEN).
+
+SEGURANCA — a resolucao e ESTRITAMENTE TEXTUAL:
+  - nao existe eval/exec/compile/import dinamico;
+  - o usuario NUNCA cadastra expressao, script ou codigo;
+  - uma variavel dinamica so pode apontar para uma chave do catalogo abaixo,
+    e cada chave e uma funcao Python FIXA deste modulo;
+  - o valor substituido nao e re-escaneado (substituicao em passo unico), logo
+    um valor que contenha "@ALGO" nao vira variavel.
+
+CONTEXTO — cada envio monta seu proprio `VariableContext` a partir da conversa
+atual. O lead do CRM e buscado por `lead_id` EXATO (nunca por aproximacao de
+telefone), justamente para que o cliente A jamais receba dado do cliente B.
+
+MODOS:
+  - `render(...)`         -> (texto, problemas)  — usado pelo preview
+  - `render_strict(...)`  -> levanta VariableResolutionError no 1o problema
+                             (envio manual: variavel sem valor BLOQUEIA o envio)
+  - `render_lenient(...)` -> nunca levanta; token insoluvel vira '' (frases
+                             automaticas: nao ha atendente logado no webhook e
+                             bloquear deixaria o cliente sem resposta alguma)
+"""
+
+import logging
+import re
+from datetime import datetime, timedelta, timezone as dt_timezone
+from typing import Callable, List, NamedTuple, Optional
+
+from sqlalchemy import text as sql_text
+from sqlalchemy.orm import Session
+
+from app.models.message_variable import MessageVariable
+
+logger = logging.getLogger(__name__)
+
+# Fuso de Brasilia (mesmo criterio ja usado em webhook.py::_is_within_business_hours)
+_BRT = dt_timezone(timedelta(hours=-3))
+
+
+# ─── Parser ──────────────────────────────────────────────────────────────
+#
+# Um token do sistema e `@` + MAIUSCULAS/digitos/underscore, comecando e
+# terminando em letra/digito, e NAO precedido de caractere alfanumerico,
+# ponto ou outro `@`.
+#
+# Os dois lookbehinds sao complementares: `[^\W_]` e "caractere de palavra
+# EXCETO underscore" (alfanumerico Unicode), entao `_` e aceito ANTES do token
+# — sem isso o italico do WhatsApp `_@TOKEN_` nao funcionaria. Pelo mesmo
+# motivo o token nao pode TERMINAR em underscore: `_@NOME_` deve casar
+# `@NOME`, e nao `@NOME_`.
+#
+#   contato@empresa.com     -> nao casa ('empresa' e minusculo)
+#   CONTATO@EMPRESA.COM     -> nao casa (precedido por 'O', alfanumerico)
+#   José@EMPRESA            -> nao casa (`[^\W_]` e Unicode-aware)
+#   *@NOMEEMPRESA*          -> casa (negrito preservado)
+#   _@NOMEEMPRESA_          -> casa (italico preservado)
+#   @nome-com-hifen         -> nao casa (minusculo; nao e token do sistema)
+#   @  /  @A                -> nao casa (minimo de 2 caracteres)
+_TOKEN_BODY = r"[A-Z0-9][A-Z0-9_]{0,58}[A-Z0-9]"
+TOKEN_PATTERN = re.compile(r"(?<![^\W_])(?<![.@])@(" + _TOKEN_BODY + r")")
+
+# Formato completo aceito no cadastro (validacao do CRUD).
+TOKEN_FULL_PATTERN = re.compile(r"^@" + _TOKEN_BODY + r"$")
+
+# Tokens reservados pelo sistema. Hoje o sistema nao reserva nenhum token;
+# a lista existe para que uma reserva futura seja aplicada em um unico lugar.
+RESERVED_TOKENS: frozenset = frozenset()
+
+
+def find_tokens(text: Optional[str]) -> List[str]:
+    """Tokens do sistema presentes no texto, unicos e na ordem de aparicao."""
+    if not text:
+        return []
+    seen = []
+    for match in TOKEN_PATTERN.finditer(text):
+        token = "@" + match.group(1)
+        if token not in seen:
+            seen.append(token)
+    return seen
+
+
+def normalize_token(raw: Optional[str]) -> str:
+    """Normaliza o token digitado: trim, MAIUSCULAS e prefixo `@` garantido."""
+    token = (raw or "").strip().upper()
+    if token and not token.startswith("@"):
+        token = "@" + token
+    return token
+
+
+# ─── Contexto de resolucao ───────────────────────────────────────────────
+
+class VariableContext:
+    """
+    Dados da conversa ATUAL. Um contexto por envio — nada e reaproveitado
+    entre conversas (sem cache global, sem estado de modulo).
+    """
+
+    def __init__(self, db: Session, conversation=None, user=None):
+        self.db = db
+        self.conversation = conversation
+        self.user = user
+        self._lead_loaded = False
+        self._lead = None
+
+    def lead(self) -> Optional[dict]:
+        """
+        Lead do CRM por `lead_id` EXATO (tabela compartilhada `leads`).
+
+        Deliberadamente NAO usa `crm.lookup_lead_by_whatsapp`, que casa por
+        `LIKE '%ultimos 10 digitos%'` e poderia devolver o lead de OUTRO
+        cliente. Cache por contexto (1 query por envio), nunca entre envios.
+        """
+        if self._lead_loaded:
+            return self._lead
+        self._lead_loaded = True
+        conv = self.conversation
+        lead_id = getattr(conv, "lead_id", None) if conv is not None else None
+        if not lead_id or lead_id <= 0:
+            return None
+        try:
+            row = self.db.execute(
+                sql_text("SELECT id, nome, email FROM leads WHERE id = :lid"),
+                {"lid": lead_id},
+            ).fetchone()
+            if row is not None:
+                self._lead = {"id": row.id, "nome": row.nome, "email": row.email}
+        except Exception as exc:  # tabela ausente em teste/dev isolado
+            # Resumo SEGURO: apenas a classe do erro — o texto da excecao do
+            # SQLAlchemy pode carregar SQL e parametros vinculados.
+            logger.warning(
+                f"Nao foi possivel carregar o lead {lead_id} do CRM ({type(exc).__name__})"
+            )
+        return self._lead
+
+
+# ─── Helpers de valor ────────────────────────────────────────────────────
+
+def first_name(full_name: Optional[str]) -> Optional[str]:
+    """
+    Primeiro nome: trim, separa por espacos, primeiro segmento nao vazio.
+    Preserva Unicode/acentos ("  Ana Maria" -> "Ana", "Érica Souza" -> "Érica").
+    """
+    parts = (full_name or "").split()
+    return parts[0] if parts else None
+
+
+def _format_phone(raw: Optional[str]) -> Optional[str]:
+    """Formata o telefone como a UI ja faz (conversas.js::formatPhone)."""
+    if not raw:
+        return None
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) == 13:
+        return f"+{digits[0:2]} ({digits[2:4]}) {digits[4:9]}-{digits[9:]}"
+    return raw
+
+
+def _now_brt() -> datetime:
+    return datetime.now(dt_timezone.utc).astimezone(_BRT)
+
+
+# ─── Catalogo de propriedades dinamicas ──────────────────────────────────
+#
+# Somente propriedades que EXISTEM de fato no sistema. Nome e e-mail da
+# empresa NAO possuem tabela/configuracao no Conversas — devem ser cadastrados
+# como variaveis do tipo FIXO (ex.: @NOMEEMPRESA = "Brasileiros no Atacama").
+
+def _src_empresa_expediente(ctx: VariableContext) -> Optional[str]:
+    from app.models.auto_reply import BusinessHours
+
+    weekday = _now_brt().weekday()
+    hours = ctx.db.query(BusinessHours).filter(BusinessHours.weekday == weekday).first()
+    if hours is None:
+        return None
+    if not hours.is_open:
+        return "fechado hoje"
+    if hours.open_time and hours.close_time:
+        return f"{hours.open_time} às {hours.close_time}"
+    return None
+
+
+def _src_atendente_nome(ctx: VariableContext) -> Optional[str]:
+    return getattr(ctx.user, "nome", None) if ctx.user is not None else None
+
+
+def _src_atendente_email(ctx: VariableContext) -> Optional[str]:
+    return getattr(ctx.user, "email", None) if ctx.user is not None else None
+
+
+def _src_responsavel_nome(ctx: VariableContext) -> Optional[str]:
+    return getattr(ctx.conversation, "responsavel_nome", None) if ctx.conversation is not None else None
+
+
+def _cliente_nome_completo(ctx: VariableContext) -> Optional[str]:
+    conv = ctx.conversation
+    nome = (getattr(conv, "nome", None) or "").strip() if conv is not None else ""
+    if nome:
+        # Quando o contato e desconhecido, a conversa guarda o proprio numero
+        # no campo `nome` (ver conversations.py::initiate) — isso NAO e um nome.
+        looks_like_phone = re.sub(r"[\s+()\-]", "", nome).isdigit()
+        if not looks_like_phone:
+            return nome
+    lead = ctx.lead()
+    lead_nome = (lead or {}).get("nome")
+    return lead_nome.strip() if lead_nome and lead_nome.strip() else None
+
+
+def _src_cliente_nome_completo(ctx: VariableContext) -> Optional[str]:
+    return _cliente_nome_completo(ctx)
+
+
+def _src_cliente_primeiro_nome(ctx: VariableContext) -> Optional[str]:
+    return first_name(_cliente_nome_completo(ctx))
+
+
+def _src_cliente_telefone(ctx: VariableContext) -> Optional[str]:
+    return _format_phone(getattr(ctx.conversation, "whatsapp", None) if ctx.conversation is not None else None)
+
+
+def _src_cliente_email(ctx: VariableContext) -> Optional[str]:
+    lead = ctx.lead()
+    email = (lead or {}).get("email")
+    return email.strip() if email and email.strip() else None
+
+
+def _src_conversa_numero(ctx: VariableContext) -> Optional[str]:
+    conv_id = getattr(ctx.conversation, "id", None) if ctx.conversation is not None else None
+    return str(conv_id) if conv_id else None
+
+
+def _src_conversa_data(ctx: VariableContext) -> Optional[str]:
+    created = getattr(ctx.conversation, "created_at", None) if ctx.conversation is not None else None
+    if created is None:
+        return None
+    if created.tzinfo is not None:
+        created = created.astimezone(_BRT)
+    return created.strftime("%d/%m/%Y")
+
+
+def _src_data_hoje(ctx: VariableContext) -> Optional[str]:
+    return _now_brt().strftime("%d/%m/%Y")
+
+
+class SourceProperty(NamedTuple):
+    key: str
+    group: str
+    label: str
+    resolve: Callable[[VariableContext], Optional[str]]
+
+
+# Ordem preservada: e a ordem exibida no seletor da interface.
+CATALOG: "dict[str, SourceProperty]" = {
+    p.key: p
+    for p in (
+        SourceProperty("empresa.expediente_hoje", "Empresa", "Empresa: Expediente do Dia", _src_empresa_expediente),
+        SourceProperty("atendente.nome", "Funcionário", "Funcionário: Nome", _src_atendente_nome),
+        SourceProperty("atendente.email", "Funcionário", "Funcionário: Email", _src_atendente_email),
+        SourceProperty("conversa.responsavel_nome", "Funcionário", "Funcionário: Responsável pela Conversa", _src_responsavel_nome),
+        SourceProperty("cliente.nome_completo", "Cliente", "Cliente: Nome Completo", _src_cliente_nome_completo),
+        SourceProperty("cliente.primeiro_nome", "Cliente", "Cliente: Primeiro Nome", _src_cliente_primeiro_nome),
+        SourceProperty("cliente.telefone", "Cliente", "Cliente: Telefone", _src_cliente_telefone),
+        SourceProperty("cliente.email", "Cliente", "Cliente: Email", _src_cliente_email),
+        SourceProperty("conversa.numero", "Conversa", "Conversa: Número (protocolo)", _src_conversa_numero),
+        SourceProperty("conversa.data", "Conversa", "Conversa: Data de início", _src_conversa_data),
+        SourceProperty("data.hoje", "Data", "Data: Data Atual", _src_data_hoje),
+    )
+}
+
+
+def catalog_groups() -> List[dict]:
+    """Catalogo agrupado, no formato consumido pelo seletor da interface."""
+    groups: List[dict] = []
+    index: "dict[str, dict]" = {}
+    for prop in CATALOG.values():
+        if prop.group not in index:
+            index[prop.group] = {"group": prop.group, "options": []}
+            groups.append(index[prop.group])
+        index[prop.group]["options"].append({"key": prop.key, "label": prop.label})
+    return groups
+
+
+# ─── Resolucao ───────────────────────────────────────────────────────────
+
+class VariableProblem(NamedTuple):
+    token: str
+    code: str      # unknown | inactive | empty_fixed | empty_dynamic | invalid_source
+    short: str     # rotulo curto (preview)
+    message: str   # mensagem completa para o vendedor (envio bloqueado)
+
+
+class VariableResolutionError(Exception):
+    """Envio bloqueado: ha token que nao pode ser resolvido com seguranca."""
+
+    def __init__(self, problem: VariableProblem):
+        self.problem = problem
+        self.token = problem.token
+        super().__init__(problem.message)
+
+
+_BLOCK_PREFIX = "Não foi possível enviar a mensagem."
+
+
+def _problem(token: str, code: str) -> VariableProblem:
+    if code == "unknown":
+        return VariableProblem(
+            token, code, "não é uma variável cadastrada",
+            f"{_BLOCK_PREFIX} {token} não é uma variável cadastrada.",
+        )
+    if code == "inactive":
+        return VariableProblem(
+            token, code, "variável desativada",
+            f"{_BLOCK_PREFIX} A variável {token} está desativada.",
+        )
+    if code == "empty_fixed":
+        return VariableProblem(
+            token, code, "sem valor configurado",
+            f"{_BLOCK_PREFIX} A variável {token} não possui um valor configurado.",
+        )
+    if code == "invalid_source":
+        return VariableProblem(
+            token, code, "origem inválida",
+            f"{_BLOCK_PREFIX} A variável {token} está ligada a uma propriedade que não existe mais.",
+        )
+    return VariableProblem(
+        token, code, "sem valor para este contato",
+        f"{_BLOCK_PREFIX} A variável {token} não possui valor para este contato.",
+    )
+
+
+def render(db: Session, text: Optional[str], ctx: VariableContext):
+    """
+    Substitui os tokens CADASTRADOS pelo valor do contexto.
+    Retorna `(texto_renderizado, problemas)` — nao levanta excecao.
+
+    Tokens com problema sao substituidos por string vazia: um token NUNCA vai
+    literalmente para o cliente. Quem decide bloquear e o chamador.
+    """
+    if not text:
+        return text or "", []
+
+    tokens = find_tokens(text)
+    if not tokens:
+        return text, []
+
+    rows = db.query(MessageVariable).filter(MessageVariable.token.in_(tokens)).all()
+    registered = {row.token: row for row in rows}
+
+    values: "dict[str, str]" = {}
+    problems: List[VariableProblem] = []
+
+    for token in tokens:
+        variable = registered.get(token)
+        if variable is None:
+            problems.append(_problem(token, "unknown"))
+            values[token] = ""
+            continue
+        if not variable.is_active:
+            problems.append(_problem(token, "inactive"))
+            values[token] = ""
+            continue
+
+        if variable.kind == "fixed":
+            value = (variable.fixed_value or "").strip()
+            if not value:
+                problems.append(_problem(token, "empty_fixed"))
+                values[token] = ""
+            else:
+                values[token] = value
+            continue
+
+        prop = CATALOG.get(variable.source_key or "")
+        if prop is None:
+            problems.append(_problem(token, "invalid_source"))
+            values[token] = ""
+            continue
+
+        try:
+            resolved = prop.resolve(ctx)
+        except Exception as exc:  # nunca derruba o envio por erro de origem
+            # Resumo SEGURO: token + origem + classe do erro (nunca o valor
+            # resolvido nem o texto bruto da excecao — podem conter dado do
+            # cliente). O envio e bloqueado adiante como "sem valor".
+            logger.warning(
+                f"Falha ao resolver {token} (origem={variable.source_key}, "
+                f"erro={type(exc).__name__})"
+            )
+            resolved = None
+
+        resolved = "" if resolved is None else str(resolved).strip()
+        if not resolved:
+            problems.append(_problem(token, "empty_dynamic"))
+            values[token] = ""
+        else:
+            values[token] = resolved
+
+    # Passo unico: o valor substituido NAO e re-escaneado (sem recursao) e
+    # nao sofre interpretacao de backreferences (`\1`) — a lambda devolve
+    # o texto literal.
+    rendered = TOKEN_PATTERN.sub(lambda m: values.get("@" + m.group(1), ""), text)
+    return rendered, problems
+
+
+def render_strict(db: Session, text: Optional[str], ctx: VariableContext) -> str:
+    """Envio manual: qualquer token nao resolvido BLOQUEIA o envio."""
+    rendered, problems = render(db, text, ctx)
+    if problems:
+        raise VariableResolutionError(problems[0])
+    return rendered
+
+
+def render_lenient(db: Session, text: Optional[str], ctx: VariableContext) -> str:
+    """
+    Frases automaticas: nunca bloqueia (o webhook nao tem atendente logado e
+    um bloqueio deixaria o cliente sem resposta nenhuma). Tokens insoluveis
+    saem do texto e os espacos residuais sao compactados.
+    """
+    rendered, problems = render(db, text, ctx)
+    if problems:
+        logger.info(
+            "Frase automatica enviada sem %d variavel(is) nao resolvida(s): %s",
+            len(problems), ", ".join(p.token for p in problems),
+        )
+        rendered = re.sub(r"[ \t]{2,}", " ", rendered)
+        rendered = "\n".join(line.rstrip() for line in rendered.split("\n")).strip()
+    return rendered
