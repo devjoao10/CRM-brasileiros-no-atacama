@@ -461,6 +461,21 @@ client.put(f"/api/variables/{VAR_EMPRESA}", json={"fixed_value": "Brasileiros no
 body = client.get("/api/variables?active_only=false").text
 check("test-secret-key" not in body, "resposta sem SECRET_KEY")
 
+# Integridade: falha ao ler o CRM faz rollback (senao, no PostgreSQL, a
+# transacao abortada derrubaria o commit de record_outbound_message DEPOIS
+# do envio ja aceito pela Meta — mensagem entregue e nao persistida).
+svc_lead_src = svc_src[svc_src.find("def lead("):svc_src.find("# ─── Helpers de valor")]
+check("self.db.rollback()" in svc_lead_src,
+      "leitura do CRM faz rollback na falha (padrao de services/crm.py)")
+
+before = len(sent_payloads)
+r = _send(CONV_A, "Confirma o e-mail @EMAILCLIENTE?")   # dispara a leitura do CRM
+check(r.status_code == 422, "envio bloqueado quando o CRM nao responde")
+r = _send(CONV_A, "Oi @PRIMEIRONOMECLIENTE, seguimos.")  # sessao continua utilizavel
+check(r.status_code == 200 and _last_sent() == "Oi João, seguimos.",
+      f"sessao continua utilizavel apos falha de leitura do CRM (got {_last_sent()!r})")
+check(len(sent_payloads) == before + 1, "apenas o envio valido chegou ao WhatsApp")
+
 # sem autenticacao -> 401
 main.app.dependency_overrides.pop(get_current_user)
 main.app.dependency_overrides.pop(require_admin)

@@ -126,10 +126,21 @@ class VariableContext:
             if row is not None:
                 self._lead = {"id": row.id, "nome": row.nome, "email": row.email}
         except Exception as exc:  # tabela ausente em teste/dev isolado
+            # Rollback OBRIGATORIO (mesmo padrao de services/crm.py): no
+            # PostgreSQL a query falha deixa a transacao ABORTADA e todo
+            # comando seguinte falharia — inclusive o commit de
+            # record_outbound_message, DEPOIS do envio ja aceito pela Meta.
+            # Sem isto, a mensagem chegaria ao cliente sem ser persistida.
+            db_rollback_failed = False
+            try:
+                self.db.rollback()
+            except Exception:
+                db_rollback_failed = True
             # Resumo SEGURO: apenas a classe do erro — o texto da excecao do
             # SQLAlchemy pode carregar SQL e parametros vinculados.
             logger.warning(
-                f"Nao foi possivel carregar o lead {lead_id} do CRM ({type(exc).__name__})"
+                f"Nao foi possivel carregar o lead {lead_id} do CRM "
+                f"({type(exc).__name__}; rollback_ok={not db_rollback_failed})"
             )
         return self._lead
 
