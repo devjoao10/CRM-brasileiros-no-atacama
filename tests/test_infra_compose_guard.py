@@ -62,6 +62,16 @@ check("workflow_dispatch" in WORKFLOW, "deploy.yml tem workflow_dispatch")
 on_block = WORKFLOW.split("on:", 1)[1].split("jobs:", 1)[0]
 check("push" not in on_block, "deploy.yml SEM gatilho de push (deploy manual)")
 
+# Fail-fast no script SSH. Sem `set -e`, uma falha em `docker compose build`
+# seguiria para `up -d` (imagem VELHA + config nova) e o `echo` final ainda
+# devolveria exit 0 — deploy parcial com o workflow VERDE.
+_script = WORKFLOW.split("script: |", 1)[-1]
+_set_e = _script.find("set -e")
+check(_set_e != -1, "deploy.yml: script SSH tem `set -e` (fail-fast)")
+for _cmd in ("git pull", "docker compose build", "docker compose up"):
+    check(_set_e != -1 and 0 <= _set_e < _script.find(_cmd),
+          f"`set -e` vem ANTES de `{_cmd}`")
+
 # .env.example documenta os NOMES (sem valores reais)
 ENV_EXAMPLE = (ROOT / ".env.example").read_text(encoding="utf-8")
 check("CONVERSAS_MEDIA_DIR" in ENV_EXAMPLE, ".env.example documenta CONVERSAS_MEDIA_DIR")
