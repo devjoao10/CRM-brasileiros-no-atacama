@@ -53,6 +53,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           password: ${{ secrets.VPS_PASSWORD }}
           script: |
+            set -e
             cd /opt/crm
             git pull origin main
             docker compose build --no-cache
