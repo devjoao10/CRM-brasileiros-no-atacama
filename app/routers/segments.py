@@ -195,7 +195,7 @@ def _count_segment_leads(filtros: dict, db: Session) -> int:
 # ─── CRUD ────────────────────────────────────────
 
 @router.get("", response_model=SegmentListResponse, summary="Listar listas de segmentação")
-async def list_segments(
+def list_segments(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -215,7 +215,7 @@ async def list_segments(
 
 
 @router.get("/{segment_id}", response_model=SegmentResponse, summary="Detalhes de um segmento")
-async def get_segment(
+def get_segment(
     segment_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -229,7 +229,7 @@ async def get_segment(
 
 
 @router.post("", response_model=SegmentResponse, status_code=201, summary="Criar lista de segmentação")
-async def create_segment(
+def create_segment(
     data: SegmentCreate,
     current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
@@ -270,7 +270,7 @@ async def create_segment(
 
 
 @router.put("/{segment_id}", response_model=SegmentResponse, summary="Atualizar segmento")
-async def update_segment(
+def update_segment(
     segment_id: int,
     data: SegmentUpdate,
     current_user: User = Depends(require_admin),
@@ -302,7 +302,7 @@ async def update_segment(
 
 
 @router.delete("/{segment_id}", summary="Excluir segmento")
-async def delete_segment(
+def delete_segment(
     segment_id: int,
     current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
@@ -319,7 +319,7 @@ async def delete_segment(
 
 @router.get("/{segment_id}/leads", response_model=LeadListResponse,
             summary="Leads de um segmento")
-async def get_segment_leads(
+def get_segment_leads(
     segment_id: int,
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
@@ -377,7 +377,7 @@ async def get_segment_leads(
 # ─── Preview: resolve filters without saving ─────
 
 @router.post("/preview", response_model=LeadListResponse, summary="Preview de filtros")
-async def preview_segment(
+def preview_segment(
     filtros: SegmentFilters,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
