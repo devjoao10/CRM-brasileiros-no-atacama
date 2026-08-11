@@ -177,6 +177,59 @@ check(updated is not None and updated.status == "delivered",
 s.close()
 
 
+# ====== CASO 4 e 5: MENSAGEM SEM ID DA META ======
+# `whatsapp_msg_id` e UNIQUE e nullable. Com `msg.get("id", "")`, duas mensagens
+# distintas sem id viravam "" e a segunda era descartada como duplicata da
+# primeira — perda silenciosa, com 200 devolvido a Meta. A correcao normaliza
+# para None e so dedupa quando HA id.
+
+def _sem_id(numero, texto, id_literal=None):
+    """Payload de inbound. id_literal=None -> chave 'id' AUSENTE."""
+    m = {"from": numero, "type": "text", "timestamp": "1700000009",
+         "text": {"body": texto}}
+    if id_literal is not None:
+        m["id"] = id_literal
+    return {"entry": [{"changes": [{"value": {
+        "contacts": [{"profile": {"name": "Sem Id"}}], "messages": [m]}}]}]}
+
+
+def _conv_msgs(numero):
+    s = _session()
+    try:
+        conv = s.query(Conversation).filter(Conversation.whatsapp == numero).first()
+        msgs = (s.query(Message)
+                .filter(Message.conversation_id == conv.id)
+                .order_by(Message.id).all()) if conv else []
+        return conv, [(m.content, m.whatsapp_msg_id) for m in msgs]
+    finally:
+        s.close()
+
+
+for _caso, _num, _idlit in (("CASO 4 — chave 'id' AUSENTE", "5511666665555", None),
+                            ("CASO 5 — id vazio (\"\")", "5511555554444", "")):
+    print(f"\nQA-CONV-01 — {_caso}")
+    client.post("/webhook", json=_sem_id(_num, "primeira sem id", _idlit))
+    client.post("/webhook", json=_sem_id(_num, "segunda sem id", _idlit))
+
+    _conv, _msgs = _conv_msgs(_num)
+    check(len(_msgs) == 2, f"2 mensagens persistidas (got {len(_msgs)}) — a segunda NAO foi descartada")
+    check(all(mid is None for _, mid in _msgs),
+          f"ambas com whatsapp_msg_id NULL (got {[mid for _, mid in _msgs]})")
+    check(_conv is not None and _conv.unread_count == 2,
+          f"unread_count == 2 (got {_conv.unread_count if _conv else None})")
+    check(_conv is not None and _conv.ultimo_msg == "segunda sem id",
+          f"ultimo_msg reflete a SEGUNDA (got {_conv.ultimo_msg if _conv else None!r})")
+
+# Trade-off deliberado: sem chave de idempotencia nao existe forma confiavel de
+# reconhecer um retry. Duas entregas IDENTICAS sem id sao persistidas duas vezes.
+# Isso NAO e bug desta correcao — e a escolha de preferir possivel duplicacao a
+# perda silenciosa. Mensagem duplicada e visivel e corrigivel; perdida, nao.
+print("\nQA-CONV-01 — trade-off: entrega repetida SEM id duplica (esperado)")
+client.post("/webhook", json=_sem_id("5511666665555", "primeira sem id", None))
+_conv, _msgs = _conv_msgs("5511666665555")
+check(len(_msgs) == 3, f"reentrega sem id foi persistida (got {len(_msgs)} msgs) — duplicacao aceita por decisao")
+
+
 # --- Resultado ---
 if failures:
     print(f"\n{len(failures)} FALHA(S)")
