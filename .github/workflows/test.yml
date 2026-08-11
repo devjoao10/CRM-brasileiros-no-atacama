@@ -1,0 +1,54 @@
+name: Tests
+
+# Suite local do repo em todo PR para main. Sem deploy, sem VPS, sem secrets:
+# os testes rodam em SQLite descartavel (scratch/) e neutralizam Meta/n8n/rede.
+# O deploy continua separado e manual em deploy.yml (workflow_dispatch).
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Historico completo: o guard do RESP02 em
+          # tests/test_conversas_mobile_responsive_refinement.py compara o range
+          # do PR #6 (12e4f97^1..^2). Com o clone raso padrao ele viraria SKIP.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          # 3.11 = Dockerfile do CRM (o Conversas usa 3.12). Testar no menor dos
+          # dois interpretadores de producao e o sinal mais forte.
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            conversas/requirements.txt
+
+      - name: Instalar dependencias
+        # SEQUENCIAL de proposito: os dois requirements tem pins conflitantes
+        # (fastapi, sqlalchemy, python-jose). Num unico `pip install -r a -r b`
+        # o pip aborta com ResolutionImpossible. Instalados em ordem, o do
+        # Conversas prevalece — mesmo ambiente em que a suite passa localmente.
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install -r conversas/requirements.txt
+
+      - name: Rodar suite
+        # Um processo por arquivo: `app` existe no CRM e no Conversas, e importar
+        # os dois no mesmo processo colide. Nao aborta no primeiro erro — reporta
+        # todas as falhas e sai != 0 no final.
+        env:
+          ENVIRONMENT: development
+        run: |
+          fail=0
+          for t in tests/test_*.py; do
+            echo "── $t"
+            python "$t" || fail=1
+          done
+          exit $fail
