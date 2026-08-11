@@ -136,3 +136,43 @@ class HistoryResponse(BaseModel):
 class HistoryListResponse(BaseModel):
     total: int
     historico: list[HistoryResponse]
+
+
+# ─── Board paginado por etapa (PERF-PIPE-01) ─────
+# O board completo (KanbanBoardResponse) continua existindo e inalterado.
+# Estes schemas servem ao caminho novo: esqueleto primeiro, cards por coluna.
+
+class KanbanStageMeta(BaseModel):
+    """Etapa SEM os cards — só o necessário para desenhar a coluna."""
+    id: str
+    nome: str
+    dias_limite: int = 7
+    total: int = 0          # total de cards ATIVOS na etapa, sem filtro
+
+
+class KanbanBoardMeta(BaseModel):
+    """Esqueleto do board: funil + etapas + contagens. Nenhum card."""
+    funnel: FunnelResponse
+    stages: list[KanbanStageMeta]
+    total_leads: int
+
+
+class StageCardsResponse(BaseModel):
+    """Uma página de cards de UMA etapa."""
+    etapa_id: str
+    items: list[LeadCardResponse] = []
+    total: int = 0                          # total que casa o filtro atual
+    has_more: bool = False
+    next_cursor: Optional[str] = None       # "<updated_at_iso>|<entry_id>"
+    # Card alvo do deep-link quando ele está fora desta página (include_lead_id).
+    target: Optional[LeadCardResponse] = None
+
+
+class LeadLocationResponse(BaseModel):
+    """Onde um lead está no pipeline — sem carregar o board."""
+    lead_id: int
+    funnel_id: int
+    funnel_nome: str
+    etapa_id: str
+    etapa_nome: str
+    entry_id: int

@@ -95,6 +95,9 @@
         .detail-actions { padding: var(--space-4) var(--space-6); border-top: 1px solid var(--color-dark-100); display: flex; gap: var(--space-2); flex-shrink: 0; }
 
         /* ===== Modals ===== */
+        /* Deep-link: card alvo. Borda de acento, sem neon — o objetivo e
+           localizacao visual imediata, nao chamar atencao permanentemente. */
+        .kanban-card.card-alvo { border: 2px solid var(--color-primary); box-shadow: 0 0 0 3px rgba(37,99,235,.15); }
         .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: var(--z-modal); align-items: center; justify-content: center; backdrop-filter: blur(4px); }
         .modal-overlay.show { display: flex; }
         .modal { background: var(--color-white); border-radius: var(--radius-2xl); width: 90%; max-width: 560px; max-height: 90vh; overflow-y: auto; box-shadow: var(--shadow-xl); animation: modalSlideIn 0.3s ease; }
@@ -335,8 +338,7 @@
     // ─── State ──────────────────────────────────
     let funnels = [];
     let currentFunnelId = null;
-    let boardData = null;
-    let boardDataFull = null; // unfiltered copy
+    let boardMeta = null;   // esqueleto do board (etapas + totais), SEM cards
     let draggedCard = null;
     let currentDetailEntry = null;
     let currentDetailLeadId = null;
@@ -461,80 +463,181 @@
 
     // ─── Kanban Board ───────────────────────────
 
+    // ─── Board paginado por etapa (PERF-PIPE-01) ─────────────────
+    // Antes: 1 request trazia o funil inteiro (~3.000 cards, ~1,9 MB) e o
+    // JavaScript filtrava o array em memoria. Agora: /meta desenha o esqueleto
+    // e CADA coluna busca os proprios cards, com filtro e paginacao no SQL.
+
+    const STAGE_PAGE = 30;
+    let stageState = {};        // etapa_id -> estado da coluna
+    let highlightLeadId = null; // deep-link: card que fica destacado
+
+    function stageInit(id) {
+        stageState[id] = { items: [], cursor: null, hasMore: false, total: 0,
+                           filtrado: 0, q: '', periodo: '', reqId: 0, loading: false };
+    }
+
+    // Params da barra global (server-side) + do filtro da propria coluna.
+    function stageParams(stageId, extra) {
+        const st = stageState[stageId] || {};
+        const p = new URLSearchParams();
+        p.set('limit', STAGE_PAGE);
+        if (st.q) p.set('q', st.q);
+        if (st.periodo) p.set('periodo', st.periodo);
+        const g = id => (document.getElementById(id) || {}).value || '';
+        if (g('pipeFilterSearch')) p.set('q', g('pipeFilterSearch'));
+        if (g('pipeFilterDestino')) p.set('destino', g('pipeFilterDestino'));
+        if (g('pipeFilterResponsavel') !== '') p.set('responsavel_id', g('pipeFilterResponsavel'));
+        if (g('pipeFilterViajantes')) p.set('viajantes_min', g('pipeFilterViajantes'));
+        if (g('pipeFilterDateFrom')) p.set('chegada_de', g('pipeFilterDateFrom'));
+        if (g('pipeFilterDateTo')) p.set('chegada_ate', g('pipeFilterDateTo'));
+        selectedFilterTags.forEach(t => p.append('tag_ids', t));
+        Object.entries(extra || {}).forEach(([k, v]) => { if (v != null) p.set(k, v); });
+        return p.toString();
+    }
+
     async function loadBoard() {
         if (!currentFunnelId) return;
-        const resp = await Auth.apiRequest(`/api/pipeline/board/${currentFunnelId}`);
+        const resp = await Auth.apiRequest('/api/pipeline/board/' + currentFunnelId + '/meta');
         if (!resp) return;
-        
-        boardDataFull = await resp.json();
-        
         if (!resp.ok) {
-            alert("Backend Error: " + (boardDataFull.detail || JSON.stringify(boardDataFull)));
-            console.error("Backend Error payload:", boardDataFull);
-            document.getElementById('kanbanBoard').innerHTML = `<div style="padding: 2rem; color: red;">Error: ${boardDataFull.detail}</div>`;
+            document.getElementById('kanbanBoard').innerHTML =
+                '<div style="padding:2rem;color:red">Erro ao carregar o funil (' + resp.status + ')</div>';
             return;
         }
+        boardMeta = await resp.json();
 
-        // Update tab count
-        const countEl = document.getElementById(`tabCount${currentFunnelId}`);
-        if (countEl) countEl.textContent = boardDataFull.total_leads;
-
-        // Show filter bar
+        const countEl = document.getElementById('tabCount' + currentFunnelId);
+        if (countEl) countEl.textContent = boardMeta.total_leads;
         document.getElementById('filterBar').style.display = 'flex';
 
-        // Fetch lead details for date filtering (arrival/departure)
-        // No longer needed: data_chegada is natively included in LeadCardResponse
+        stageState = {};
+        boardMeta.stages.forEach(s => stageInit(s.id));
+        renderSkeleton();                                     // colunas ja aparecem
+        boardMeta.stages.forEach(s => loadStage(s.id, true));  // cada uma carrega sozinha
+        aplicarDeepLink();
+    }
 
-        applyFilters();
+    // Esqueleto: colunas + cabecalho + loading proprio de cada uma.
+    function renderSkeleton() {
+        document.getElementById('kanbanBoard').innerHTML = boardMeta.stages.map(stage => `
+            <div class="kanban-column" data-stage="${stage.id}">
+                <div class="column-header">
+                    <span class="column-title">${esc(stage.nome)}</span>
+                    <span class="column-count" id="cnt-${stage.id}">${stage.total}</span>
+                </div>
+                <div class="column-filter" style="display:flex;gap:4px;padding:0 8px 6px">
+                    <input id="q-${stage.id}" class="form-input" style="font-size:12px;padding:4px 6px"
+                           placeholder="nome ou telefone" oninput="onStageSearch('${stage.id}', this.value)">
+                    <select id="per-${stage.id}" class="form-input" style="font-size:12px;padding:4px;width:88px"
+                            onchange="onStagePeriodo('${stage.id}', this.value)">
+                        <option value="">Todos</option>
+                        <option value="hoje">Hoje</option>
+                        <option value="3d">3 dias</option>
+                        <option value="7d">7 dias</option>
+                        <option value="30d">30 dias</option>
+                    </select>
+                </div>
+                <div class="column-body" data-stage="${stage.id}" id="body-${stage.id}"
+                     ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event, '${stage.id}')">
+                    <div class="empty-column">Carregando...</div>
+                </div>
+            </div>`).join('');
+    }
 
-        // Auto-open lead detail if ?lead_id= is in URL
-        const urlLeadId = new URLSearchParams(window.location.search).get('lead_id');
-        if (urlLeadId) {
-            const lid = parseInt(urlLeadId);
-            for (const stage of boardDataFull.stages) {
-                const found = stage.leads.find(l => l.lead_id === lid);
-                if (found) {
-                    openDetailPanel(found.entry_id, found.lead_id);
-                    // Clear the param so it doesn't re-open on tab switch
-                    window.history.replaceState({}, '', window.location.pathname);
-                    break;
-                }
+    // Busca UMA pagina de UMA etapa. reset=true recomeca do cursor zero.
+    async function loadStage(stageId, reset, extra) {
+        const st = stageState[stageId];
+        if (!st || st.loading) return;
+        st.loading = true;
+        const meuReq = ++st.reqId;   // guarda de corrida: so a resposta mais nova vale
+
+        const params = Object.assign({}, extra || {});
+        if (!reset && st.cursor) params.cursor = st.cursor;
+        const qs = stageParams(stageId, params);
+        const resp = await Auth.apiRequest(
+            '/api/pipeline/board/' + currentFunnelId + '/stage/' + encodeURIComponent(stageId) + '?' + qs);
+        st.loading = false;
+        if (!resp || !resp.ok) return;
+        const data = await resp.json();
+        if (meuReq !== st.reqId) return;   // chegou resposta mais nova: descarta esta
+
+        st.items = reset ? data.items : st.items.concat(data.items);
+        if (data.target && !st.items.some(i => i.lead_id === data.target.lead_id)) {
+            st.items.unshift(data.target);   // card alvo do deep-link, fora da pagina
+        }
+        st.cursor = data.next_cursor;
+        st.hasMore = data.has_more;
+        st.filtrado = data.total;
+        renderStage(stageId);
+    }
+
+    function renderStage(stageId) {
+        const st = stageState[stageId];
+        const meta = (boardMeta.stages || []).find(s => s.id === stageId) || { total: 0 };
+        const body = document.getElementById('body-' + stageId);
+        if (!st || !body) return;
+
+        body.innerHTML = st.items.length === 0
+            ? '<div class="empty-column">Nenhum lead</div>'
+            : st.items.map(l => renderLeadCard(l)).join('') +
+              (st.hasMore ? '<button class="btn btn-sm" style="width:100%;margin-top:6px" onclick="loadStage(\'' + stageId + '\', false)">Carregar mais</button>' : '');
+
+        // "32 de 842" quando ha filtro; so o total quando nao ha.
+        const cnt = document.getElementById('cnt-' + stageId);
+        if (cnt) cnt.textContent = (st.filtrado !== meta.total)
+            ? st.filtrado + ' de ' + meta.total : String(meta.total);
+
+        if (highlightLeadId) {
+            const alvo = body.querySelector('[data-lead-id="' + highlightLeadId + '"]');
+            if (alvo) {
+                alvo.classList.add('card-alvo');
+                alvo.scrollIntoView({ block: 'center', behavior: 'smooth' });
             }
         }
     }
 
-    // Function cacheleadDates removed because LeadCardResponse natively includes lead.data_chegada.
-
-    function renderBoard() {
-        if (!boardData) return;
-        const board = document.getElementById('kanbanBoard');
-        let totalFiltered = 0;
-        board.innerHTML = boardData.stages.map(stage => {
-            totalFiltered += stage.leads.length;
-            return `
-            <div class="kanban-column" data-stage="${stage.id}">
-                <div class="column-header">
-                    <span class="column-title">${esc(stage.nome)}</span>
-                    <span class="column-count">${stage.leads.length}</span>
-                </div>
-                <div class="column-body" data-stage="${stage.id}"
-                     ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event, '${stage.id}')">
-                    ${stage.leads.length === 0 ? '<div class="empty-column">Arraste leads aqui</div>' :
-                      stage.leads.map(l => renderLeadCard(l)).join('')}
-                </div>
-            </div>`;
-        }).join('');
-
-        // Update filter count
-        const countEl = document.getElementById('filterCount');
-        if (hasActiveFilters()) {
-            countEl.textContent = `${totalFiltered} de ${boardDataFull.total_leads} leads`;
-        } else {
-            countEl.textContent = '';
-        }
+    // Debounce de 300ms + reset de cursor. So a coluna alterada recarrega.
+    let stageSearchTimers = {};
+    function onStageSearch(stageId, valor) {
+        clearTimeout(stageSearchTimers[stageId]);
+        stageSearchTimers[stageId] = setTimeout(() => {
+            stageState[stageId].q = valor;
+            stageState[stageId].cursor = null;
+            loadStage(stageId, true);
+        }, 300);
     }
 
-    // ─── Filters ─────────────────────────────────
+    function onStagePeriodo(stageId, valor) {
+        stageState[stageId].periodo = valor;
+        stageState[stageId].cursor = null;
+        loadStage(stageId, true);
+    }
+
+    // Deep-link ?lead_id=: localiza no backend, sem varrer o board.
+    async function aplicarDeepLink() {
+        const urlLeadId = new URLSearchParams(window.location.search).get('lead_id');
+        if (!urlLeadId) return;
+        const lid = parseInt(urlLeadId);
+        const resp = await Auth.apiRequest('/api/pipeline/locate/' + lid);
+        if (!resp || !resp.ok) return;
+        const loc = await resp.json();
+
+        if (loc.funnel_id !== currentFunnelId) {   // lead esta em outro funil
+            currentFunnelId = loc.funnel_id;
+            renderFunnelTabs();
+            await loadBoard();
+            return;
+        }
+        highlightLeadId = lid;
+        // include_lead_id garante o card mesmo se ele for o 700o da etapa
+        await loadStage(loc.etapa_id, true, { include_lead_id: lid });
+        const st = stageState[loc.etapa_id] || {};
+        const card = (st.items || []).find(i => i.lead_id === lid);
+        if (card) openDetailPanel(card.entry_id, card.lead_id);
+        // o destaque NAO some ao fechar o drawer: o usuario continua achando o card
+    }
+
 
     async function loadFilterTags() {
         const resp = await Auth.apiRequest('/api/tags');
@@ -595,108 +698,34 @@
                document.getElementById('pipeFilterViajantes').value;
     }
 
+    // Os filtros da barra global agora vao para o SQL de CADA coluna: com
+    // paginacao nao da mais para filtrar o array em memoria — ele so tem a
+    // pagina atual, e filtrar ali mentiria sobre o resultado.
     function applyFilters() {
-        if (!boardDataFull) return;
-
-        const search = document.getElementById('pipeFilterSearch').value.trim().toLowerCase();
-        const destino = document.getElementById('pipeFilterDestino').value;
-        const daysStr = document.getElementById('pipeFilterDays').value;
-        const dateFrom = document.getElementById('pipeFilterDateFrom').value;
-        const dateTo = document.getElementById('pipeFilterDateTo').value;
-        const respFilter = document.getElementById('pipeFilterResponsavel').value;
-        const viajantesMin = document.getElementById('pipeFilterViajantes').value;
-
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-
-        // Build filtered board
-        boardData = {
-            ...boardDataFull,
-            stages: boardDataFull.stages.map(stage => ({
-                ...stage,
-                leads: stage.leads.filter(lead => {
-                    // Search filter
-                    if (search) {
-                        const match = (lead.nome || '').toLowerCase().includes(search) ||
-                                      (lead.email || '').toLowerCase().includes(search) ||
-                                      (lead.whatsapp || '').toLowerCase().includes(search);
-                        if (!match) return false;
-                    }
-
-                    // Destino filter
-                    if (destino && !(lead.destinos || []).includes(destino)) return false;
-
-                    // Tags filter
-                    if (selectedFilterTags.size > 0) {
-                        const leadTagIds = new Set((lead.tags || []).map(t => t.id));
-                        let hasTag = false;
-                        for (const tid of selectedFilterTags) {
-                            if (leadTagIds.has(tid)) { hasTag = true; break; }
-                        }
-                        if (!hasTag) return false;
-                    }
-
-                    // Date filters (use embedded lead date)
-                    const chegada = lead.data_chegada ? new Date(lead.data_chegada + 'T00:00:00') : null;
-
-                    // Days window: chegada within next N days
-                    if (daysStr) {
-                        const days = parseInt(daysStr);
-                        if (!isNaN(days)) {
-                            if (!chegada) return false;
-                            const maxDate = new Date(today);
-                            maxDate.setDate(maxDate.getDate() + days);
-                            if (chegada < today || chegada > maxDate) return false;
-                        }
-                    }
-
-                    // Date range
-                    if (dateFrom) {
-                        const from = new Date(dateFrom + 'T00:00:00');
-                        if (!chegada || chegada < from) return false;
-                    }
-                    if (dateTo) {
-                        const to = new Date(dateTo + 'T00:00:00');
-                        if (!chegada || chegada > to) return false;
-                    }
-
-                    // Responsavel filter
-                    if (respFilter !== '') {
-                        const respId = parseInt(respFilter);
-                        if (respId === 0) {
-                            if (lead.responsavel_id != null) return false;
-                        } else {
-                            if (lead.responsavel_id !== respId) return false;
-                        }
-                    }
-
-                    // Viajantes filter
-                    if (viajantesMin) {
-                        const min = parseInt(viajantesMin);
-                        if (!isNaN(min) && (!lead.num_viajantes || lead.num_viajantes < min)) return false;
-                    }
-
-                    return true;
-                })
-            }))
-        };
-
-        renderBoard();
+        if (!boardMeta) return;
+        Object.keys(stageState).forEach(id => {
+            stageState[id].cursor = null;
+            loadStage(id, true);
+        });
+        const countEl = document.getElementById('filterCount');
+        if (countEl) countEl.textContent = hasActiveFilters() ? 'filtro ativo' : '';
     }
 
     function clearPipeFilters() {
-        document.getElementById('pipeFilterSearch').value = '';
-        document.getElementById('pipeFilterDestino').value = '';
-        document.getElementById('pipeFilterDays').value = '';
-        document.getElementById('pipeFilterDateFrom').value = '';
-        document.getElementById('pipeFilterDateTo').value = '';
-        document.getElementById('pipeFilterResponsavel').value = '';
-        document.getElementById('pipeFilterViajantes').value = '';
+        ['pipeFilterSearch','pipeFilterDestino','pipeFilterDays','pipeFilterDateFrom',
+         'pipeFilterDateTo','pipeFilterResponsavel','pipeFilterViajantes']
+            .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
         selectedFilterTags.clear();
-        updateTagBtnLabel();
         renderFilterTagsDropdown();
+        updateTagBtnLabel();
+        Object.keys(stageState).forEach(id => {
+            const q = document.getElementById('q-' + id); if (q) q.value = '';
+            const per = document.getElementById('per-' + id); if (per) per.value = '';
+            stageState[id].q = ''; stageState[id].periodo = ''; stageState[id].cursor = null;
+        });
         applyFilters();
     }
+
 
     function renderLeadCard(lead) {
         const destinos = lead.destinos || [];
@@ -728,7 +757,7 @@
 
         return `
             <div class="lead-card" draggable="true" data-entry="${lead.entry_id}" data-lead="${lead.lead_id}"
-                 ondragstart="onDragStart(event)" ondragend="onDragEnd(event)"
+                 data-lead-id="${lead.lead_id}" ondragstart="onDragStart(event)" ondragend="onDragEnd(event)"
                  onclick="openDetailPanel(${lead.entry_id}, ${lead.lead_id})">
                 <div class="lead-card-name">${esc(lead.nome)}</div>
                 <div class="lead-card-info">${lead.email ? esc(lead.email) : lead.whatsapp ? esc(lead.whatsapp) : ''}${lead.num_viajantes ? ' · ' + lead.num_viajantes + ' adulto' + (lead.num_viajantes > 1 ? 's' : '') + (lead.num_criancas ? ' + ' + lead.num_criancas + ' criança' + (lead.num_criancas > 1 ? 's' : '') : '') : ''}</div>
@@ -749,6 +778,8 @@
     // ─── Drag & Drop ────────────────────────────
 
     function onDragStart(e) {
+        const col = e.target.closest('.column-body');
+        if (col) e.dataTransfer.setData('stage-origem', col.dataset.stage);
         draggedCard = e.target;
         e.target.classList.add('dragging');
         e.dataTransfer.setData('text/plain', e.target.dataset.entry);
@@ -782,7 +813,23 @@
             body: JSON.stringify({ etapa_id: stageId }),
         });
 
-        if (resp && resp.ok) loadBoard();
+        if (resp && resp.ok) {
+            // So as duas colunas envolvidas. O destino pode ter filtro ativo,
+            // entao refazer a 1a pagina das duas e mais confiavel do que
+            // duplicar a logica de filtro no JavaScript.
+            const origem = e.dataTransfer.getData('stage-origem');
+            await loadStage(stageId, true);
+            if (origem && origem !== stageId) await loadStage(origem, true);
+            await atualizarTotais();
+        }
+    }
+
+    // Recarrega so as contagens do cabecalho (1 request, sem cards).
+    async function atualizarTotais() {
+        const r = await Auth.apiRequest('/api/pipeline/board/' + currentFunnelId + '/meta');
+        if (!r || !r.ok) return;
+        boardMeta = await r.json();
+        boardMeta.stages.forEach(s => renderStage(s.id));
     }
 
     // ─── Detail Panel ───────────────────────────
@@ -1000,11 +1047,10 @@
             return;
         }
 
-        // Get current leads in funnel to filter them out
-        const currentLeadIds = new Set();
-        if (boardData) boardData.stages.forEach(s => s.leads.forEach(l => currentLeadIds.add(l.lead_id)));
-
-        const available = data.leads.filter(l => !currentLeadIds.has(l.id));
+        // Sem o board inteiro em memoria nao da para excluir aqui quem ja esta
+        // no funil — a pagina carregada e so uma fatia. O backend ja responde
+        // 409 nesse caso, entao a checagem real acontece no addLeadToFunnel.
+        const available = data.leads;
         if (available.length === 0) {
             list.innerHTML = '<div class="add-lead-item" style="color:var(--color-dark-400)">Todos os leads já estão no funil</div>';
             return;
@@ -1016,8 +1062,8 @@
     }
 
     async function addLeadToFunnel(leadId) {
-        if (!currentFunnelId || !boardData) return;
-        const firstStage = boardData.funnel.etapas[0];
+        if (!currentFunnelId || !boardMeta) return;
+        const firstStage = boardMeta.stages[0];
         if (!firstStage) return;
 
         const resp = await Auth.apiRequest(`/api/pipeline/funnels/${currentFunnelId}/leads`, {
