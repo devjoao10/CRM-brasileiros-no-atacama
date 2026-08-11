@@ -35,9 +35,11 @@ def _json_list_contains(column, value: str):
         # SQLite armazena JSON como texto — LIKE funciona
         return column.cast(String).ilike(f'%"{value}"%')
     else:
-        # PostgreSQL: usar operador nativo @> (contains)
+        # PostgreSQL: @> so existe para jsonb e a coluna e json — cast na
+        # EXPRESSAO da query (nao altera o schema nem os dados).
         import json
-        return column.op("@>")(json.dumps([value]))
+        from sqlalchemy.dialects.postgresql import JSONB
+        return column.cast(JSONB).op("@>")(json.dumps([value]))
 
 
 def _build_lead_response(lead: Lead) -> LeadResponse:
