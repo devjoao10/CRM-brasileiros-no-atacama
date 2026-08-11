@@ -317,6 +317,14 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
         profile = contacts[0].get("profile", {})
         sender_name = profile.get("name", "")
 
+    # Check if message already processed (idempotency).
+    # ANTES de tocar na Conversation: um retry da Meta nao pode incrementar
+    # unread_count nem sobrescrever ultimo_msg/status/last_customer_msg_at.
+    existing = db.query(Message).filter(Message.whatsapp_msg_id == msg_id).first()
+    if existing:
+        logger.info(f"Mensagem duplicada ignorada: {msg_id}")
+        return
+
     # Find or create conversation
     is_new_conversation = False
     conversation = db.query(Conversation).filter(
@@ -345,12 +353,6 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
         conversation.last_customer_msg_at = datetime.now(tz.utc)
         if sender_name and not conversation.nome:
             conversation.nome = sender_name
-
-    # Check if message already processed (idempotency)
-    existing = db.query(Message).filter(Message.whatsapp_msg_id == msg_id).first()
-    if existing:
-        logger.info(f"Mensagem duplicada ignorada: {msg_id}")
-        return
 
     # Save message
     message = Message(
