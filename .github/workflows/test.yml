@@ -1,0 +1,90 @@
+name: Tests
+
+# Suite local do repo em todo PR para main. Sem deploy, sem VPS, sem secrets:
+# os testes rodam em SQLite descartavel (scratch/) e neutralizam Meta/n8n/rede.
+# O deploy continua separado e manual em deploy.yml (workflow_dispatch).
+#
+# DOIS jobs paralelos porque producao roda DOIS ambientes: o CRM em Python 3.11
+# com requirements.txt, o Conversas em 3.12 com conversas/requirements.txt. Os
+# dois arquivos tem pins conflitantes (fastapi, sqlalchemy, python-jose, jinja2,
+# python-multipart, uvicorn) — instalados juntos, o pip aborta; instalados em
+# sequencia, o CRM seria testado com as versoes do Conversas.
+#
+# A selecao usa `CONVERSAS_DIR`, string presente APENAS nos testes que inserem
+# conversas/ no sys.path. Separa os 34 arquivos sem ambiguidade e sem lista
+# hardcoded: um teste novo cai sozinho no job certo.
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  crm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'   # = Dockerfile do CRM
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Instalar dependencias
+        # httpx e dependencia SO DE TESTE: app/ nunca a importa, mas 7 testes
+        # usam fastapi.testclient.TestClient, que exige httpx. Fica aqui em vez
+        # de requirements.txt para nao entrar na imagem de producao do CRM.
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install httpx
+
+      - name: Rodar suite CRM + infra
+        # Um processo por arquivo: `app` existe no CRM e no Conversas e colide
+        # no mesmo processo. Nao aborta no primeiro erro — reporta todas as
+        # falhas e sai != 0 no final.
+        env:
+          ENVIRONMENT: development
+        run: |
+          python --version
+          files=$(grep -L CONVERSAS_DIR tests/test_*.py)
+          [ -n "$files" ] || { echo "::error::selecao vazia — o discriminador CONVERSAS_DIR mudou?"; exit 1; }
+          fail=0
+          for t in $files; do
+            echo "── $t"
+            python "$t" || fail=1
+          done
+          exit $fail
+
+  conversas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Historico completo: o guard do RESP02 em
+          # test_conversas_mobile_responsive_refinement.py compara o range do
+          # PR #6 (12e4f97^1..^2). Com o clone raso padrao viraria SKIP.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'   # = Dockerfile do Conversas
+          cache: pip
+          cache-dependency-path: conversas/requirements.txt
+
+      - name: Instalar dependencias
+        run: python -m pip install -r conversas/requirements.txt
+
+      - name: Rodar suite Conversas
+        env:
+          ENVIRONMENT: development
+        run: |
+          python --version
+          files=$(grep -l CONVERSAS_DIR tests/test_*.py)
+          [ -n "$files" ] || { echo "::error::selecao vazia — o discriminador CONVERSAS_DIR mudou?"; exit 1; }
+          fail=0
+          for t in $files; do
+            echo "── $t"
+            python "$t" || fail=1
+          done
+          exit $fail
