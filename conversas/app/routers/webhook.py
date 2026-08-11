@@ -265,7 +265,9 @@ def _save_outbound_message(conversation: Conversation, content: str, db: Session
 async def _process_incoming_message(msg: dict, value: dict, db: Session):
     """Process a single incoming WhatsApp message."""
     whatsapp_number = msg.get("from", "")
-    msg_id = msg.get("id", "")
+    # `or None`: sem id, "" colidiria no UNIQUE de whatsapp_msg_id — a segunda
+    # mensagem sem id estouraria IntegrityError. NULL nao colide.
+    msg_id = msg.get("id") or None
     msg_type = msg.get("type", "text")
     timestamp = msg.get("timestamp", "")
 
@@ -320,10 +322,14 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
     # Check if message already processed (idempotency).
     # ANTES de tocar na Conversation: um retry da Meta nao pode incrementar
     # unread_count nem sobrescrever ultimo_msg/status/last_customer_msg_at.
-    existing = db.query(Message).filter(Message.whatsapp_msg_id == msg_id).first()
-    if existing:
-        logger.info(f"Mensagem duplicada ignorada: {msg_id}")
-        return
+    # So dedupa quando HA id: com msg_id None, `== msg_id` viraria `IS NULL` e
+    # casaria com QUALQUER mensagem anterior sem id — a segunda seria descartada
+    # como duplicata da primeira (perda silenciosa, com 200 devolvido a Meta).
+    if msg_id:
+        existing = db.query(Message).filter(Message.whatsapp_msg_id == msg_id).first()
+        if existing:
+            logger.info(f"Mensagem duplicada ignorada: {msg_id}")
+            return
 
     # Find or create conversation
     is_new_conversation = False
