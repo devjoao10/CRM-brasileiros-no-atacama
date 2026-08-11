@@ -50,6 +50,13 @@ secretish = re.findall(r"(SECRET_KEY|META_APP_SECRET|META_ACCESS_TOKEN|POSTGRES_
 literals = [(k, v) for k, v in secretish if not v.startswith("${")]
 check(not literals, f"nenhum segredo LITERAL no compose (violacoes: {[k for k, _ in literals]})")
 
+# Healthcheck em TODO servico de aplicacao (crm e conversas) — sem health o
+# Docker nao reinicia container travado e o Traefik segue roteando para ele.
+for _svc, _port in (("crm", 8000), ("conversas", 8001)):
+    _m = re.search(rf"\n  {_svc}:\n(.*?)(?=\n  \S|\Z)", COMPOSE, re.S)
+    check(_m is not None and f"localhost:{_port}/api/health" in _m.group(1),
+          f"servico {_svc} tem healthcheck apontando para :{_port}/api/health")
+
 # Deploy continua manual (OPS-01)
 check("workflow_dispatch" in WORKFLOW, "deploy.yml tem workflow_dispatch")
 on_block = WORKFLOW.split("on:", 1)[1].split("jobs:", 1)[0]
