@@ -2,7 +2,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.database import get_db
 from app.models.pipeline import Funnel, FunnelEntry, LeadHistory
@@ -51,7 +51,7 @@ def _get_stage_name(funnel: Funnel, stage_id: str) -> str:
 # ─── Funnels CRUD ────────────────────────────────
 
 @router.get("/funnels", response_model=FunnelListResponse, summary="Listar funis")
-async def list_funnels(
+def list_funnels(
     is_active: Optional[bool] = Query(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -72,7 +72,7 @@ async def list_funnels(
 
 
 @router.get("/funnels/{funnel_id}", response_model=FunnelResponse, summary="Detalhes de um funil")
-async def get_funnel(
+def get_funnel(
     funnel_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -84,7 +84,7 @@ async def get_funnel(
 
 
 @router.post("/funnels", response_model=FunnelResponse, status_code=201, summary="Criar funil")
-async def create_funnel(
+def create_funnel(
     data: FunnelCreate,
     current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
@@ -124,7 +124,7 @@ async def create_funnel(
 
 
 @router.put("/funnels/{funnel_id}", response_model=FunnelResponse, summary="Atualizar funil")
-async def update_funnel(
+def update_funnel(
     funnel_id: int,
     data: FunnelUpdate,
     current_user: User = Depends(require_admin),
@@ -156,7 +156,7 @@ async def update_funnel(
 
 
 @router.delete("/funnels/{funnel_id}", summary="Excluir funil")
-async def delete_funnel(
+def delete_funnel(
     funnel_id: int,
     current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
@@ -172,7 +172,7 @@ async def delete_funnel(
 # ─── Kanban Board ────────────────────────────────
 
 @router.get("/board/{funnel_id}", response_model=KanbanBoardResponse, summary="Kanban board de um funil")
-async def get_kanban_board(
+def get_kanban_board(
     funnel_id: int,
     responsavel_id: Optional[int] = Query(None, description="Filtrar por responsável (0 = Agente IA)"),
     current_user: User = Depends(get_current_user),
@@ -191,7 +191,9 @@ async def get_kanban_board(
         query = (
             db.query(FunnelEntry)
             .filter(FunnelEntry.funnel_id == funnel_id)
-            .options(joinedload(FunnelEntry.lead))
+            # LeadCardResponse le lead.tags: sem o selectinload, cada card
+            # dispara uma query propria (3000 cards = 3000 queries).
+            .options(joinedload(FunnelEntry.lead).selectinload(Lead.tags))
             .order_by(FunnelEntry.posicao)
         )
 
@@ -272,7 +274,7 @@ async def get_kanban_board(
 
 @router.post("/funnels/{funnel_id}/leads", response_model=FunnelEntryResponse,
              status_code=201, summary="Adicionar lead ao funil")
-async def add_lead_to_funnel(
+def add_lead_to_funnel(
     funnel_id: int,
     data: FunnelEntryCreate,
     current_user: User = Depends(get_current_user),
@@ -328,7 +330,7 @@ async def add_lead_to_funnel(
 
 
 @router.put("/entries/{entry_id}/move", summary="Mover lead de etapa")
-async def move_lead_stage(
+def move_lead_stage(
     entry_id: int,
     data: FunnelEntryMove,
     current_user: User = Depends(get_current_user),
@@ -376,7 +378,7 @@ async def move_lead_stage(
 
 
 @router.post("/entries/{entry_id}/transfer", summary="Transferir lead entre funis")
-async def transfer_lead(
+def transfer_lead(
     entry_id: int,
     data: FunnelEntryTransfer,
     current_user: User = Depends(get_current_user),
@@ -439,7 +441,7 @@ async def transfer_lead(
 
 
 @router.delete("/entries/{entry_id}", summary="Remover lead do funil")
-async def remove_lead_from_funnel(
+def remove_lead_from_funnel(
     entry_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -463,7 +465,7 @@ async def remove_lead_from_funnel(
 # ─── History ─────────────────────────────────────
 
 @router.get("/history/{lead_id}", response_model=HistoryListResponse, summary="Histórico de um lead")
-async def get_lead_history(
+def get_lead_history(
     lead_id: int,
     limit: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_current_user),
@@ -493,7 +495,7 @@ async def get_lead_history(
 
 
 @router.post("/history/{lead_id}/note", summary="Adicionar nota ao histórico")
-async def add_history_note(
+def add_history_note(
     lead_id: int,
     descricao: str = Query(..., description="Texto da nota"),
     current_user: User = Depends(get_current_user),

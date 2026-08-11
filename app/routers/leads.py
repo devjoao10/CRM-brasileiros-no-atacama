@@ -7,7 +7,7 @@ from datetime import datetime, date
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from app.config import MAX_UPLOAD_SIZE_BYTES
 from app.database import IS_SQLITE
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import or_, extract, and_, String, func
 
 from app.database import get_db
@@ -97,7 +97,11 @@ def list_leads(
     """
     query = db.query(Lead).options(
         joinedload(Lead.responsavel),
-        joinedload(Lead.funnel_entries).joinedload(FunnelEntry.funnel)
+        joinedload(Lead.funnel_entries).joinedload(FunnelEntry.funnel),
+        # LeadResponse.tags le lead.tags: sem isto, 1 query por lead (N+1).
+        # selectinload e nao joinedload: tags e N:N e joinedload multiplicaria
+        # as linhas, atrapalhando o limit da paginacao.
+        selectinload(Lead.tags),
     )
 
     if search:
@@ -203,7 +207,11 @@ def segment_leads(
     - **tag_mode=all**: retorna leads que possuem TODAS as tags selecionadas
     - **campo_chave + campo_valor**: filtra por campos personalizados (Ex: chave=origem, valor=Instagram)
     """
-    query = db.query(Lead).options(joinedload(Lead.tags))
+    # So as tags aqui: o ramo de campo_chave abaixo materializa TODOS os leads
+    # que casam os demais filtros, e carregar responsavel/funis de todos eles
+    # sairia mais caro que o N+1 do slice final. Os outros eager loads entram
+    # apenas no ramo paginado.
+    query = db.query(Lead).options(selectinload(Lead.tags))
 
     # Busca textual
     if search:
@@ -296,7 +304,15 @@ def segment_leads(
         leads = filtered[skip: skip + limit]
     else:
         total = query.count()
-        leads = query.order_by(Lead.created_at.desc()).offset(skip).limit(limit).all()
+        # _build_lead_response le responsavel e funnel_entries: sem isto, uma
+        # query por lead do slice (N+1).
+        leads = (
+            query.options(
+                joinedload(Lead.responsavel),
+                selectinload(Lead.funnel_entries).joinedload(FunnelEntry.funnel),
+            )
+            .order_by(Lead.created_at.desc()).offset(skip).limit(limit).all()
+        )
 
     return LeadListResponse(
         total=total,
