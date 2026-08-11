@@ -35,9 +35,11 @@ def _json_list_contains(column, value: str):
         # SQLite armazena JSON como texto — LIKE funciona
         return column.cast(String).ilike(f'%"{value}"%')
     else:
-        # PostgreSQL: usar operador nativo @> (contains)
+        # PostgreSQL: @> so existe para jsonb e a coluna e json — cast na
+        # EXPRESSAO da query (nao altera o schema nem os dados).
         import json
-        return column.op("@>")(json.dumps([value]))
+        from sqlalchemy.dialects.postgresql import JSONB
+        return column.cast(JSONB).op("@>")(json.dumps([value]))
 
 
 def _build_lead_response(lead: Lead) -> LeadResponse:
@@ -738,10 +740,9 @@ def update_lead_responsavel(
 
     old_responsavel = lead.responsavel_id
     lead.responsavel_id = responsavel_id
-    db.commit()
-    db.refresh(lead)
 
-    # Log the change
+    # Log the change — MESMA transacao do UPDATE do lead: se o historico falhar,
+    # a troca de responsavel tambem e revertida (nunca responsavel sem rastro).
     from app.models.pipeline import LeadHistory
     old_name = "Agente IA" if old_responsavel is None else str(old_responsavel)
     new_name = "Agente IA" if responsavel_id is None else str(responsavel_id)
@@ -754,7 +755,9 @@ def update_lead_responsavel(
             dados={"old_responsavel_id": old_responsavel, "new_responsavel_id": responsavel_id},
         )
         db.add(event)
-        db.commit()
+
+    db.commit()
+    db.refresh(lead)
 
     return _build_lead_response(lead)
 

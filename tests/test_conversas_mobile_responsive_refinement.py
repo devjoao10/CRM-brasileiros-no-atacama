@@ -214,15 +214,22 @@ for path in ("/", "/templates", "/settings"):
     check(r.status_code == 200, f"GET {path} -> 200")
 
 # ============ 23. SEM BACKEND/MIGRATION NO DIFF ============
+# Escopo HISTORICO do pacote RESP02, fixado no merge do PR #6
+# (12e4f97 "Merge pull request #6 from devjoao10/hotfix/conv-mobile-responsive-refinement"):
+#   ^1 = b3a2a2b (base, tambem o merge-base)   ^2 = fee89c1 (ponta da branch)
+# Comparar com a working tree transformava esta regra historica em proibicao
+# permanente de mexer no backend do Conversas. check=True para que um SHA
+# ausente (clone raso) vire SKIP explicito, nunca um PASS vazio.
+RESP02_MERGE = "12e4f97"
 print("\nRESP02 — sem backend/migration no pacote")
 try:
     changed = subprocess.run(
-        ["git", "diff", "--name-only", "origin/main"],
-        cwd=str(ROOT), capture_output=True, text=True, timeout=30,
+        ["git", "diff", "--name-only", f"{RESP02_MERGE}^1", f"{RESP02_MERGE}^2"],
+        cwd=str(ROOT), capture_output=True, text=True, timeout=30, check=True,
     ).stdout.splitlines()
     bad = [f for f in changed if f.startswith("conversas/app/") or f.startswith("migrations/")]
-    check(not bad, f"diff nao toca conversas/app nem migrations ({bad or 'ok'})")
-except Exception as e:  # ambiente sem git: nao bloqueia a suite
+    check(not bad, f"pacote RESP02 nao tocou conversas/app nem migrations ({bad or 'ok'})")
+except Exception as e:  # ambiente sem git/sem historico: nao bloqueia a suite
     print(f"  SKIP: verificacao de diff indisponivel ({type(e).__name__})")
 
 body = client.get("/").text

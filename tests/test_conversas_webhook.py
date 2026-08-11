@@ -107,10 +107,44 @@ s.close()
 
 # ============ CASO 2: IDEMPOTENCIA ============
 print("\nQA-CONV-01 — idempotencia (mesmo msg_id nao duplica)")
+s = _session()
+_c = s.query(Conversation).filter(Conversation.whatsapp == "5511888887777").first()
+before_unread, before_ultimo = _c.unread_count, _c.ultimo_msg
+s.close()
+
 client.post("/webhook", json=inbound)  # reenvia identico
 s = _session()
 count = s.query(Message).filter(Message.whatsapp_msg_id == "wamid.IN1").count()
 check(count == 1, "mensagem nao duplicada apos reenvio")
+_c = s.query(Conversation).filter(Conversation.whatsapp == "5511888887777").first()
+check(_c.unread_count == before_unread,
+      f"retry NAO altera unread_count (antes={before_unread}, depois={_c.unread_count})")
+check(_c.ultimo_msg == before_ultimo, "retry NAO altera ultimo_msg")
+s.close()
+
+
+# ====== CASO 2b: DUPLICADA + LEGITIMA NO MESMO PAYLOAD ======
+print("\nQA-CONV-01 — lote com duplicada + nova: efeitos da duplicada nao persistem")
+mixed = {
+    "entry": [{"changes": [{"value": {
+        "contacts": [{"profile": {"name": "Fulano de Tal"}}],
+        "messages": [
+            dict(inbound["entry"][0]["changes"][0]["value"]["messages"][0]),  # wamid.IN1 (duplicada)
+            {"from": "5511888887777", "id": "wamid.IN2", "type": "text",
+             "timestamp": "1700000002", "text": {"body": "segunda mensagem"}},
+        ],
+    }}]}]
+}
+client.post("/webhook", json=mixed)
+s = _session()
+check(s.query(Message).filter(Message.whatsapp_msg_id == "wamid.IN1").count() == 1,
+      "duplicada continua sem duplicar Message")
+check(s.query(Message).filter(Message.whatsapp_msg_id == "wamid.IN2").first() is not None,
+      "mensagem legitima do mesmo lote foi persistida")
+_c = s.query(Conversation).filter(Conversation.whatsapp == "5511888887777").first()
+check(_c.unread_count == before_unread + 1,
+      f"unread_count subiu exatamente 1 (esperado={before_unread + 1}, got={_c.unread_count})")
+check(_c.ultimo_msg == "segunda mensagem", "ultimo_msg reflete apenas a mensagem nova")
 s.close()
 
 
