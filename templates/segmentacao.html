@@ -354,9 +354,16 @@ async function loadUsers() {
 
 // ─── Segments CRUD ────────────────────────────
 async function loadSegments() {
-    const r = await Auth.apiRequest('/api/segments'); if (!r) return;
-    const d = await r.json();
     const grid = document.getElementById('segmentsGrid');
+    const r = await Auth.apiRequest('/api/segments');
+    // Sem esta guarda um 500 caia no ramo de baixo e virava "nenhuma lista
+    // criada ainda" — erro do servidor aparecendo como lista vazia. E o 401
+    // (r nulo) deixava o "Carregando..." na tela para sempre.
+    if (!r || !r.ok) {
+        if (r) grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon"></div><p>Erro ao carregar as listas (${r.status}).</p><button class="btn btn-primary" onclick="loadSegments()">Tentar de novo</button></div>`;
+        return;
+    }
+    const d = await r.json();
     if (!d.segments || d.segments.length === 0) {
         grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon"></div><p>Nenhuma lista de segmentação criada ainda.<br>Crie sua primeira lista para organizar seus leads!</p><button class="btn btn-primary" onclick="openModal()">+ Criar Primeira Lista</button></div>`;
         return;
@@ -560,7 +567,7 @@ async function previewCount() {
     const filtros = collectFilters();
     const r = await Auth.apiRequest('/api/segments/preview', { method: 'POST', body: JSON.stringify(filtros) });
     spinner.style.display='none';
-    if (!r) { text.textContent='Erro'; return; }
+    if (!r || !r.ok) { text.textContent='Erro'; return; }
     const d = await r.json();
     text.textContent = `${d.total} lead${d.total!==1?'s':''} ${d.total !== 1 ? 'correspondem' : 'corresponde'} a estes filtros`;
 }
@@ -572,14 +579,23 @@ async function viewSegment(id) {
     document.getElementById('detailPanel').classList.add('open');
     document.getElementById('detailBody').innerHTML = '<tr><td colspan="6"><div class="empty-state"><p>Carregando...</p></div></td></tr>';
 
-    const sr = await Auth.apiRequest(`/api/segments/${id}`); if (!sr) return;
+    const sr = await Auth.apiRequest(`/api/segments/${id}`);
+    if (!sr || !sr.ok) { erroNoDetalhe(sr); return; }
     const seg = await sr.json();
     document.getElementById('detailTitle').textContent = seg.nome;
 
-    const r = await Auth.apiRequest(`/api/segments/${id}/leads?limit=500`); if (!r) return;
+    const r = await Auth.apiRequest(`/api/segments/${id}/leads?limit=500`);
+    if (!r || !r.ok) { erroNoDetalhe(r); return; }
     const d = await r.json();
     document.getElementById('detailCount').textContent = `${d.total} leads nesta lista`;
     renderDetailTable(d.leads || []);
+}
+
+// r nulo = 401 e redirecionamento para /login: nao pinta erro por cima disso.
+function erroNoDetalhe(r) {
+    if (!r) return;
+    document.getElementById('detailBody').innerHTML =
+        `<tr><td colspan="6"><div class="empty-state"><p>Erro ao carregar (${r.status})</p></div></td></tr>`;
 }
 
 function renderDetailTable(leads) {

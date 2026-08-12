@@ -3,7 +3,8 @@ from datetime import datetime, date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import or_, extract, String
+from sqlalchemy import or_, extract, String, func, select, cast, case, literal
+from sqlalchemy.dialects.postgresql import JSONB
 from app.database import IS_SQLITE
 
 from app.database import get_db
@@ -31,8 +32,60 @@ def _json_list_contains(column, value: str):
         # PostgreSQL: @> so existe para jsonb e a coluna e json — cast na
         # EXPRESSAO da query (nao altera o schema nem os dados).
         import json
-        from sqlalchemy.dialects.postgresql import JSONB
         return column.cast(JSONB).op("@>")(json.dumps([value]))
+
+
+# Mesmo conjunto que str.strip() remove nas bordas.
+_ESPACOS = " \t\n\r\v\f"
+
+
+def _campo_personalizado_match(chave: str, valor: str):
+    """
+    EXISTS sobre os pares chave/valor de campos_personalizados, no banco.
+
+    Antes isto era feito em Python: carregava todo Lead que passasse nos demais
+    filtros e varria o dict. Com 19 mil leads eram 19 mil objetos ORM por
+    segmento — a causa da lentidao de GET /api/segments.
+
+    Espelha exatamente a comparacao que era feita em Python:
+      chave  -> strip + lower dos DOIS lados (a chave crua pode vir " Origem ")
+      valor  -> substring case-insensitive; vazio = exige so a presenca da chave
+
+    O CASE blinda contra campos_personalizados legado que nao seja um objeto
+    JSON: jsonb_each_text estoura em lista/escalar e derrubaria a listagem
+    inteira com 500. Sem objeto nao ha chave — resultado vazio, como antes.
+    """
+    chave_norm = (chave or "").strip().lower()
+    valor_norm = (valor or "").strip().lower()
+    col = Lead.campos_personalizados
+
+    if IS_SQLITE:
+        seguro = case((func.json_type(col) == "object", col), else_=literal("{}"))
+        pares = func.json_each(seguro).table_valued("key", "value", "type")
+        chave_col = func.lower(func.trim(pares.c.key, _ESPACOS))
+        # json_each devolve 1/0 para booleano JSON, enquanto o Python via
+        # "True"/"False". A coluna `type` traz 'true'/'false' e recupera a
+        # paridade — senao um campo booleano deixaria de ser encontrado.
+        valor_col = case((pares.c["type"] == "true", literal("true")),
+                         (pares.c["type"] == "false", literal("false")),
+                         else_=pares.c.value)
+    else:
+        # @> nao serve aqui: a chave e comparada normalizada, nao literal.
+        # jsonb_each_text expande os pares e devolve o valor ja como texto —
+        # "Atacama", 25 e true viram 'Atacama', '25' e 'true', igual ao str()
+        # que o Python fazia.
+        jb = cast(col, JSONB)
+        seguro = case((func.jsonb_typeof(jb) == "object", jb),
+                      else_=cast(literal("{}"), JSONB))
+        pares = func.jsonb_each_text(seguro).table_valued("key", "value")
+        chave_col = func.lower(func.btrim(pares.c.key, _ESPACOS))
+        valor_col = pares.c.value
+
+    condicoes = [chave_col == chave_norm]
+    if valor_norm:
+        # autoescape: % e _ digitados pelo usuario sao literais, nao curinga
+        condicoes.append(func.lower(valor_col).contains(valor_norm, autoescape=True))
+    return select(literal(1)).select_from(pares).where(*condicoes).exists()
 
 
 # ─── Helpers ─────────────────────────────────────
@@ -68,9 +121,12 @@ def _build_lead_response(lead: Lead, db: Session) -> LeadResponse:
 def _resolve_segment_query(filtros: dict, db: Session, for_count: bool = False):
     """
     Build a SQLAlchemy query from segment filter criteria.
-    
+
     for_count=True: returns a lightweight query on Lead.id (no joins) for accurate counting.
     for_count=False: returns a full query with joinedload for fetching lead objects.
+
+    Fonte unica de verdade dos filtros: contagem, preview e listagem de leads
+    passam todos por aqui, entao nao ha como as tres divergirem.
     """
     if for_count:
         query = db.query(Lead.id)
@@ -166,30 +222,21 @@ def _resolve_segment_query(filtros: dict, db: Session, for_count: bool = False):
         else:
             query = query.filter(Lead.responsavel_id == responsavel_id)
 
-    # Custom field filtering (Python-side for SQLite compat)
-    needs_python_filter = bool(campo_chave)
+    if campo_chave:
+        query = query.filter(_campo_personalizado_match(campo_chave, campo_valor))
 
-    return query, needs_python_filter, campo_chave, campo_valor
+    return query
 
 
 def _count_segment_leads(filtros: dict, db: Session) -> int:
-    """Count how many leads match a segment's criteria (accurate, no duplicates)."""
-    query, needs_python, chave, valor = _resolve_segment_query(filtros, db, for_count=True)
-    if needs_python:
-        # Need to fetch full Lead objects for Python-side filtering
-        full_query = db.query(Lead).filter(Lead.id.in_(query.subquery()))
-        all_leads = full_query.all()
-        chave_lower = (chave or "").strip().lower()
-        valor_lower = (valor or "").strip().lower()
-        count = 0
-        for lead in all_leads:
-            cp = lead.campos_personalizados or {}
-            match_key = next((k for k in cp if k.strip().lower() == chave_lower), None)
-            if match_key is not None:
-                if not valor_lower or valor_lower in str(cp[match_key]).lower():
-                    count += 1
-        return count
-    return query.count()
+    """
+    Conta os leads do segmento com COUNT no banco.
+
+    Sem risco de linha duplicada: a query de contagem nao tem JOIN — tags e
+    funil entram por subquery em Lead.id, e campo personalizado por EXISTS.
+    Por isso COUNT simples ja e distinto, sem precisar de COUNT(DISTINCT).
+    """
+    return _resolve_segment_query(filtros, db, for_count=True).count()
 
 
 # ─── CRUD ────────────────────────────────────────
@@ -338,35 +385,19 @@ def get_segment_leads(
     filtros = seg.filtros or {}
 
     # Count accurately (no join duplicates)
-    count_q, needs_python, chave, valor = _resolve_segment_query(filtros, db, for_count=True)
+    total = _resolve_segment_query(filtros, db, for_count=True).count()
 
-    if needs_python:
-        full_query = db.query(Lead).filter(Lead.id.in_(count_q.subquery()))
-        all_leads = full_query.order_by(Lead.created_at.desc()).all()
-        chave_lower = (chave or "").strip().lower()
-        valor_lower = (valor or "").strip().lower()
-        filtered = []
-        for lead in all_leads:
-            cp = lead.campos_personalizados or {}
-            match_key = next((k for k in cp if k.strip().lower() == chave_lower), None)
-            if match_key is not None:
-                if not valor_lower or valor_lower in str(cp[match_key]).lower():
-                    filtered.append(lead)
-        total = len(filtered)
-        leads = filtered[skip: skip + limit]
-    else:
-        total = count_q.count()
-        # Fetch with tags loaded, deduplicate
-        fetch_q, _, _, _ = _resolve_segment_query(filtros, db, for_count=False)
-        all_results = fetch_q.order_by(Lead.created_at.desc()).all()
-        # Deduplicate (joinedload can produce duplicates)
-        seen = set()
-        unique_leads = []
-        for lead in all_results:
-            if lead.id not in seen:
-                seen.add(lead.id)
-                unique_leads.append(lead)
-        leads = unique_leads[skip: skip + limit]
+    # Fetch with tags loaded, deduplicate
+    fetch_q = _resolve_segment_query(filtros, db, for_count=False)
+    all_results = fetch_q.order_by(Lead.created_at.desc()).all()
+    # Deduplicate (joinedload can produce duplicates)
+    seen = set()
+    unique_leads = []
+    for lead in all_results:
+        if lead.id not in seen:
+            seen.add(lead.id)
+            unique_leads.append(lead)
+    leads = unique_leads[skip: skip + limit]
 
     return LeadListResponse(
         total=total, skip=skip, limit=limit,
@@ -390,34 +421,18 @@ def preview_segment(
     filtros_dict = filtros.model_dump(exclude_none=True)
 
     # Count accurately (no join duplicates)
-    count_q, needs_python, chave, valor = _resolve_segment_query(filtros_dict, db, for_count=True)
+    total = _resolve_segment_query(filtros_dict, db, for_count=True).count()
 
-    if needs_python:
-        full_query = db.query(Lead).filter(Lead.id.in_(count_q.subquery()))
-        all_leads = full_query.order_by(Lead.created_at.desc()).all()
-        chave_lower = (chave or "").strip().lower()
-        valor_lower = (valor or "").strip().lower()
-        filtered = []
-        for lead in all_leads:
-            cp = lead.campos_personalizados or {}
-            match_key = next((k for k in cp if k.strip().lower() == chave_lower), None)
-            if match_key is not None:
-                if not valor_lower or valor_lower in str(cp[match_key]).lower():
-                    filtered.append(lead)
-        total = len(filtered)
-        leads = filtered[skip: skip + limit]
-    else:
-        total = count_q.count()
-        # Fetch with tags loaded, deduplicate
-        fetch_q, _, _, _ = _resolve_segment_query(filtros_dict, db, for_count=False)
-        all_results = fetch_q.order_by(Lead.created_at.desc()).all()
-        seen = set()
-        unique_leads = []
-        for lead in all_results:
-            if lead.id not in seen:
-                seen.add(lead.id)
-                unique_leads.append(lead)
-        leads = unique_leads[skip: skip + limit]
+    # Fetch with tags loaded, deduplicate
+    fetch_q = _resolve_segment_query(filtros_dict, db, for_count=False)
+    all_results = fetch_q.order_by(Lead.created_at.desc()).all()
+    seen = set()
+    unique_leads = []
+    for lead in all_results:
+        if lead.id not in seen:
+            seen.add(lead.id)
+            unique_leads.append(lead)
+    leads = unique_leads[skip: skip + limit]
 
     return LeadListResponse(
         total=total, skip=skip, limit=limit,
