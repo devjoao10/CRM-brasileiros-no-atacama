@@ -186,7 +186,9 @@ class LeadResponse(BaseModel):
 
 
 class LeadListResponse(BaseModel):
-    total: int
+    # null so quando o caller pede include_total=false; quem nao envia o
+    # parametro continua recebendo inteiro.
+    total: Optional[int]
     skip: int
     limit: int
     leads: list[LeadResponse]

@@ -142,6 +142,10 @@ def list_leads(
     cursor: Optional[str] = Query(
         None, description="Cursor da página seguinte (vem em next_cursor). Ignora skip."
     ),
+    include_total: bool = Query(
+        True, description="false pula o COUNT e devolve total=null. Use nas páginas "
+                          "seguintes: o total já é conhecido e não muda."
+    ),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -213,7 +217,14 @@ def list_leads(
 
     # total do conjunto FILTRADO, antes do cursor: "X leads encontrados" nao
     # pode encolher a cada "Carregar mais".
-    total = query.count()
+    #
+    # Medido com 19.000 leads, o COUNT domina a requisicao quando ha filtro:
+    # 46% no destino, 58% na busca textual, 82% no campo personalizado —
+    # enquanto o SELECT da pagina custa ~1 ms. Como o total nao muda entre as
+    # paginas do MESMO conjunto, quem ja o tem manda include_total=false.
+    # Default True: n8n, pipeline.html e ai_tools nao enviam nada e seguem
+    # recebendo o inteiro.
+    total = query.count() if include_total else None
 
     if cursor:
         query = query.filter(_keyset_filtro(cursor))

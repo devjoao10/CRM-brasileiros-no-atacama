@@ -532,6 +532,7 @@
     let hasMore = false;
     let carregando = false;
     let leadsNaTela = [];
+    let totalConhecido = 0;   // o servidor so reenvia o total na 1a pagina
     let reqAtual = null;      // AbortController do request em voo
     let debounceTimer = null;
     let selectedFile = null;
@@ -614,7 +615,12 @@
         reqAtual = ctrl;
 
         const params = filtrosAtuais();
-        if (nextCursor) params.set('cursor', nextCursor);
+        if (nextCursor) {
+            params.set('cursor', nextCursor);
+            // o total do conjunto ja e conhecido e nao muda entre paginas; o
+            // COUNT chega a 82% da requisicao quando ha filtro ativo
+            params.set('include_total', 'false');
+        }
 
         carregando = true;
         if (primeira) {
@@ -642,8 +648,9 @@
         const novos = data.leads || [];
         leadsNaTela = primeira ? novos : leadsNaTela.concat(novos);
         nextCursor = data.next_cursor || null;
-        hasMore = !!data.has_more;
-        renderTable(data.total, novos, primeira);
+        hasMore = !!data.has_more;   // vem do limit+1, nunca do COUNT
+        if (typeof data.total === 'number') totalConhecido = data.total;
+        renderTable(totalConhecido, novos, primeira);
         renderFooter();
     }
 

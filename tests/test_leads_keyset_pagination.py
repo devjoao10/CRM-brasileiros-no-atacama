@@ -424,7 +424,7 @@ class _Contador:
     def __enter__(self):
         from app.database import engine
         from app.models.lead import Lead
-        self.q = self.leads = 0
+        self.q = self.leads = self.counts = 0
         self._e, self._L = engine, Lead
         event.listen(engine, "before_cursor_execute", self._q)
         event.listen(Lead, "load", self._l)
@@ -434,11 +434,96 @@ class _Contador:
         event.remove(self._e, "before_cursor_execute", self._q)
         event.remove(self._L, "load", self._l)
 
-    def _q(self, *a):
+    def _q(self, conn, cur, stmt, params, ctx, many):
         self.q += 1
+        if stmt.lstrip().lower().startswith("select count("):
+            self.counts += 1
 
     def _l(self, *a):
         self.leads += 1
+
+
+# ─── include_total: COUNT so na primeira pagina ──────────────────────────
+
+def test_count_roda_na_primeira_pagina_e_nao_no_segundo_lote():
+    """
+    O nucleo do gate 3. Medido com 19.000 leads, o COUNT e 46% da requisicao
+    com filtro de destino, 58% na busca textual e 82% no campo personalizado.
+    Ele nao pode se repetir a cada "Carregar mais": o total do conjunto e o
+    mesmo.
+    """
+    client, d = _setup()
+    with _Contador() as c1:
+        b1 = _get(client, limit=20)
+    assert c1.counts == 1, f"a 1a pagina precisa contar uma vez: {c1.counts}"
+    assert isinstance(b1["total"], int)
+
+    with _Contador() as c2:
+        b2 = _get(client, limit=20, cursor=b1["next_cursor"], include_total="false")
+    assert c2.counts == 0, (
+        f"o 2o lote executou {c2.counts} COUNT: include_total=false tem que pular")
+    assert b2["total"] is None
+    assert len(b2["leads"]) == 20 and b2["has_more"] is True and b2["next_cursor"]
+
+
+def test_include_total_omitido_mantem_comportamento_legado():
+    """n8n, pipeline.html e ai_tools nao enviam o parametro."""
+    client, d = _setup()
+    with _Contador() as c:
+        b = _get(client, limit=10)
+    assert c.counts == 1, "sem o parametro o COUNT continua acontecendo"
+    assert isinstance(b["total"], int) and b["total"] == N, (
+        f"total tem que continuar inteiro: {b['total']!r}")
+
+
+def test_include_total_false_preserva_leads_cursor_e_has_more():
+    client, d = _setup()
+    com = _get(client, limit=30)
+    sem = _get(client, limit=30, include_total="false")
+    assert sem["total"] is None and isinstance(com["total"], int)
+    assert [l["id"] for l in sem["leads"]] == [l["id"] for l in com["leads"]], (
+        "pular o COUNT nao pode mudar as linhas")
+    assert sem["has_more"] == com["has_more"] is True
+    assert sem["next_cursor"] == com["next_cursor"], "o cursor tem que ser o mesmo"
+
+
+def test_has_more_vem_do_limit_mais_um_e_nao_do_count():
+    """Ultima pagina sem COUNT ainda precisa saber que acabou."""
+    client, d = _setup()
+    ordem, _ = _varre(client, limit=50)
+    penultimo = _get(client, limit=100)
+    b = _get(client, limit=100, cursor=penultimo["next_cursor"],
+             include_total="false")
+    assert b["total"] is None
+    assert b["has_more"] is False and b["next_cursor"] is None, (
+        "o fim da lista tem que ser detectado sem COUNT")
+    assert len(b["leads"]) == N - 100
+
+
+def test_varredura_com_include_total_false_nao_perde_nem_duplica():
+    client, d = _setup()
+    ordem, cursor = [], None
+    while True:
+        b = _get(client, limit=11, cursor=cursor,
+                 include_total=("true" if cursor is None else "false"))
+        ordem += [l["id"] for l in b["leads"]]
+        if not b["has_more"]:
+            break
+        cursor = b["next_cursor"]
+    assert len(ordem) == N == len(set(ordem)), (
+        f"varredura sem COUNT: {len(ordem)} linhas, {len(set(ordem))} unicas")
+
+
+def test_troca_de_filtro_conta_de_novo():
+    client, d = _setup()
+    a = _get(client, limit=20, destino="Atacama")
+    _get(client, limit=20, cursor=a["next_cursor"], destino="Atacama",
+         include_total="false")
+    with _Contador() as c:
+        b = _get(client, limit=20, destino="Uyuni")     # filtro novo, sem cursor
+    assert c.counts == 1, "conjunto novo precisa de total novo"
+    assert isinstance(b["total"], int) and b["total"] != a["total"], (
+        f"os dois filtros tem que ter totais diferentes: {a['total']} e {b['total']}")
 
 
 def test_limit_50_nao_hidrata_a_base_inteira():
@@ -698,19 +783,23 @@ class AbortController {
     constructor() { this.signal = { aborted: false }; }
     abort() { this.signal.aborted = true; abortados++; }
 }
+const respostas = %s;
 const Auth = { apiRequest: async (url, opts) => {
+    const i = pedidos.length;
     pedidos.push(url);
     await new Promise(r => setTimeout(r, %d));
     if (opts && opts.signal && opts.signal.aborted) {
         const e = new Error('abort'); e.name = 'AbortError'; throw e;
     }
-    return { ok: true, status: 200, json: async () => (%s) };
+    const corpo = respostas[Math.min(i, respostas.length - 1)];
+    return { ok: true, status: 200, json: async () => corpo };
 }};
 const PAGE_SIZE = 50;
 let nextCursor = null, hasMore = false, carregando = false;
 let leadsNaTela = [], reqAtual = null, debounceTimer = null;
+let totalConhecido = 0, totalRenderizado = null;
 function renderFooter() {}
-function renderTable() {}
+function renderTable(total) { totalRenderizado = total; }
 function mostrarErro() {}
 
 %s
@@ -727,10 +816,13 @@ function mostrarErro() {}
 def _roda_js(corpo, valores=None, resposta=None, atraso=0):
     node = shutil.which("node")
     assert node, "node e necessario para exercitar o JS da pagina"
+    if resposta is None:
+        resposta = {"leads": [{"id": 1}], "total": 1,
+                    "next_cursor": "C2", "has_more": True}
+    if isinstance(resposta, dict):        # uma resposta = vale para todas
+        resposta = [resposta]
     script = _HARNESS % (
-        json.dumps(valores or {}), atraso,
-        json.dumps(resposta or {"leads": [{"id": 1}], "total": 1,
-                                "next_cursor": "C2", "has_more": True}),
+        json.dumps(valores or {}), json.dumps(resposta), atraso,
         _fn("filtrosAtuais"), _fn("reloadLeads"), _fn("loadLeads"), _fn("loadMore"),
         corpo)
     p = subprocess.run([node, "-e", script], capture_output=True, text=True)
@@ -808,6 +900,64 @@ def test_js_resposta_antiga_nao_sobrescreve_a_nova():
     assert r["acumulados"] == 1, (
         f"duas respostas entraram na lista ({r['acumulados']}): a antiga "
         f"sobrescreveu/duplicou a nova")
+
+
+def test_js_primeira_pagina_pede_total_e_carregar_mais_nao():
+    r = _roda_js("""
+        await loadLeads();                      // 1a pagina
+        await loadLeads();                      // Carregar mais
+        console.log(JSON.stringify({ urls: pedidos }));
+    """)
+    assert "include_total=false" not in r["urls"][0], (
+        f"a 1a pagina precisa do total: {r['urls'][0]}")
+    assert "include_total=false" in r["urls"][1], (
+        f"o 2o lote tem que pular o COUNT: {r['urls'][1]}")
+    assert "cursor=C2" in r["urls"][1]
+
+
+def test_js_total_null_nao_apaga_o_total_da_ui():
+    """
+    O servidor devolve total=null no 2o lote. A UI ja sabe o numero e nao pode
+    trocar "19000 leads encontrados" por "null leads encontrados".
+    """
+    r = _roda_js("""
+        await loadLeads();
+        const depoisDaPrimeira = totalRenderizado;
+        await loadLeads();
+        console.log(JSON.stringify({
+            depoisDaPrimeira, depoisDoSegundo: totalRenderizado, totalConhecido,
+        }));
+    """, resposta=[
+        {"leads": [{"id": 1}], "total": 19000, "next_cursor": "C2", "has_more": True},
+        {"leads": [{"id": 2}], "total": None, "next_cursor": "C3", "has_more": True},
+    ])
+    assert r["depoisDaPrimeira"] == 19000
+    assert r["depoisDoSegundo"] == 19000, (
+        f"o total virou {r['depoisDoSegundo']!r} depois do lote sem COUNT")
+    assert r["totalConhecido"] == 19000
+
+
+def test_js_troca_de_filtro_volta_a_pedir_o_total():
+    r = _roda_js("""
+        await loadLeads();
+        await loadLeads();                      // Carregar mais (sem total)
+        valores.filterDestino = 'Uyuni';
+        await reloadLeads();                    // conjunto novo
+        console.log(JSON.stringify({ ultima: pedidos[pedidos.length - 1] }));
+    """)
+    assert "include_total=false" not in r["ultima"], (
+        f"conjunto novo precisa recalcular o total: {r['ultima']}")
+    assert "cursor=" not in r["ultima"], "e sem cursor do conjunto antigo"
+    assert "destino=Uyuni" in r["ultima"]
+
+
+def test_js_has_more_nao_depende_do_total():
+    r = _roda_js("""
+        await loadLeads();
+        console.log(JSON.stringify({ hasMore, totalRenderizado }));
+    """, resposta={"leads": [{"id": 1}], "total": None,
+                   "next_cursor": "C9", "has_more": True})
+    assert r["hasMore"] is True, "has_more vem do limit+1, nao do COUNT"
 
 
 def test_js_paginacao_numerica_saiu():
