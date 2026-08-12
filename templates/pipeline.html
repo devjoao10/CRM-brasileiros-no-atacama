@@ -217,6 +217,8 @@
                         <input type="number" class="filter-days" id="pipeFilterViajantes" placeholder="min" min="1" oninput="applyFilters()" title="Filtrar leads com pelo menos X viajantes" style="width:70px">
                     </div>
                     <button class="filter-clear" onclick="clearPipeFilters()">✕ Limpar</button>
+                    <button class="filter-clear" id="clearTargetBtn" style="display:none" onclick="clearTargetLead()"
+                            title="Remove o destaque do lead aberto pelo link das Conversas">✕ Limpar destaque</button>
                     <span class="filter-count" id="filterCount"></span>
                 </div>
 
@@ -377,6 +379,13 @@
 
         document.getElementById('detailOverlay').addEventListener('click', closeDetailPanel);
 
+        // Clique em area vazia do board dispensa o destaque. Card, "Carregar
+        // mais" e os filtros da coluna nao limpam — so o vazio. O drawer nunca
+        // chega aqui: o overlay cobre o board e engole o clique.
+        document.getElementById('kanbanBoard').addEventListener('click', e => {
+            if (!e.target.closest('.lead-card, button, input, select, a')) clearTargetLead();
+        });
+
         // Close tag dropdown on outside click
         document.addEventListener('click', e => {
             const td = document.getElementById('filterTagsDropdown');
@@ -462,6 +471,7 @@
     }
 
     function switchFunnel(id) {
+        clearTargetLead();   // o alvo vivia no funil antigo: manter nao faz sentido
         currentFunnelId = id;
         renderFunnelTabs();
         loadBoard();
@@ -497,6 +507,20 @@
         document.querySelectorAll('.pipeline-target-card')
             .forEach(el => el.classList.remove('pipeline-target-card'));
         highlightLeadId = leadId;
+        const btn = document.getElementById('clearTargetBtn');
+        if (btn) btn.style.display = leadId ? '' : 'none';
+    }
+
+    // Saida do destaque (PIPE-HL-02). Desfaz SO o estado de target: nao fecha
+    // o drawer, nao mexe em filtro nem em funil, nao recarrega o board. Tira o
+    // lead_id da URL preservando o resto da query, senao o F5 ressuscitaria o
+    // highlight que o usuario acabou de dispensar.
+    function clearTargetLead() {
+        if (!highlightLeadId) return;
+        setTargetLead(null);
+        const u = new URL(window.location.href);
+        u.searchParams.delete('lead_id');
+        history.replaceState(null, '', u.toString());
     }
 
     function stageInit(id) {
@@ -864,6 +888,8 @@
     // ─── Detail Panel ───────────────────────────
 
     async function openDetailPanel(entryId, leadId) {
+        // abrir OUTRO card dispensa o destaque; reabrir o proprio alvo nao
+        if (highlightLeadId && leadId !== highlightLeadId) clearTargetLead();
         currentDetailEntry = entryId;
         currentDetailLeadId = leadId;
 
