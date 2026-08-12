@@ -7,8 +7,12 @@ Cobre o que a revisao dirigida pediu:
   1. dropdown "adicionar lead ao funil" volta a excluir quem ja esta no funil,
      agora via NOT EXISTS em SQL (a exclusao client-side dependia do board
      inteiro carregado). O 409 continua existindo contra corrida.
-  2. /locate com lead em MAIS DE UM funil: `prefer_funnel_id` reproduz a regra
-     antiga (o frontend so procurava dentro do funil aberto).
+  2. /locate com lead em MAIS DE UM funil. Regra DECIDIDA:
+       A. entry no prefer_funnel_id      -> esse funil vence
+       B. sem entry la, mas ha em outro  -> localiza e abre o outro
+       C. varios outros funis            -> fallback deterministico
+                                            (created_at ASC, id ASC)
+       D. nenhuma entry                  -> 404
   3. paridade dos filtros que migraram do JavaScript para o SQL — comparando o
      CONJUNTO de lead_id, nao apenas o status HTTP.
   4. contadores "X de Y" quando ha filtro.
@@ -96,9 +100,10 @@ def _setup():
 
         f1 = Funnel(nome="Funil Um", etapas=[{"id": "e1", "nome": "Etapa 1"}])
         f2 = Funnel(nome="Funil Dois", etapas=[{"id": "z1", "nome": "Zeta 1"}])
-        db.add_all([f1, f2])
+        f3 = Funnel(nome="Funil Tres", etapas=[{"id": "w1", "nome": "Wave 1"}])
+        db.add_all([f1, f2, f3])
         db.commit()
-        db.refresh(f1); db.refresh(f2)
+        db.refresh(f1); db.refresh(f2); db.refresh(f3)
 
         db.add_all([
             FunnelEntry(lead_id=l1.id, funnel_id=f1.id, etapa_id="e1", posicao=0),
@@ -107,10 +112,13 @@ def _setup():
             FunnelEntry(lead_id=l4.id, funnel_id=f1.id, etapa_id="e1", posicao=3),
             # L1 tambem no funil 2: lead em MAIS DE UM funil
             FunnelEntry(lead_id=l1.id, funnel_id=f2.id, etapa_id="z1", posicao=0),
+            # L2 em DOIS funis alem do f1: caso C (fallback com varios candidatos)
+            FunnelEntry(lead_id=l2.id, funnel_id=f2.id, etapa_id="z1", posicao=1),
+            FunnelEntry(lead_id=l2.id, funnel_id=f3.id, etapa_id="w1", posicao=0),
         ])
         db.commit()
 
-        ctx = {"f1": f1.id, "f2": f2.id, "resp": resp_user.id,
+        ctx = {"f1": f1.id, "f2": f2.id, "f3": f3.id, "resp": resp_user.id,
                "tagA": t_a.id, "tagB": t_b.id,
                "l1": l1.id, "l2": l2.id, "l3": l3.id, "l4": l4.id, "l5": l5.id}
     finally:
@@ -206,12 +214,46 @@ def test_prefer_funnel_reproduz_a_regra_antiga():
     assert body["etapa_id"] == "z1"
 
 
-def test_fallback_so_atua_quando_o_lead_nao_esta_no_funil_aberto():
+# ── Regra decidida do /locate: A, B, C, D ────────────────────────────────
+
+def test_A_lead_no_funil_preferido_vence():
     client, ctx = _setup()
-    # l2 nao esta no funil 2 -> cai no fallback e acha no funil 1
     body = client.get(
-        f"/api/pipeline/locate/{ctx['l2']}?prefer_funnel_id={ctx['f2']}").json()
-    assert body["funnel_id"] == ctx["f1"], "fallback deveria achar o unico funil do lead"
+        f"/api/pipeline/locate/{ctx['l1']}?prefer_funnel_id={ctx['f2']}").json()
+    assert body["funnel_id"] == ctx["f2"], "o funil preferido tem prioridade"
+
+
+def test_B_lead_fora_do_preferido_com_exatamente_um_outro_funil():
+    client, ctx = _setup()
+    # l4 so existe no f1; pedindo f2, o fallback deve achar o f1
+    body = client.get(
+        f"/api/pipeline/locate/{ctx['l4']}?prefer_funnel_id={ctx['f2']}").json()
+    assert body["funnel_id"] == ctx["f1"], (
+        "com 1 outro funil, o fallback tem que localizar o lead (nao 404)"
+    )
+
+
+def test_C_fallback_com_multiplos_outros_funis_e_deterministico():
+    client, ctx = _setup()
+    # l2 esta em f1, f2 e f3. Pedindo um funil onde ele NAO esta, o fallback
+    # precisa devolver SEMPRE o mesmo — created_at ASC, id ASC.
+    url = f"/api/pipeline/locate/{ctx['l2']}?prefer_funnel_id=999999"
+    respostas = [client.get(url).json() for _ in range(5)]
+    entries = {r["entry_id"] for r in respostas}
+    assert len(entries) == 1, (
+        f"fallback nao-deterministico com varios funis: {entries}"
+    )
+    assert respostas[0]["funnel_id"] == ctx["f1"], (
+        "com created_at ASC, id ASC a entry mais antiga (f1) tem que vencer"
+    )
+
+
+def test_D_lead_sem_funnel_entry_da_404():
+    client, ctx = _setup()
+    r = client.get(f"/api/pipeline/locate/{ctx['l5']}?prefer_funnel_id={ctx['f1']}")
+    assert r.status_code == 404, (
+        f"lead sem nenhuma entry deve dar 404, veio {r.status_code}"
+    )
 
 
 # ── 3. PARIDADE DOS FILTROS (conjunto de lead_id, nao status HTTP) ───────

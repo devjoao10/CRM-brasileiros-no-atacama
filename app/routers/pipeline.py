@@ -502,12 +502,17 @@ def locate_lead(
     Um lead PODE estar em varios funis (nao ha unique em (lead_id, funnel_id);
     o guard de 409 so impede repetir no MESMO funil).
 
-    Regra de escolha, preservando o comportamento anterior: o frontend antigo
-    procurava o lead APENAS dentro do funil aberto (`boardDataFull`), e nao
-    fazia nada se ele nao estivesse la. Por isso `prefer_funnel_id` vence
-    sempre que houver entry naquele funil — resultado identico ao antigo.
-    O fallback (entry mais antiga) so atua no caso em que o codigo antigo
-    simplesmente nao abria nada.
+    Regra DECIDIDA (nao e mais a inercia do frontend antigo, que so procurava
+    dentro do funil aberto e nao fazia nada se o lead estivesse em outro):
+
+      1. entry no `prefer_funnel_id`      -> esse funil vence
+      2. sem entry la, mas ha em outro    -> localiza e abre o outro funil
+      3. nenhum FunnelEntry               -> 404
+
+    O passo 2 e o motivo de existir do deep-link Conversas -> Funil: achar o
+    lead. O desempate do fallback e (created_at ASC, id ASC) — `created_at`
+    sozinho nao basta, duas entries criadas no mesmo instante devolveriam
+    resultado nao-deterministico entre chamadas.
     """
     base = db.query(FunnelEntry).filter(FunnelEntry.lead_id == lead_id)
 
