@@ -63,6 +63,10 @@
         /* ===== Lead Detail Panel ===== */
         .detail-panel-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: var(--z-modal); backdrop-filter: blur(3px); }
         .detail-panel-overlay.show { display: block; }
+        /* O editor de Lead (partial compartilhado) precisa ficar acima do
+           drawer, que esta em z-modal+1. Sem numero magico: so o proximo
+           degrau da hierarquia que ja existe. */
+        #leadModal { z-index: calc(var(--z-modal) + 2); }
         .detail-panel { position: fixed; top: 0; right: -480px; width: 470px; max-width: 90vw; height: 100vh; background: var(--color-white); box-shadow: -4px 0 24px rgba(0,0,0,0.15); z-index: calc(var(--z-modal) + 1); transition: right 0.35s cubic-bezier(0.4, 0, 0.2, 1); display: flex; flex-direction: column; }
         .detail-panel.open { right: 0; }
         .detail-header { padding: var(--space-5) var(--space-6); border-bottom: 1px solid var(--color-dark-100); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
@@ -275,7 +279,7 @@
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
                 </button>
                 <button class="btn btn-outline btn-sm" onclick="openTransferModal()" id="detailTransferBtn">Transferir</button>
-                <a class="btn btn-primary btn-sm" id="detailEditLink" href="/leads">Editar Lead</a>
+                <button class="btn btn-primary btn-sm" id="detailEditLink" onclick="editarLeadDoDrawer()">Editar Lead</button>
             </div>
         </div>
     </div>
@@ -353,7 +357,20 @@
 {% endblock %}
 
 {% block scripts %}
+    {% include "partials/_lead_edit_modal.html" %}
+
     <script>
+    // O editor de Lead e o MESMO da pagina de Leads (partial compartilhado).
+    // Aqui so registramos o que fazer depois do save: o drawer continua
+    // aberto e recebe os dados novos, e o card e trocado individualmente.
+    // Nada de loadBoard(): filtros, cursor, scroll e highlight ficam de pe.
+    onLeadSaved = async (lead) => {
+        if (leadDoDrawer && leadDoDrawer.id === lead.id) {
+            leadDoDrawer = lead;
+            preencherDrawer(lead);
+        }
+        atualizarCardDoLead(lead);
+    };
     // ─── State ──────────────────────────────────
     let funnels = [];
     let currentFunnelId = null;
@@ -361,6 +378,7 @@
     let draggedCard = null;
     let currentDetailEntry = null;
     let currentDetailLeadId = null;
+    let leadDoDrawer = null;   // LeadResponse ja carregado pelo drawer
     let allFilterTags = [];
     let selectedFilterTags = new Set();
     let leadDetailsCache = {}; // cache lead details for date filtering
@@ -895,7 +913,6 @@
 
         document.getElementById('detailOverlay').classList.add('show');
         document.getElementById('detailPanel').classList.add('open');
-        document.getElementById('detailEditLink').href = '/leads';
         const conversasBase = window.location.hostname === 'localhost' ? 'http://localhost:8001' : 'https://conversas.crmbrasileirosnoatacama.cloud';
         document.getElementById('detailConversaLink').href = `${conversasBase}/?lead_id=${leadId}`;
 
@@ -904,62 +921,8 @@
         if (!leadResp) return;
         const lead = await leadResp.json();
 
-        document.getElementById('detailName').textContent = lead.nome;
-        document.getElementById('quickStatusSelect').value = lead.status_venda || 'em_negociacao';
-        document.getElementById('detailResponsavel').value = lead.responsavel_id || '0';
-
-        let info = '';
-        info += `<div class="detail-field"><span class="detail-field-label">Email</span><span class="detail-field-value">${lead.email ? esc(lead.email) : '—'}</span></div>`;
-        info += `<div class="detail-field"><span class="detail-field-label">WhatsApp</span><span class="detail-field-value">${lead.whatsapp ? esc(lead.whatsapp) : '—'}</span></div>`;
-        info += `<div class="detail-field"><span class="detail-field-label">Destinos</span><span class="detail-field-value">${(lead.destinos || []).join(', ') || '—'}</span></div>`;
-        info += `<div class="detail-field"><span class="detail-field-label">Chegada</span><span class="detail-field-value">${lead.data_chegada ? fmtDate(lead.data_chegada) : '—'}</span></div>`;
-        info += `<div class="detail-field"><span class="detail-field-label">Partida</span><span class="detail-field-value">${lead.data_partida ? fmtDate(lead.data_partida) : '—'}</span></div>`;
-        if (lead.total_dias) {
-            info += `<div class="detail-field"><span class="detail-field-label">Total Dias</span><span class="detail-field-value">${lead.total_dias} dias</span></div>`;
-        }
-        // Per-destination dates
-        if (lead.datas_destinos && Object.keys(lead.datas_destinos).length > 0) {
-            let destDatesHtml = '';
-            Object.entries(lead.datas_destinos).forEach(([dest, datas]) => {
-                const c = datas.chegada ? fmtDate(datas.chegada) : '?';
-                const p = datas.partida ? fmtDate(datas.partida) : '?';
-                let diasStr = '';
-                if (datas.chegada && datas.partida) {
-                    const dias = Math.round((new Date(datas.partida) - new Date(datas.chegada)) / 86400000);
-                    if (dias > 0) diasStr = ` (${dias} noites)`;
-                }
-                destDatesHtml += `<div style="font-size:0.85em;padding:2px 0;">📅 ${esc(dest)}: ${c} → ${p}${diasStr}</div>`;
-            });
-            info += `<div class="detail-field"><span class="detail-field-label">Datas/Destino</span><span class="detail-field-value">${destDatesHtml}</span></div>`;
-        }
-        // Viajantes display with children info
-        let viajantesText = '';
-        if (lead.num_viajantes) {
-            viajantesText = `${lead.num_viajantes} adulto${lead.num_viajantes > 1 ? 's' : ''}`;
-            if (lead.num_criancas && lead.num_criancas > 0) {
-                viajantesText += ` + ${lead.num_criancas} criança${lead.num_criancas > 1 ? 's' : ''}`;
-                if (lead.idades_criancas) viajantesText += ` (${lead.idades_criancas} anos)`;
-            }
-        }
-        info += `<div class="detail-field"><span class="detail-field-label">Viajantes</span><span class="detail-field-value">${viajantesText || '—'}</span></div>`;
-
-        if (lead.campos_personalizados && Object.keys(lead.campos_personalizados).length) {
-            Object.entries(lead.campos_personalizados).forEach(([k, v]) => {
-                if (k === 'anotacoes') return; // shown in dedicated section
-                info += `<div class="detail-field"><span class="detail-field-label">${esc(k)}</span><span class="detail-field-value">${esc(String(v))}</span></div>`;
-            });
-        }
-        document.getElementById('detailInfo').innerHTML = info;
-
-        // Anotações (from campos_personalizados)
-        const anotacoes = (lead.campos_personalizados && lead.campos_personalizados.anotacoes) ? lead.campos_personalizados.anotacoes : '';
-        document.getElementById('detailAnotacoes').textContent = anotacoes || '—';
-
-        // Tags
-        const tagsHtml = (lead.tags || []).length > 0
-            ? lead.tags.map(t => `<span class="detail-tag chip chip-tag" style="background:${esc(t.cor)}">${esc(t.nome)}</span>`).join('')
-            : '<span style="color:var(--color-dark-300);font-size:var(--font-size-sm)">Nenhuma tag</span>';
-        document.getElementById('detailTags').innerHTML = tagsHtml;
+        leadDoDrawer = lead;   // reaproveitado pelo editor: zero GET extra
+        preencherDrawer(lead);
 
         // Load history
         try {
@@ -1016,6 +979,102 @@
         } else {
             alert('Erro ao alterar responsável');
         }
+    }
+
+    // Preenche os campos do drawer a partir de um LeadResponse. Extraido de
+    // openDetailPanel para que o save do editor possa reaproveitar o objeto que
+    // o proprio PUT devolveu, sem um GET a mais.
+    function preencherDrawer(lead) {
+        document.getElementById('detailName').textContent = lead.nome;
+        document.getElementById('quickStatusSelect').value = lead.status_venda || 'em_negociacao';
+        document.getElementById('detailResponsavel').value = lead.responsavel_id || '0';
+
+        let info = '';
+        info += `<div class="detail-field"><span class="detail-field-label">Email</span><span class="detail-field-value">${lead.email ? esc(lead.email) : '—'}</span></div>`;
+        info += `<div class="detail-field"><span class="detail-field-label">WhatsApp</span><span class="detail-field-value">${lead.whatsapp ? esc(lead.whatsapp) : '—'}</span></div>`;
+        info += `<div class="detail-field"><span class="detail-field-label">Destinos</span><span class="detail-field-value">${(lead.destinos || []).join(', ') || '—'}</span></div>`;
+        info += `<div class="detail-field"><span class="detail-field-label">Chegada</span><span class="detail-field-value">${lead.data_chegada ? fmtDate(lead.data_chegada) : '—'}</span></div>`;
+        info += `<div class="detail-field"><span class="detail-field-label">Partida</span><span class="detail-field-value">${lead.data_partida ? fmtDate(lead.data_partida) : '—'}</span></div>`;
+        if (lead.total_dias) {
+            info += `<div class="detail-field"><span class="detail-field-label">Total Dias</span><span class="detail-field-value">${lead.total_dias} dias</span></div>`;
+        }
+        // Per-destination dates
+        if (lead.datas_destinos && Object.keys(lead.datas_destinos).length > 0) {
+            let destDatesHtml = '';
+            Object.entries(lead.datas_destinos).forEach(([dest, datas]) => {
+                const c = datas.chegada ? fmtDate(datas.chegada) : '?';
+                const p = datas.partida ? fmtDate(datas.partida) : '?';
+                let diasStr = '';
+                if (datas.chegada && datas.partida) {
+                    const dias = Math.round((new Date(datas.partida) - new Date(datas.chegada)) / 86400000);
+                    if (dias > 0) diasStr = ` (${dias} noites)`;
+                }
+                destDatesHtml += `<div style="font-size:0.85em;padding:2px 0;">📅 ${esc(dest)}: ${c} → ${p}${diasStr}</div>`;
+            });
+            info += `<div class="detail-field"><span class="detail-field-label">Datas/Destino</span><span class="detail-field-value">${destDatesHtml}</span></div>`;
+        }
+        // Viajantes display with children info
+        let viajantesText = '';
+        if (lead.num_viajantes) {
+            viajantesText = `${lead.num_viajantes} adulto${lead.num_viajantes > 1 ? 's' : ''}`;
+            if (lead.num_criancas && lead.num_criancas > 0) {
+                viajantesText += ` + ${lead.num_criancas} criança${lead.num_criancas > 1 ? 's' : ''}`;
+                if (lead.idades_criancas) viajantesText += ` (${lead.idades_criancas} anos)`;
+            }
+        }
+        info += `<div class="detail-field"><span class="detail-field-label">Viajantes</span><span class="detail-field-value">${viajantesText || '—'}</span></div>`;
+
+        if (lead.campos_personalizados && Object.keys(lead.campos_personalizados).length) {
+            Object.entries(lead.campos_personalizados).forEach(([k, v]) => {
+                if (k === 'anotacoes') return; // shown in dedicated section
+                info += `<div class="detail-field"><span class="detail-field-label">${esc(k)}</span><span class="detail-field-value">${esc(String(v))}</span></div>`;
+            });
+        }
+        document.getElementById('detailInfo').innerHTML = info;
+
+        // Anotações (from campos_personalizados)
+        const anotacoes = (lead.campos_personalizados && lead.campos_personalizados.anotacoes) ? lead.campos_personalizados.anotacoes : '';
+        document.getElementById('detailAnotacoes').textContent = anotacoes || '—';
+
+        // Tags
+        const tagsHtml = (lead.tags || []).length > 0
+            ? lead.tags.map(t => `<span class="detail-tag chip chip-tag" style="background:${esc(t.cor)}">${esc(t.nome)}</span>`).join('')
+            : '<span style="color:var(--color-dark-300);font-size:var(--font-size-sm)">Nenhuma tag</span>';
+        document.getElementById('detailTags').innerHTML = tagsHtml;
+    }
+
+    // O drawer ja carregou o LeadResponse completo em openDetailPanel; o editor
+    // reaproveita esse objeto. Nenhuma navegacao para /leads.
+    function editarLeadDoDrawer() {
+        if (leadDoDrawer) openLeadModal(leadDoDrawer);
+    }
+
+    // Troca SO o card deste lead. renderStage() reaplicaria a classe de target
+    // e dispararia scrollIntoView — efeito colateral que nao queremos num save.
+    function atualizarCardDoLead(lead) {
+        for (const [stageId, st] of Object.entries(stageState)) {
+            const i = (st.items || []).findIndex(c => c.lead_id === lead.id);
+            if (i < 0) continue;
+            const card = st.items[i] = Object.assign({}, st.items[i], {
+                nome: lead.nome, email: lead.email, whatsapp: lead.whatsapp,
+                destinos: lead.destinos, tags: lead.tags,
+                num_viajantes: lead.num_viajantes, num_criancas: lead.num_criancas,
+                data_chegada: lead.data_chegada,
+                responsavel_nome: lead.responsavel_nome,
+            });
+            const body = document.getElementById('body-' + stageId);
+            const el = body && body.querySelector('[data-lead-id="' + lead.id + '"]');
+            if (el) {
+                const eraAlvo = el.classList.contains('pipeline-target-card');
+                el.outerHTML = renderLeadCard(card);
+                if (eraAlvo) {
+                    const novo = body.querySelector('[data-lead-id="' + lead.id + '"]');
+                    if (novo) novo.classList.add('pipeline-target-card');
+                }
+            }
+            return true;
+        }
+        return false;
     }
 
     function closeDetailPanel() {
