@@ -1,18 +1,22 @@
 import logging
-from typing import Optional
+from datetime import date, datetime, timedelta, timezone
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy import func, or_, tuple_, String
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.database import get_db
+from app.database import get_db, IS_SQLITE
 from app.models.pipeline import Funnel, FunnelEntry, LeadHistory
 from app.models.lead import Lead
+from app.models.tag import lead_tags
 from app.models.user import User
 from app.schemas.pipeline import (
     FunnelCreate, FunnelUpdate, FunnelResponse, FunnelListResponse,
     FunnelEntryCreate, FunnelEntryMove, FunnelEntryTransfer, FunnelEntryResponse,
     LeadCardResponse, KanbanStageResponse, KanbanBoardResponse,
     HistoryResponse, HistoryListResponse,
+    KanbanStageMeta, KanbanBoardMeta, StageCardsResponse, LeadLocationResponse,
 )
 from app.schemas.tag import TagResponse
 from app.auth import get_current_user, require_admin
@@ -38,6 +42,39 @@ def _log_event(db: Session, lead_id: int, evento: str, descricao: str,
     )
     db.add(entry)
     return entry
+
+
+def _responsavel_nome(lead: Lead, db: Session, cache: dict) -> Optional[str]:
+    """Nome do responsavel, com cache por request (evita query por card)."""
+    if lead.responsavel_id is None:
+        return "Agente IA"
+    if lead.responsavel_id not in cache:
+        user = db.query(User).filter(User.id == lead.responsavel_id).first()
+        cache[lead.responsavel_id] = user.nome if user else None
+    return cache[lead.responsavel_id]
+
+
+def _card(entry: FunnelEntry, lead: Lead, resp_nome: Optional[str]) -> LeadCardResponse:
+    """Monta o card. Unico lugar que define o payload — board antigo e board
+    paginado usam este helper, entao os dois nao podem divergir."""
+    return LeadCardResponse(
+        entry_id=entry.id,
+        lead_id=lead.id,
+        nome=lead.nome,
+        email=lead.email,
+        whatsapp=lead.whatsapp,
+        destinos=lead.destinos,
+        data_chegada=lead.data_chegada,
+        data_partida=lead.data_partida,
+        num_viajantes=lead.num_viajantes,
+        etapa_id=entry.etapa_id,
+        posicao=entry.posicao,
+        tags=[TagResponse.model_validate(t) for t in lead.tags],
+        responsavel_id=lead.responsavel_id,
+        responsavel_nome=resp_nome,
+        entry_created_at=entry.created_at,
+        entry_updated_at=entry.updated_at,
+    )
 
 
 def _get_stage_name(funnel: Funnel, stage_id: str) -> str:
@@ -216,36 +253,8 @@ def get_kanban_board(
                     elif responsavel_id != 0 and lead.responsavel_id != responsavel_id:
                         continue
 
-                # Get responsavel name
-                resp_nome = None
-                if lead.responsavel_id is None:
-                    resp_nome = "Agente IA"
-                elif lead.responsavel_id in user_cache:
-                    resp_nome = user_cache[lead.responsavel_id]
-                else:
-                    user = db.query(User).filter(User.id == lead.responsavel_id).first()
-                    resp_nome = user.nome if user else None
-                    user_cache[lead.responsavel_id] = resp_nome
-
                 stage_entries[entry.etapa_id].append(
-                    LeadCardResponse(
-                        entry_id=entry.id,
-                        lead_id=lead.id,
-                        nome=lead.nome,
-                        email=lead.email,
-                        whatsapp=lead.whatsapp,
-                        destinos=lead.destinos,
-                        data_chegada=lead.data_chegada,
-                        data_partida=lead.data_partida,
-                        num_viajantes=lead.num_viajantes,
-                        etapa_id=entry.etapa_id,
-                        posicao=entry.posicao,
-                        tags=[TagResponse.model_validate(t) for t in lead.tags],
-                        responsavel_id=lead.responsavel_id,
-                        responsavel_nome=resp_nome,
-                        entry_created_at=entry.created_at,
-                        entry_updated_at=entry.updated_at,
-                    )
+                    _card(entry, lead, _responsavel_nome(lead, db, user_cache))
                 )
 
         stages = []
@@ -268,6 +277,269 @@ def get_kanban_board(
     except Exception as e:
         logging.exception("Erro ao carregar board kanban")
         raise HTTPException(status_code=500, detail="Erro interno do servidor")
+
+
+# ─── Board paginado por etapa (PERF-PIPE-01) ─────
+# O endpoint /board/{id} acima continua intacto para compatibilidade. O caminho
+# novo e: /meta desenha o esqueleto e cada coluna busca seus proprios cards.
+#
+# ORDENACAO: (updated_at DESC, id DESC).
+#   - `posicao` NAO serve de chave: e sempre COUNT(etapa) na escrita, logo
+#     REPETE quando entries saem da etapa. Ordenar por ela paginando duplicaria
+#     e pularia cards.
+#   - `updated_at` muda quando move_lead_stage troca a etapa, entao o lead
+#     recem-movido aparece no topo — que e o requisito.
+#   - `id DESC` e o desempate deterministico exigido pelo keyset.
+# As ESCRITAS de `posicao` ficam exatamente como estavam: nada em add/move/
+# transfer foi tocado. Isso e seguro porque o frontend nunca envia `posicao`
+# (onDrop manda so `etapa_id`), ou seja, nao existe reordenacao manual hoje.
+
+_PERIODOS = {"hoje": 1, "3d": 3, "7d": 7, "30d": 30}
+
+
+def _json_list_contains(column, value: str):
+    """Mesma expressao de leads.py/segments.py: @> com cast jsonb no PostgreSQL
+    (a coluna e `json`), LIKE no SQLite."""
+    if IS_SQLITE:
+        return column.cast(String).ilike(f'%"{value}"%')
+    import json
+    from sqlalchemy.dialects.postgresql import JSONB
+    return column.cast(JSONB).op("@>")(json.dumps([value]))
+
+
+def _cursor_encode(entry: FunnelEntry) -> Optional[str]:
+    """
+    `updated_at` e nullable no DDL (server_default=now(), sem NOT NULL). Pela
+    aplicacao nunca fica NULL — nenhum caminho de codigo o define e o default
+    do banco sempre preenche. Mas uma linha inserida por SQL direto poderia
+    ter NULL e derrubaria o .isoformat() aqui. Sem cursor, a coluna para de
+    paginar em vez de estourar 500.
+    """
+    if entry.updated_at is None:
+        return None
+    return f"{entry.updated_at.isoformat()}|{entry.id}"
+
+
+def _cursor_decode(cursor: str):
+    """('<iso>|<id>') -> (datetime, int). Cursor invalido = primeira pagina."""
+    try:
+        ts, eid = cursor.split("|", 1)
+        return datetime.fromisoformat(ts), int(eid)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _stage_query(db: Session, funnel_id: str, etapa_id: str, f: dict):
+    """
+    Query base de UMA etapa com TODOS os filtros aplicados em SQL.
+
+    Cobre os mesmos criterios que a barra de filtros do Pipeline aplicava no
+    JavaScript sobre o board inteiro. Com paginacao isso deixou de ser possivel:
+    filtrar no cliente so veria os cards ja carregados.
+    """
+    query = (
+        db.query(FunnelEntry)
+        .join(Lead, Lead.id == FunnelEntry.lead_id)
+        .filter(
+            FunnelEntry.funnel_id == funnel_id,
+            FunnelEntry.etapa_id == etapa_id,
+            Lead.is_active == True,  # noqa: E712 — mesma regra do board antigo
+        )
+    )
+    if f.get("q"):
+        termo = f"%{f['q'].strip()}%"
+        query = query.filter(or_(
+            Lead.nome.ilike(termo), Lead.whatsapp.ilike(termo), Lead.email.ilike(termo)
+        ))
+    if f.get("periodo") in _PERIODOS:
+        limite = datetime.now(timezone.utc) - timedelta(days=_PERIODOS[f["periodo"]])
+        query = query.filter(FunnelEntry.updated_at >= limite)
+    if f.get("responsavel_id") is not None:
+        if f["responsavel_id"] == 0:
+            query = query.filter(Lead.responsavel_id.is_(None))
+        else:
+            query = query.filter(Lead.responsavel_id == f["responsavel_id"])
+    if f.get("destino"):
+        query = query.filter(_json_list_contains(Lead.destinos, f["destino"]))
+    if f.get("tag_ids"):
+        sub = db.query(lead_tags.c.lead_id).filter(lead_tags.c.tag_id.in_(f["tag_ids"]))
+        query = query.filter(Lead.id.in_(sub.subquery()))
+    if f.get("viajantes_min") is not None:
+        query = query.filter(Lead.num_viajantes >= f["viajantes_min"])
+    if f.get("chegada_de"):
+        query = query.filter(Lead.data_chegada >= f["chegada_de"])
+    if f.get("chegada_ate"):
+        query = query.filter(Lead.data_chegada <= f["chegada_ate"])
+    return query
+
+
+@router.get("/board/{funnel_id}/meta", response_model=KanbanBoardMeta,
+            summary="Esqueleto do board (etapas + contagens, SEM cards)")
+def get_board_meta(
+    funnel_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Devolve funil, etapas e total por etapa — nenhum card.
+
+    A contagem sai de UM GROUP BY, nao de um COUNT por etapa.
+    """
+    funnel = db.query(Funnel).filter(Funnel.id == funnel_id).first()
+    if not funnel:
+        raise HTTPException(status_code=404, detail="Funil não encontrado")
+
+    contagens = dict(
+        db.query(FunnelEntry.etapa_id, func.count(FunnelEntry.id))
+        .join(Lead, Lead.id == FunnelEntry.lead_id)
+        .filter(FunnelEntry.funnel_id == funnel_id, Lead.is_active == True)  # noqa: E712
+        .group_by(FunnelEntry.etapa_id)
+        .all()
+    )
+
+    stages = [
+        KanbanStageMeta(
+            id=s["id"],
+            nome=s["nome"],
+            dias_limite=s.get("dias_limite", 7),
+            total=contagens.get(s["id"], 0),
+        )
+        for s in funnel.etapas
+    ]
+    return KanbanBoardMeta(
+        funnel=FunnelResponse.model_validate(funnel),
+        stages=stages,
+        total_leads=sum(s.total for s in stages),
+    )
+
+
+@router.get("/board/{funnel_id}/stage/{etapa_id}", response_model=StageCardsResponse,
+            summary="Cards de UMA etapa, paginados por cursor")
+def get_stage_cards(
+    funnel_id: int,
+    etapa_id: str,
+    limit: int = Query(30, ge=1, le=100),
+    cursor: Optional[str] = Query(None, description="next_cursor da página anterior"),
+    q: Optional[str] = Query(None, description="Busca em nome ou whatsapp"),
+    periodo: Optional[str] = Query(None, description="hoje | 3d | 7d | 30d"),
+    responsavel_id: Optional[int] = Query(None, description="0 = Agente IA"),
+    destino: Optional[str] = Query(None),
+    tag_ids: Optional[List[int]] = Query(None),
+    viajantes_min: Optional[int] = Query(None),
+    chegada_de: Optional[date] = Query(None),
+    chegada_ate: Optional[date] = Query(None),
+    include_lead_id: Optional[int] = Query(
+        None, description="Se este lead existir na etapa e ficar fora da página, vem em `target`"
+    ),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Uma página de cards da etapa. Nunca carrega a etapa inteira."""
+    filtros = {
+        "q": q, "periodo": periodo, "responsavel_id": responsavel_id,
+        "destino": destino, "tag_ids": tag_ids, "viajantes_min": viajantes_min,
+        "chegada_de": chegada_de, "chegada_ate": chegada_ate,
+    }
+    base = _stage_query(db, funnel_id, etapa_id, filtros)
+    total = base.count()
+
+    pagina = base.options(
+        joinedload(FunnelEntry.lead).selectinload(Lead.tags)
+    ).order_by(FunnelEntry.updated_at.desc(), FunnelEntry.id.desc())
+
+    if cursor:
+        decodificado = _cursor_decode(cursor)
+        if decodificado:
+            ts, eid = decodificado
+            pagina = pagina.filter(
+                tuple_(FunnelEntry.updated_at, FunnelEntry.id) < (ts, eid)
+            )
+
+    # limit+1 para saber se ha proxima pagina sem um COUNT extra
+    entries = pagina.limit(limit + 1).all()
+    has_more = len(entries) > limit
+    entries = entries[:limit]
+
+    cache: dict = {}
+    items = [_card(e, e.lead, _responsavel_nome(e.lead, db, cache)) for e in entries]
+
+    # Deep-link: se o alvo nao caiu nesta pagina, busca SO ele (1 query),
+    # sem carregar os cards que vem antes dele.
+    target = None
+    if include_lead_id and not any(i.lead_id == include_lead_id for i in items):
+        alvo = (
+            _stage_query(db, funnel_id, etapa_id, {})
+            .filter(Lead.id == include_lead_id)
+            .options(joinedload(FunnelEntry.lead).selectinload(Lead.tags))
+            .first()
+        )
+        if alvo:
+            target = _card(alvo, alvo.lead, _responsavel_nome(alvo.lead, db, cache))
+
+    return StageCardsResponse(
+        etapa_id=etapa_id,
+        items=items,
+        total=total,
+        has_more=has_more,
+        next_cursor=_cursor_encode(entries[-1]) if (has_more and entries) else None,
+        target=target,
+    )
+
+
+@router.get("/locate/{lead_id}", response_model=LeadLocationResponse,
+            summary="Em que funil/etapa um lead está (sem carregar o board)")
+def locate_lead(
+    lead_id: int,
+    prefer_funnel_id: Optional[int] = Query(
+        None, description="Funil aberto na tela — tem prioridade, como antes"
+    ),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Resolve funil + etapa + entry de um lead.
+
+    Um lead PODE estar em varios funis (nao ha unique em (lead_id, funnel_id);
+    o guard de 409 so impede repetir no MESMO funil).
+
+    Regra DECIDIDA (nao e mais a inercia do frontend antigo, que so procurava
+    dentro do funil aberto e nao fazia nada se o lead estivesse em outro):
+
+      1. entry no `prefer_funnel_id`      -> esse funil vence
+      2. sem entry la, mas ha em outro    -> localiza e abre o outro funil
+      3. nenhum FunnelEntry               -> 404
+
+    O passo 2 e o motivo de existir do deep-link Conversas -> Funil: achar o
+    lead. O desempate do fallback e (created_at ASC, id ASC) — `created_at`
+    sozinho nao basta, duas entries criadas no mesmo instante devolveriam
+    resultado nao-deterministico entre chamadas.
+    """
+    base = db.query(FunnelEntry).filter(FunnelEntry.lead_id == lead_id)
+
+    entry = None
+    if prefer_funnel_id is not None:
+        entry = (
+            base.filter(FunnelEntry.funnel_id == prefer_funnel_id)
+            .order_by(FunnelEntry.created_at, FunnelEntry.id)
+            .first()
+        )
+    if entry is None:
+        entry = base.order_by(FunnelEntry.created_at, FunnelEntry.id).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Lead não está em nenhum funil")
+
+    funnel = db.query(Funnel).filter(Funnel.id == entry.funnel_id).first()
+    if not funnel:
+        raise HTTPException(status_code=404, detail="Funil não encontrado")
+
+    return LeadLocationResponse(
+        lead_id=lead_id,
+        funnel_id=funnel.id,
+        funnel_nome=funnel.nome,
+        etapa_id=entry.etapa_id,
+        etapa_nome=_get_stage_name(funnel, entry.etapa_id),
+        entry_id=entry.id,
+    )
 
 
 # ─── Lead Entries ────────────────────────────────
