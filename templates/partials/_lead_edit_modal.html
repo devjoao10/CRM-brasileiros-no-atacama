@@ -1,0 +1,704 @@
+{# Editor de Lead compartilhado — usado por leads.html e pipeline.html.
+
+   Foi EXTRAIDO de templates/leads.html sem reescrita: HTML, CSS e as 25
+   funcoes vieram verbatim. A unica alteracao e a cauda de saveLead, que
+   deixou de chamar atualizarLinha/reloadLeads (especificos de Leads) e passou
+   a chamar o callback `onLeadSaved`, que cada pagina registra.
+
+   Nao duplique este formulario. Se precisar de um campo novo, ele entra aqui
+   uma vez e vale para as duas paginas. #}
+<style>
+        .tag-checkbox-item { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: var(--radius-full); border: 1.5px solid var(--color-dark-200); cursor: pointer; font-size: var(--font-size-xs); font-weight: var(--font-weight-medium); transition: all var(--transition-fast); user-select: none; }
+        .tag-checkbox-item:hover { border-color: var(--color-primary); }
+        .tag-checkbox-item.checked { color: #fff; border-color: transparent; }
+        .tag-checkbox-item input { display: none; }
+        .tags-checkboxes { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+        .custom-fields-section { margin-top: var(--space-4); }
+        .custom-fields-section h4 {
+            font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold);
+            color: var(--color-dark-500); margin-bottom: var(--space-3);
+            display: flex; align-items: center; gap: var(--space-2);
+        }
+        .custom-field-row {
+            display: flex; gap: var(--space-2); margin-bottom: var(--space-2);
+            align-items: center;
+        }
+        .custom-field-row input {
+            flex: 1; padding: var(--space-2) var(--space-3);
+            font-family: var(--font-family); font-size: var(--font-size-sm);
+            border: 1.5px solid var(--color-dark-200); border-radius: var(--radius-md);
+            outline: none;
+        }
+        .custom-field-row input:focus { border-color: var(--color-primary); }
+        .custom-field-row .remove-field {
+            background: none; border: none; cursor: pointer; color: var(--color-error);
+            font-size: var(--font-size-lg); padding: var(--space-1);
+        }
+        .multi-select-wrapper { position: relative; }
+        .multi-select-trigger {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: var(--space-2) var(--space-3);
+            font-family: var(--font-family); font-size: var(--font-size-sm);
+            border: 1.5px solid var(--color-dark-200); border-radius: var(--radius-md);
+            background: var(--color-white); color: var(--color-dark);
+            cursor: pointer; min-width: 150px; transition: border-color var(--transition-fast);
+            user-select: none;
+        }
+        .multi-select-trigger:hover, .multi-select-trigger.open { border-color: var(--color-primary); }
+        .multi-select-trigger .trigger-text { flex: 1; text-align: left; color: var(--color-dark-500); }
+        .multi-select-trigger .trigger-text.has-value { color: var(--color-dark); font-weight: var(--font-weight-medium); }
+        .multi-select-trigger .chevron { transition: transform var(--transition-fast); color: var(--color-dark-400); }
+        .multi-select-trigger.open .chevron { transform: rotate(180deg); }
+        .multi-select-dropdown {
+            display: none; position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+            background: var(--color-white); border: 1.5px solid var(--color-primary);
+            border-radius: var(--radius-lg); box-shadow: var(--shadow-md);
+            z-index: 200; overflow: hidden;
+        }
+        .multi-select-dropdown.open { display: block; }
+        .multi-select-option {
+            display: flex; align-items: center; gap: var(--space-3);
+            padding: 10px var(--space-4); cursor: pointer;
+            font-size: var(--font-size-sm); color: var(--color-dark);
+            transition: background var(--transition-fast);
+        }
+        .multi-select-option:hover { background: var(--color-dark-100); }
+        .multi-select-option.selected { background: var(--color-primary-light); color: var(--color-primary); }
+        .multi-select-option .check-icon {
+            width: 16px; height: 16px; border: 1.5px solid var(--color-dark-300);
+            border-radius: 4px; display: flex; align-items: center; justify-content: center;
+            flex-shrink: 0; transition: all var(--transition-fast);
+        }
+        .multi-select-option.selected .check-icon {
+            background: var(--color-primary); border-color: var(--color-primary);
+        }
+        .multi-select-option.selected .check-icon::after {
+            content: ''; display: block; width: 9px; height: 5px;
+            border-left: 2px solid white; border-bottom: 2px solid white;
+            transform: rotate(-45deg) translate(1px, -1px);
+        }
+        .add-field-btn {
+            font-size: var(--font-size-sm); color: var(--color-primary);
+            background: none; border: 1.5px dashed var(--color-primary);
+            border-radius: var(--radius-md); padding: var(--space-2) var(--space-4);
+            cursor: pointer; transition: all var(--transition-fast);
+            width: 100%;
+        }
+        .add-field-btn:hover { background: rgba(43,108,176,0.05); }
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
+        .form-row .form-group { margin-bottom: var(--space-4); }
+            .form-row { grid-template-columns: 1fr; }
+        .form-group.full-width { grid-column: 1 / -1; }
+    @media (max-width: 768px) {
+        .form-row { grid-template-columns: 1fr; }
+    }
+</style>
+
+    <div class="modal-overlay" id="leadModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="leadModalTitle">Novo Lead</h3>
+                <button class="modal-close" onclick="closeLeadModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div id="leadModalAlert" class="alert alert-error hidden" style="margin-bottom:var(--space-4);">
+                    <span id="leadModalAlertMsg"></span>
+                </div>
+                <form id="leadForm">
+                    <input type="hidden" id="leadId">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" for="leadNome">Nome *</label>
+                            <input type="text" id="leadNome" class="form-input" placeholder="Nome completo" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="leadEmail">Email</label>
+                            <input type="email" id="leadEmail" class="form-input" placeholder="email@exemplo.com">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" for="leadWhatsapp">WhatsApp <span style="font-weight:400;color:var(--color-dark-400);font-size:11px;">(ex: 48 98871-1776)</span></label>
+                            <input type="tel" id="leadWhatsapp" class="form-input" placeholder="48 98871-1776" maxlength="20" oninput="formatWhatsappInput(this)">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Destinos</label>
+                            <div class="multi-select-wrapper" id="destinosWrapper">
+                                <div class="multi-select-trigger" id="destinosTrigger" onclick="toggleDestinosDropdown()">
+                                    <span class="trigger-text" id="destinosDisplay">Selecione os destinos</span>
+                                    <span class="chevron">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                                    </span>
+                                </div>
+                                <div class="multi-select-dropdown" id="destinosDropdown">
+                                    <div class="multi-select-option" data-value="Atacama" onclick="toggleDestinoOption(this)">
+                                        <span class="check-icon"></span> Atacama
+                                    </div>
+                                    <div class="multi-select-option" data-value="Uyuni" onclick="toggleDestinoOption(this)">
+                                        <span class="check-icon"></span> Uyuni
+                                    </div>
+                                    <div class="multi-select-option" data-value="Santiago" onclick="toggleDestinoOption(this)">
+                                        <span class="check-icon"></span> Santiago
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" for="leadChegada">Data de Chegada</label>
+                            <input type="date" id="leadChegada" class="form-input" onchange="onDatasGeraisChange()">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="leadPartida">Data de Partida</label>
+                            <input type="date" id="leadPartida" class="form-input" onchange="onDatasGeraisChange()">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="leadTotalDias">Total de Dias</label>
+                            <input type="number" id="leadTotalDias" class="form-input" placeholder="Ex: 7" min="1">
+                        </div>
+                    </div>
+                    <!-- Dias por destino (shown when 2+ destinations) -->
+                    <div id="diasDestinoContainer" style="display:none;margin-bottom:16px;">
+                        <label class="form-label" style="margin-bottom:8px;font-weight:600;">📊 Dias por Destino</label>
+                        <div id="diasDestinoInputs" style="display:flex;flex-wrap:wrap;gap:12px;"></div>
+                    </div>
+                    <!-- Per-destination dates (shown when 2+ destinations) -->
+                    <div id="datasDestinosContainer" style="display:none;margin-bottom:16px;">
+                        <label class="form-label" style="margin-bottom:8px;font-weight:600;">📅 Datas por Destino <span style="font-weight:400;opacity:0.6;font-size:0.85em;">(opcional)</span></label>
+                        <div id="datasDestinosAlert" style="display:none;background:var(--danger,#ef4444);color:#fff;padding:6px 12px;border-radius:6px;margin-bottom:8px;font-size:0.85em;"></div>
+                        <div id="datasDestinosInputs"></div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" for="leadNumViajantes">Nº de Adultos</label>
+                            <input type="number" id="leadNumViajantes" class="form-input" placeholder="Ex: 2" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="leadNumCriancas">Nº de Crianças</label>
+                            <input type="number" id="leadNumCriancas" class="form-input" placeholder="0" min="0" value="0" oninput="renderIdadesCriancas()">
+                        </div>
+                    </div>
+                    <div id="idadesCriancasContainer" style="display:none;margin-bottom:16px;">
+                        <label class="form-label">Idades das Crianças</label>
+                        <div id="idadesCriancasInputs" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" for="leadStatusVenda">Status (Oportunidade)</label>
+                            <select id="leadStatusVenda" class="form-input" required>
+                                <option value="em_negociacao">Em Negociação</option>
+                                <option value="venda">Venda Fechada (Ganhou)</option>
+                                <option value="perda">Perdido (Arquivo)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Anotações -->
+                    <div class="custom-fields-section">
+                        <h4>Anotações</h4>
+                        <textarea id="leadAnotacoes" class="form-input" rows="5" placeholder="Observações sobre este lead..." style="resize:vertical;font-family:inherit;white-space:pre-wrap;line-height:1.6;"></textarea>
+                    </div>
+
+                    <!-- Tags -->
+                    <div class="custom-fields-section">
+                        <h4>Tags</h4>
+                        <div class="tags-checkboxes" id="leadTagsContainer">Carregando tags...</div>
+                    </div>
+
+                    <!-- Custom Fields -->
+                    <div class="custom-fields-section">
+                        <h4>Campos Personalizados</h4>
+                        <div id="customFieldsContainer"></div>
+                        <button type="button" class="add-field-btn" onclick="addCustomField()">
+                            + Adicionar campo
+                        </button>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeLeadModal()">Cancelar</button>
+                <button class="btn btn-primary" id="leadSaveBtn" onclick="saveLead()">
+                    <span id="leadSaveBtnText">Salvar</span>
+                    <div id="leadSaveSpinner" class="spinner hidden"></div>
+                </button>
+            </div>
+        </div>
+    </div>
+
+<script>
+    // ─── Editor de Lead (compartilhado) ─────────────────────────────
+
+    // Cada pagina registra o que fazer depois de um save bem-sucedido.
+    // Assinatura: (leadAtualizado, idDoFormulario) -> Promise|void
+    let onLeadSaved = null;
+
+    // Guarda de save em andamento. O botao desabilitado ja barra o clique
+    // duplo, mas a guarda vale tambem para chamada programatica e para o
+    // Enter no formulario — dois PUTs concorrentes gravariam duas vezes.
+    let salvandoLead = false;
+
+    let allTags = [];
+    let currentLeadTags = [];
+    let _currentDiasDestino = {};
+    let _currentDatasDestinos = {};   // preserva valores entre re-renders
+
+    function openLeadModal(lead = null) {
+        document.getElementById('leadModal').classList.add('show');
+        document.getElementById('leadModalTitle').textContent = lead ? 'Editar Lead' : 'Novo Lead';
+        document.getElementById('leadModalAlert').classList.add('hidden');
+
+        document.getElementById('leadId').value = lead ? lead.id : '';
+        document.getElementById('leadNome').value = lead ? lead.nome : '';
+        document.getElementById('leadEmail').value = lead ? lead.email || '' : '';
+        // Exibe o número formatado visualmente no input
+        document.getElementById('leadWhatsapp').value = lead ? displayWhatsapp(lead.whatsapp) : '';
+        // Destinos select
+        const selDests = lead ? (lead.destinos || []) : [];
+        setDestinosSelection(selDests);
+        document.getElementById('leadChegada').value = lead ? lead.data_chegada || '' : '';
+        document.getElementById('leadPartida').value = lead ? lead.data_partida || '' : '';
+        document.getElementById('leadTotalDias').value = lead ? lead.total_dias || '' : '';
+        // Load per-destination dates
+        _currentDatasDestinos = (lead && lead.datas_destinos) ? { ...lead.datas_destinos } : {};
+        renderDatasDestinos();
+        // Load per-destination days
+        _currentDiasDestino = (lead && lead.dias_por_destino) ? { ...lead.dias_por_destino } : {};
+        renderDiasDestino();
+        document.getElementById('leadNumViajantes').value = lead ? lead.num_viajantes || '' : '';
+        document.getElementById('leadNumCriancas').value = lead ? lead.num_criancas || 0 : 0;
+        renderIdadesCriancas();
+        // Fill children ages
+        if (lead && lead.idades_criancas) {
+            const idades = lead.idades_criancas.split(',').map(s => s.trim());
+            const inputs = document.querySelectorAll('.idade-crianca-input');
+            idades.forEach((idade, i) => {
+                if (inputs[i]) inputs[i].value = idade;
+            });
+        }
+        document.getElementById('leadStatusVenda').value = lead ? (lead.status_venda || 'em_negociacao') : 'em_negociacao';
+
+        // Anotações
+        const campos = (lead && lead.campos_personalizados) ? lead.campos_personalizados : {};
+        document.getElementById('leadAnotacoes').value = campos.anotacoes || '';
+
+        // Tags
+        currentLeadTags = lead && lead.tags ? lead.tags.map(t => t.id) : [];
+        renderTagCheckboxes(currentLeadTags);
+
+        // Custom fields (exceto anotacoes que tem campo proprio)
+        const container = document.getElementById('customFieldsContainer');
+        container.innerHTML = '';
+        if (lead && lead.campos_personalizados) {
+            Object.entries(lead.campos_personalizados).forEach(([key, val]) => {
+                if (key !== 'anotacoes') addCustomField(key, val);
+            });
+        }
+    }
+
+    function closeLeadModal() {
+        document.getElementById('leadModal').classList.remove('show');
+    }
+
+    function showLeadAlert(msg) {
+        document.getElementById('leadModalAlertMsg').textContent = msg;
+        document.getElementById('leadModalAlert').classList.remove('hidden');
+    }
+
+    function setLeadSaving(saving) {
+        document.getElementById('leadSaveBtn').disabled = saving;
+        document.getElementById('leadSaveBtnText').textContent = saving ? 'Salvando...' : 'Salvar';
+        document.getElementById('leadSaveSpinner').classList.toggle('hidden', !saving);
+    }
+
+    function normalizeWhatsapp(raw) {
+        if (!raw) return null;
+        // Remove tudo que não for dígito
+        let digits = raw.replace(/\D/g, '');
+        // Remove o 55 do Brasil se já vier junto
+        if (digits.startsWith('55') && digits.length >= 12) {
+            digits = digits.slice(2);
+        }
+        // Valida: precisa ter 10 ou 11 dígitos (DDD + número)
+        if (digits.length < 10 || digits.length > 11) return null;
+        return '55' + digits;
+    }
+
+    function displayWhatsapp(stored) {
+        if (!stored) return '';
+        let d = stored.replace(/\D/g, '');
+        if (d.startsWith('55')) d = d.slice(2);
+        if (d.length === 11) return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`;
+        if (d.length === 10) return `(${d.slice(0,2)}) ${d.slice(2,6)}-${d.slice(6)}`;
+        return stored; // retorna original se não reconhecer
+    }
+
+    function setDestinosSelection(values) {
+        document.querySelectorAll('#destinosDropdown .multi-select-option').forEach(el => {
+            el.classList.toggle('selected', values.includes(el.dataset.value));
+        });
+        updateDestinosDisplay();
+    }
+
+    function getSelectedDestinos() {
+        return Array.from(document.querySelectorAll('#destinosDropdown .multi-select-option.selected'))
+            .map(el => el.dataset.value);
+    }
+
+    function toggleDestinosDropdown() {
+        const trigger = document.getElementById('destinosTrigger');
+        const dropdown = document.getElementById('destinosDropdown');
+        trigger.classList.toggle('open');
+        dropdown.classList.toggle('open');
+    }
+
+    function toggleDestinoOption(el) {
+        el.classList.toggle('selected');
+        updateDestinosDisplay();
+    }
+
+    function updateDestinosDisplay() {
+        const selected = Array.from(document.querySelectorAll('#destinosDropdown .multi-select-option.selected'))
+            .map(el => el.dataset.value);
+        const display = document.getElementById('destinosDisplay');
+        if (selected.length === 0) {
+            display.textContent = 'Selecione os destinos';
+            display.classList.remove('has-value');
+        } else {
+            display.textContent = selected.join(', ');
+            display.classList.add('has-value');
+        }
+        renderDatasDestinos();
+        renderDiasDestino();
+    }
+
+    function renderIdadesCriancas() {
+        const n = parseInt(document.getElementById('leadNumCriancas').value) || 0;
+        const container = document.getElementById('idadesCriancasContainer');
+        const inputs = document.getElementById('idadesCriancasInputs');
+
+        if (n <= 0) {
+            container.style.display = 'none';
+            inputs.innerHTML = '';
+            return;
+        }
+
+        container.style.display = 'block';
+        // Preserve existing values
+        const existing = Array.from(inputs.querySelectorAll('.idade-crianca-input')).map(el => el.value);
+
+        inputs.innerHTML = '';
+        for (let i = 0; i < n; i++) {
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.className = 'form-input idade-crianca-input';
+            input.placeholder = `Criança ${i + 1}`;
+            input.min = '0';
+            input.max = '17';
+            input.style.width = '100px';
+            if (existing[i]) input.value = existing[i];
+            inputs.appendChild(input);
+        }
+    }
+
+    function getIdadesCriancasString() {
+        const inputs = document.querySelectorAll('.idade-crianca-input');
+        if (inputs.length === 0) return null;
+        const idades = Array.from(inputs).map(el => el.value.trim()).filter(v => v !== '');
+        return idades.length > 0 ? idades.join(', ') : null;
+    }
+
+    function renderDiasDestino() {
+        const destinos = getSelectedDestinos();
+        const container = document.getElementById('diasDestinoContainer');
+        const inputsDiv = document.getElementById('diasDestinoInputs');
+
+        if (destinos.length < 2) {
+            container.style.display = 'none';
+            inputsDiv.innerHTML = '';
+            return;
+        }
+
+        container.style.display = 'block';
+
+        // Save current values before re-render
+        document.querySelectorAll('.dias-destino-input').forEach(el => {
+            if (el.value) _currentDiasDestino[el.dataset.destino] = el.value;
+        });
+
+        const destColors = { 'Atacama': '#e85d04', 'Uyuni': '#7b2cbf', 'Santiago': '#2b6cb0' };
+
+        inputsDiv.innerHTML = destinos.map(dest => {
+            const color = destColors[dest] || '#6c757d';
+            const savedVal = _currentDiasDestino[dest] || '';
+            return `
+                <div style="display:flex;align-items:center;gap:8px;background:#f8f9fa;border:1px solid #e2e8f0;border-left:4px solid ${color};border-radius:8px;padding:8px 14px;min-width:160px;">
+                    <strong style="font-size:0.85em;color:${color};white-space:nowrap;">${dest}</strong>
+                    <input type="number" class="form-input dias-destino-input" data-destino="${dest}" 
+                        value="${savedVal}" placeholder="dias" min="1" 
+                        style="width:70px;text-align:center;font-size:0.9em;"
+                        oninput="onDiasDestinoChange()">
+                    <span style="font-size:0.8em;color:#64748b;">dias</span>
+                </div>`;
+        }).join('');
+    }
+
+    function onDiasDestinoChange() {
+        // Auto-sum dias per destino to total
+        let soma = 0;
+        document.querySelectorAll('.dias-destino-input').forEach(el => {
+            soma += parseInt(el.value) || 0;
+        });
+        if (soma > 0) {
+            document.getElementById('leadTotalDias').value = soma;
+        }
+    }
+
+    function getDiasPorDestinoJSON() {
+        const result = {};
+        document.querySelectorAll('.dias-destino-input').forEach(el => {
+            const dest = el.dataset.destino;
+            const dias = parseInt(el.value);
+            if (dias > 0) result[dest] = dias;
+        });
+        return Object.keys(result).length > 0 ? result : null;
+    }
+
+    function renderDatasDestinos() {
+        const destinos = getSelectedDestinos();
+        const container = document.getElementById('datasDestinosContainer');
+        const inputsDiv = document.getElementById('datasDestinosInputs');
+        const alertDiv = document.getElementById('datasDestinosAlert');
+        alertDiv.style.display = 'none';
+
+        if (destinos.length < 2) {
+            container.style.display = 'none';
+            inputsDiv.innerHTML = '';
+            return;
+        }
+
+        container.style.display = 'block';
+
+        // Save current values before re-render
+        document.querySelectorAll('.destino-date-block').forEach(block => {
+            const dest = block.dataset.destino;
+            const chegada = block.querySelector('.dest-chegada')?.value || '';
+            const partida = block.querySelector('.dest-partida')?.value || '';
+            if (chegada || partida) _currentDatasDestinos[dest] = { chegada, partida };
+        });
+
+        const chegadaGeral = document.getElementById('leadChegada').value;
+        const partidaGeral = document.getElementById('leadPartida').value;
+
+        const destColors = { 'Atacama': '#e85d04', 'Uyuni': '#7b2cbf', 'Santiago': '#2b6cb0' };
+
+        inputsDiv.innerHTML = destinos.map(dest => {
+            const saved = _currentDatasDestinos[dest] || {};
+            const color = destColors[dest] || '#6c757d';
+            return `
+                <div class="destino-date-block" data-destino="${dest}" style="background:#f8f9fa;border:1px solid #e2e8f0;border-left:4px solid ${color};border-radius:8px;padding:10px 14px;margin-bottom:8px;">
+                    <strong style="font-size:0.9em;color:${color};">${dest}</strong>
+                    <div style="display:flex;gap:12px;margin-top:6px;">
+                        <div style="flex:1;">
+                            <label style="font-size:0.8em;color:#64748b;">Chegada</label>
+                            <input type="date" class="form-input dest-chegada" value="${saved.chegada || ''}"
+                                ${chegadaGeral ? `min="${chegadaGeral}"` : ''} ${partidaGeral ? `max="${partidaGeral}"` : ''}
+                                onchange="validateDatasDestinos()">
+                        </div>
+                        <div style="flex:1;">
+                            <label style="font-size:0.8em;color:#64748b;">Partida</label>
+                            <input type="date" class="form-input dest-partida" value="${saved.partida || ''}"
+                                ${chegadaGeral ? `min="${chegadaGeral}"` : ''} ${partidaGeral ? `max="${partidaGeral}"` : ''}
+                                onchange="validateDatasDestinos()">
+                        </div>
+                    </div>
+                </div>`;
+        }).join('');
+    }
+
+    function onDatasGeraisChange() {
+        const chegada = document.getElementById('leadChegada').value;
+        const partida = document.getElementById('leadPartida').value;
+        // Auto-calculate total_dias
+        if (chegada && partida) {
+            const diff = Math.round((new Date(partida) - new Date(chegada)) / 86400000);
+            if (diff > 0) document.getElementById('leadTotalDias').value = diff;
+        }
+        // Re-render to update min/max constraints
+        renderDatasDestinos();
+    }
+
+    function validateDatasDestinos() {
+        const alertDiv = document.getElementById('datasDestinosAlert');
+        const chegadaGeral = document.getElementById('leadChegada').value;
+        const partidaGeral = document.getElementById('leadPartida').value;
+        const blocks = document.querySelectorAll('.destino-date-block');
+        let totalDias = 0;
+        let errors = [];
+
+        blocks.forEach(block => {
+            const dest = block.dataset.destino;
+            const c = block.querySelector('.dest-chegada').value;
+            const p = block.querySelector('.dest-partida').value;
+            if (c && p) {
+                const dias = Math.round((new Date(p) - new Date(c)) / 86400000);
+                if (dias <= 0) errors.push(`${dest}: partida deve ser depois da chegada`);
+                else totalDias += dias;
+
+                if (chegadaGeral && c < chegadaGeral) errors.push(`${dest}: chegada antes da data geral`);
+                if (partidaGeral && p > partidaGeral) errors.push(`${dest}: partida depois da data geral`);
+            }
+        });
+
+        // Check sum vs total
+        if (chegadaGeral && partidaGeral && totalDias > 0) {
+            const totalGeral = Math.round((new Date(partidaGeral) - new Date(chegadaGeral)) / 86400000);
+            if (totalDias !== totalGeral) {
+                errors.push(`Soma dos destinos (${totalDias}d) ≠ total da viagem (${totalGeral}d)`);
+            }
+        }
+
+        if (errors.length > 0) {
+            alertDiv.textContent = errors.join(' | ');
+            alertDiv.style.display = 'block';
+        } else {
+            alertDiv.style.display = 'none';
+        }
+    }
+
+    function getDatasDestinosJSON() {
+        const result = {};
+        document.querySelectorAll('.destino-date-block').forEach(block => {
+            const dest = block.dataset.destino;
+            const c = block.querySelector('.dest-chegada').value;
+            const p = block.querySelector('.dest-partida').value;
+            if (c || p) result[dest] = { chegada: c || null, partida: p || null };
+        });
+        return Object.keys(result).length > 0 ? result : null;
+    }
+
+    async function loadAllTags() {
+        const resp = await Auth.apiRequest('/api/tags');
+        if (!resp) return;
+        const data = await resp.json();
+        allTags = data.tags || [];
+    }
+
+    function renderTagCheckboxes(selectedIds = []) {
+        const container = document.getElementById('leadTagsContainer');
+        if (allTags.length === 0) {
+            container.innerHTML = '<span style="font-size:var(--font-size-xs);color:var(--color-dark-400)">Nenhuma tag criada. <a href="/tags" style="color:var(--color-primary)">Criar tags</a></span>';
+            return;
+        }
+        container.innerHTML = allTags.map(t => {
+            const checked = selectedIds.includes(t.id);
+            return `<label class="tag-checkbox-item ${checked ? 'checked' : ''}" style="${checked ? 'background:'+t.cor+';' : ''}" onclick="toggleTagCheck(this, '${t.cor}')">
+                <input type="checkbox" value="${t.id}" ${checked ? 'checked' : ''}>
+                ${esc(t.nome)}
+            </label>`;
+        }).join('');
+    }
+
+    function toggleTagCheck(label, cor) {
+        const cb = label.querySelector('input');
+        // Toggle will happen after this click, so check current state
+        setTimeout(() => {
+            if (cb.checked) {
+                label.classList.add('checked');
+                label.style.background = cor;
+            } else {
+                label.classList.remove('checked');
+                label.style.background = '';
+            }
+        }, 0);
+    }
+
+    function addCustomField(key = '', value = '') {
+        const container = document.getElementById('customFieldsContainer');
+        const row = document.createElement('div');
+        row.className = 'custom-field-row';
+        row.innerHTML = `
+            <input type="text" class="cf-key" placeholder="Nome do campo" value="${esc(key)}">
+            <input type="text" class="cf-val" placeholder="Valor" value="${esc(value)}">
+            <button type="button" class="remove-field" onclick="this.parentElement.remove()">✕</button>
+        `;
+        container.appendChild(row);
+    }
+
+    async function saveLead() {
+        const id = document.getElementById('leadId').value;
+        const nome = document.getElementById('leadNome').value.trim();
+
+        if (!nome) {
+            showLeadAlert('Nome é obrigatório');
+            return;
+        }
+
+        // Collect custom fields
+        const campos = {};
+        document.querySelectorAll('.custom-field-row').forEach(row => {
+            const key = row.querySelector('.cf-key').value.trim();
+            const val = row.querySelector('.cf-val').value.trim();
+            if (key) campos[key] = val;
+        });
+
+        // Normaliza o WhatsApp para formato internacional 55XXXXXXXXXXX
+        const rawWpp = document.getElementById('leadWhatsapp').value.trim();
+        const normalizedWpp = normalizeWhatsapp(rawWpp);
+        if (rawWpp && !normalizedWpp) {
+            showLeadAlert('WhatsApp inválido. Use o formato: 48 98871-1776 (com DDD)');
+            return;
+        }
+
+        const anotacoes = document.getElementById('leadAnotacoes').value.trim();
+        if (anotacoes) campos['anotacoes'] = anotacoes;
+
+        const body = {
+            nome,
+            email: document.getElementById('leadEmail').value.trim() || null,
+            whatsapp: normalizedWpp || null,
+            destinos: getSelectedDestinos(),
+            data_chegada: document.getElementById('leadChegada').value || null,
+            data_partida: document.getElementById('leadPartida').value || null,
+            total_dias: parseInt(document.getElementById('leadTotalDias').value) || null,
+            datas_destinos: getDatasDestinosJSON(),
+            dias_por_destino: getDiasPorDestinoJSON(),
+            num_viajantes: parseInt(document.getElementById('leadNumViajantes').value) || null,
+            num_criancas: parseInt(document.getElementById('leadNumCriancas').value) || 0,
+            idades_criancas: getIdadesCriancasString(),
+            status_venda: document.getElementById('leadStatusVenda').value,
+            campos_personalizados: campos,
+        };
+
+        if (salvandoLead) return;
+        salvandoLead = true;
+        setLeadSaving(true);
+
+        const url = id ? `/api/leads/${id}` : '/api/leads';
+        const method = id ? 'PUT' : 'POST';
+
+        const resp = await Auth.apiRequest(url, { method, body: JSON.stringify(body) });
+        setLeadSaving(false);
+        salvandoLead = false;
+
+        if (!resp) return;
+        if (!resp.ok) {
+            const err = await resp.json();
+            showLeadAlert(err.detail || 'Erro ao salvar');
+            return;
+        }
+
+        // Save tags
+        const savedData = await resp.json();
+        const leadId = savedData.id || id;
+        const selectedTagIds = [];
+        document.querySelectorAll('#leadTagsContainer input:checked').forEach(cb => selectedTagIds.push(parseInt(cb.value)));
+        await Auth.apiRequest(`/api/tags/lead/${leadId}`, { method: 'PUT', body: JSON.stringify({ tag_ids: selectedTagIds }) });
+
+        closeLeadModal();
+        // Unico ponto que a pagina hospedeira decide. Leads atualiza linha e
+        // bloco fixado; Pipeline atualiza drawer e card. O resto do editor —
+        // formulario, validacao, payload, PUT, tags — e o mesmo nos dois.
+        if (onLeadSaved) await onLeadSaved(savedData, id);
+    }
+</script>

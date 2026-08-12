@@ -151,11 +151,19 @@ def _js():
     return max(re.findall(r"<script>(.*?)</script>", HTML, re.S), key=len)
 
 
+# O editor de Lead foi extraido para partials/_lead_edit_modal.html no PR #31
+# e passou a ser compartilhado com o Pipeline. As funcoes do editor moram la;
+# as da listagem continuam em leads.html.
+PARTIAL = pathlib.Path("templates/partials/_lead_edit_modal.html").read_text(
+    encoding="utf-8")
+
+
 def _fn(nome):
-    js = _js()
-    m = re.search(r"(async\s+)?function " + re.escape(nome) + r"\(", js)
-    assert m, f"{nome} sumiu de leads.html"
-    return js[m.start():].split("\n    }", 1)[0] + "\n    }"
+    for fonte in (_js(), PARTIAL):
+        m = re.search(r"(async\s+)?function " + re.escape(nome) + r"\(", fonte)
+        if m:
+            return fonte[m.start():].split("\n    }", 1)[0] + "\n    }"
+    raise AssertionError(f"{nome} nao existe nem em leads.html nem no partial")
 
 
 _HARNESS = """
