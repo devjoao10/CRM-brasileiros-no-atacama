@@ -3,9 +3,12 @@ from datetime import datetime, date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import or_, extract, String, func, select, cast, case, literal
+from sqlalchemy import or_, extract, String
 from sqlalchemy.dialects.postgresql import JSONB
 from app.database import IS_SQLITE
+# o predicado mora em app/query_filters.py porque leads.py precisa do MESMO;
+# duas copias divergiriam
+from app.query_filters import campo_personalizado_match
 
 from app.database import get_db
 from app.models.segment import Segment
@@ -33,59 +36,6 @@ def _json_list_contains(column, value: str):
         # EXPRESSAO da query (nao altera o schema nem os dados).
         import json
         return column.cast(JSONB).op("@>")(json.dumps([value]))
-
-
-# Mesmo conjunto que str.strip() remove nas bordas.
-_ESPACOS = " \t\n\r\v\f"
-
-
-def _campo_personalizado_match(chave: str, valor: str):
-    """
-    EXISTS sobre os pares chave/valor de campos_personalizados, no banco.
-
-    Antes isto era feito em Python: carregava todo Lead que passasse nos demais
-    filtros e varria o dict. Com 19 mil leads eram 19 mil objetos ORM por
-    segmento — a causa da lentidao de GET /api/segments.
-
-    Espelha exatamente a comparacao que era feita em Python:
-      chave  -> strip + lower dos DOIS lados (a chave crua pode vir " Origem ")
-      valor  -> substring case-insensitive; vazio = exige so a presenca da chave
-
-    O CASE blinda contra campos_personalizados legado que nao seja um objeto
-    JSON: jsonb_each_text estoura em lista/escalar e derrubaria a listagem
-    inteira com 500. Sem objeto nao ha chave — resultado vazio, como antes.
-    """
-    chave_norm = (chave or "").strip().lower()
-    valor_norm = (valor or "").strip().lower()
-    col = Lead.campos_personalizados
-
-    if IS_SQLITE:
-        seguro = case((func.json_type(col) == "object", col), else_=literal("{}"))
-        pares = func.json_each(seguro).table_valued("key", "value", "type")
-        chave_col = func.lower(func.trim(pares.c.key, _ESPACOS))
-        # json_each devolve 1/0 para booleano JSON, enquanto o Python via
-        # "True"/"False". A coluna `type` traz 'true'/'false' e recupera a
-        # paridade — senao um campo booleano deixaria de ser encontrado.
-        valor_col = case((pares.c["type"] == "true", literal("true")),
-                         (pares.c["type"] == "false", literal("false")),
-                         else_=pares.c.value)
-    else:
-        # @> nao serve aqui: a chave e comparada normalizada, nao literal.
-        # jsonb_each_text expande os pares e devolve o valor ja como texto —
-        # "Atacama", 25 e true viram 'Atacama', '25' e 'true', igual ao str()
-        # que o Python fazia.
-        jb = cast(col, JSONB)
-        seguro = case((func.jsonb_typeof(jb) == "object", jb),
-                      else_=cast(literal("{}"), JSONB))
-        pares = func.jsonb_each_text(seguro).table_valued("key", "value")
-        chave_col = func.lower(func.btrim(pares.c.key, _ESPACOS))
-        valor_col = pares.c.value
-
-    condicoes = [chave_col == chave_norm]
-    if valor_norm:
-        # autoescape: % e _ digitados pelo usuario sao literais, nao curinga
-        condicoes.append(func.lower(valor_col).contains(valor_norm, autoescape=True))
-    return select(literal(1)).select_from(pares).where(*condicoes).exists()
 
 
 # ─── Helpers ─────────────────────────────────────
@@ -223,7 +173,8 @@ def _resolve_segment_query(filtros: dict, db: Session, for_count: bool = False):
             query = query.filter(Lead.responsavel_id == responsavel_id)
 
     if campo_chave:
-        query = query.filter(_campo_personalizado_match(campo_chave, campo_valor))
+        query = query.filter(campo_personalizado_match(
+            Lead.campos_personalizados, campo_chave, campo_valor))
 
     return query
 

@@ -492,17 +492,20 @@ def _sql(filtros, sqlite):
     from sqlalchemy.dialects.sqlite import dialect as lite
     from app.database import SessionLocal
     from app.routers import segments as S
+    # o predicado de campo personalizado mora em app/query_filters.py (leads.py
+    # usa o mesmo), entao o dialect precisa ser forcado LA tambem
+    from app import query_filters as QF
     db = SessionLocal()
     try:
-        orig = S.IS_SQLITE
-        S.IS_SQLITE = sqlite
+        orig, origQF = S.IS_SQLITE, QF.IS_SQLITE
+        S.IS_SQLITE = QF.IS_SQLITE = sqlite
         try:
             q = S._resolve_segment_query(filtros, db, for_count=True)
             stmt = select(func.count()).select_from(q.subquery())
             return str(stmt.compile(dialect=lite() if sqlite else pg(),
                                     compile_kwargs={"literal_binds": True}))
         finally:
-            S.IS_SQLITE = orig
+            S.IS_SQLITE, QF.IS_SQLITE = orig, origQF
     finally:
         db.close()
 
@@ -525,23 +528,8 @@ def test_guarda_de_tipo_json_existe_nos_dois_dialects():
 
 
 def _sql_pg(filtros):
-    from sqlalchemy.dialects.postgresql import dialect as pg
-    from app.database import SessionLocal
-    from app.routers import segments as S
-    db = SessionLocal()
-    try:
-        # forca o ramo PostgreSQL do helper
-        orig = S.IS_SQLITE
-        S.IS_SQLITE = False
-        try:
-            q = S._resolve_segment_query(filtros, db, for_count=True)
-            stmt = select(func.count()).select_from(q.subquery())
-            return str(stmt.compile(dialect=pg(),
-                                    compile_kwargs={"literal_binds": True}))
-        finally:
-            S.IS_SQLITE = orig
-    finally:
-        db.close()
+    """SQL compilado forcando o ramo PostgreSQL."""
+    return _sql(filtros, sqlite=False)
 
 
 def test_postgres_campo_personalizado_usa_jsonb_e_exists():

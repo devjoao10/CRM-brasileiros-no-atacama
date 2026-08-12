@@ -190,6 +190,9 @@ class LeadListResponse(BaseModel):
     skip: int
     limit: int
     leads: list[LeadResponse]
+    # Aditivos: quem ja consome total/skip/limit/leads segue igual.
+    next_cursor: Optional[str] = None
+    has_more: bool = False
 
 
 class ImportResponse(BaseModel):
