@@ -283,7 +283,7 @@
                     </div>
                     <div class="filter-group">
                         <label>Destino</label>
-                        <select id="filterDestino" onchange="loadLeads()">
+                        <select id="filterDestino" onchange="reloadLeads()">
                             <option value="">Todos</option>
                             <option value="Atacama">Atacama</option>
                             <option value="Uyuni">Uyuni</option>
@@ -292,17 +292,25 @@
                     </div>
                     <div class="filter-group">
                         <label>Chegada de</label>
-                        <input type="date" id="filterChegadaDe" onchange="loadLeads()">
+                        <input type="date" id="filterChegadaDe" onchange="reloadLeads()">
                     </div>
                     <div class="filter-group">
                         <label>Chegada até</label>
-                        <input type="date" id="filterChegadaAte" onchange="loadLeads()">
+                        <input type="date" id="filterChegadaAte" onchange="reloadLeads()">
                     </div>
                     <div class="filter-group">
                         <label>Responsavel</label>
-                        <select id="filterResponsavel" onchange="loadLeads()">
+                        <select id="filterResponsavel" onchange="reloadLeads()">
                             <option value="">Todos</option>
                             <option value="0">Agente IA</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Telefone</label>
+                        <select id="filterTelefone" onchange="reloadLeads()">
+                            <option value="">Todos</option>
+                            <option value="true">Com telefone</option>
+                            <option value="false">Sem telefone</option>
                         </select>
                     </div>
                     <div class="filter-group">
@@ -337,7 +345,10 @@
                             </td></tr>
                         </tbody>
                     </table>
-                    <div class="pagination" id="pagination"></div>
+                    <div class="pagination" id="pagination">
+                        <button id="loadMoreBtn" onclick="loadMore()" style="display:none">Carregar mais</button>
+                        <span id="listStatus"></span>
+                    </div>
                 </div>
 
     <!-- Lead Modal (Add/Edit) -->
@@ -513,8 +524,16 @@
 {% block scripts %}
     <script>
     // ─── State ──────────────────────────────────────
-    let currentPage = 0;
-    const PAGE_SIZE = 20;
+    const PAGE_SIZE = 50;
+    // Paginacao keyset: nao existe mais "pagina N". nextCursor aponta para a
+    // continuacao do conjunto FILTRADO atual — por isso qualquer troca de
+    // filtro passa por reloadLeads(), que o zera.
+    let nextCursor = null;
+    let hasMore = false;
+    let carregando = false;
+    let leadsNaTela = [];
+    let totalConhecido = 0;   // o servidor so reenvia o total na 1a pagina
+    let reqAtual = null;      // AbortController do request em voo
     let debounceTimer = null;
     let selectedFile = null;
     let allTags = [];
@@ -542,11 +561,11 @@
 
         loadAllTags();
         loadUsersForFilter();
-        loadLeads().then(() => {
-            // Auto-open lead if ?open=ID is in URL
-            const openId = new URLSearchParams(window.location.search).get('open');
-            if (openId) editLead(parseInt(openId));
-        });
+        reloadLeads();
+        // Deep-link ?open=ID: busca DIRETA por id (GET /api/leads/{id}), sem
+        // depender de o lead estar na primeira pagina nem varrer a lista.
+        const openId = new URLSearchParams(window.location.search).get('open');
+        if (openId) editLead(parseInt(openId));
     });
 
     // Load users for responsavel filter
@@ -565,43 +584,123 @@
 
     // ─── API ────────────────────────────────────────
 
+    function filtrosAtuais() {
+        const p = new URLSearchParams({ limit: PAGE_SIZE });
+        const v = id => (document.getElementById(id) || {}).value || '';
+        if (v('filterSearch').trim()) p.set('search', v('filterSearch').trim());
+        if (v('filterDestino')) p.set('destino', v('filterDestino'));
+        if (v('filterChegadaDe')) p.set('data_chegada_de', v('filterChegadaDe'));
+        if (v('filterChegadaAte')) p.set('data_chegada_ate', v('filterChegadaAte'));
+        if (v('filterResponsavel') !== '') p.set('responsavel_id', v('filterResponsavel'));
+        if (v('filterTelefone') !== '') p.set('com_telefone', v('filterTelefone'));
+        return p;
+    }
+
+    // Recomeca do zero. TODA troca de filtro passa por aqui: continuar com o
+    // cursor de um conjunto filtrado anterior devolveria linhas de outro
+    // conjunto, com buraco e repeticao.
+    function reloadLeads() {
+        nextCursor = null;
+        hasMore = false;
+        leadsNaTela = [];
+        return loadLeads();
+    }
+
     async function loadLeads() {
-        const skip = currentPage * PAGE_SIZE;
-        const params = new URLSearchParams({ skip, limit: PAGE_SIZE });
+        const primeira = leadsNaTela.length === 0;
+        // resposta antiga nao pode sobrescrever a nova: digitar rapido dispara
+        // varios requests e o ultimo e o unico que vale
+        if (reqAtual) reqAtual.abort();
+        const ctrl = new AbortController();
+        reqAtual = ctrl;
 
-        const search = document.getElementById('filterSearch').value.trim();
-        const destino = document.getElementById('filterDestino').value;
-        const chegadaDe = document.getElementById('filterChegadaDe').value;
-        const chegadaAte = document.getElementById('filterChegadaAte').value;
-        const responsavel = document.getElementById('filterResponsavel').value;
+        const params = filtrosAtuais();
+        if (nextCursor) {
+            params.set('cursor', nextCursor);
+            // o total do conjunto ja e conhecido e nao muda entre paginas; o
+            // COUNT chega a 82% da requisicao quando ha filtro ativo
+            params.set('include_total', 'false');
+        }
 
-        if (search) params.set('search', search);
-        if (destino) params.set('destino', destino);
-        if (chegadaDe) params.set('data_chegada_de', chegadaDe);
-        if (chegadaAte) params.set('data_chegada_ate', chegadaAte);
-        if (responsavel !== '') params.set('responsavel_id', responsavel);
+        carregando = true;
+        if (primeira) {
+            document.getElementById('leadsTableBody').innerHTML =
+                '<tr><td colspan="10" class="empty-state"><p>Carregando leads...</p></td></tr>';
+            document.getElementById('tableCount').textContent = 'Carregando...';
+        }
+        renderFooter();
 
-        const resp = await Auth.apiRequest(`/api/leads?${params}`);
-        if (!resp) return;
+        let resp;
+        try {
+            resp = await Auth.apiRequest(`/api/leads?${params}`, { signal: ctrl.signal });
+        } catch (e) {
+            if (e.name === 'AbortError') return;   // um request mais novo assumiu
+            carregando = false;
+            mostrarErro();
+            return;
+        }
+        carregando = false;
+        if (ctrl.signal.aborted) return;
+        if (!resp) return;                         // 401: ja redirecionou
+        if (!resp.ok) { mostrarErro(resp.status); return; }
+
         const data = await resp.json();
+        const novos = data.leads || [];
+        leadsNaTela = primeira ? novos : leadsNaTela.concat(novos);
+        nextCursor = data.next_cursor || null;
+        hasMore = !!data.has_more;   // vem do limit+1, nunca do COUNT
+        if (typeof data.total === 'number') totalConhecido = data.total;
+        renderTable(totalConhecido, novos, primeira);
+        renderFooter();
+    }
 
-        renderTable(data);
-        renderPagination(data);
+    function loadMore() {
+        // guarda de clique duplo: sem isto dois cliques rapidos pedem a mesma
+        // pagina duas vezes e as linhas aparecem repetidas
+        if (hasMore && !carregando) loadLeads();
+    }
+
+    function renderFooter() {
+        const btn = document.getElementById('loadMoreBtn');
+        const st = document.getElementById('listStatus');
+        if (!btn || !st) return;
+        btn.style.display = hasMore ? '' : 'none';
+        btn.disabled = carregando;
+        btn.textContent = carregando ? 'Carregando...' : 'Carregar mais';
+        st.textContent = leadsNaTela.length === 0 ? ''
+            : hasMore ? `${leadsNaTela.length} carregados`
+            : `${leadsNaTela.length} carregados — fim da lista`;
+    }
+
+    function mostrarErro(status) {
+        const msg = `Erro ao carregar os leads${status ? ' (' + status + ')' : ''}`;
+        const st = document.getElementById('listStatus');
+        const btn = document.getElementById('loadMoreBtn');
+        if (leadsNaTela.length) {
+            // erro no "Carregar mais": preserva o que ja esta na tela
+            st.textContent = msg;
+            btn.style.display = ''; btn.disabled = false;
+            btn.textContent = 'Tentar de novo';
+            return;
+        }
+        document.getElementById('tableCount').textContent = 'Erro';
+        document.getElementById('leadsTableBody').innerHTML =
+            `<tr><td colspan="10" class="empty-state"><p>${msg}</p>` +
+            `<button class="btn btn-primary btn-sm" onclick="reloadLeads()">Tentar de novo</button></td></tr>`;
+        hasMore = false;
+        renderFooter();
     }
 
     function debounceLoad() {
         clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => { currentPage = 0; loadLeads(); }, 300);
+        debounceTimer = setTimeout(reloadLeads, 300);
     }
 
     function clearFilters() {
-        document.getElementById('filterSearch').value = '';
-        document.getElementById('filterDestino').value = '';
-        document.getElementById('filterChegadaDe').value = '';
-        document.getElementById('filterChegadaAte').value = '';
-        document.getElementById('filterResponsavel').value = '';
-        currentPage = 0;
-        loadLeads();
+        ['filterSearch','filterDestino','filterChegadaDe','filterChegadaAte',
+         'filterResponsavel','filterTelefone']
+            .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+        reloadLeads();
     }
 
     // ─── Table Rendering ────────────────────────────
@@ -632,11 +731,11 @@
         return funis.map(f => `<span class="lead-tag" style="background:var(--color-primary);font-size:10px;">${esc(f.funnel_nome)} → ${esc(f.etapa_nome)}</span>`).join('');
     }
 
-    function renderTable(data) {
+    function renderTable(total, novos, primeira) {
         const tbody = document.getElementById('leadsTableBody');
-        document.getElementById('tableCount').textContent = `${data.total} lead${data.total !== 1 ? 's' : ''} encontrado${data.total !== 1 ? 's' : ''}`;
+        document.getElementById('tableCount').textContent = `${total} lead${total !== 1 ? 's' : ''} encontrado${total !== 1 ? 's' : ''}`;
 
-        if (data.leads.length === 0) {
+        if (leadsNaTela.length === 0) {
             tbody.innerHTML = `<tr><td colspan="10"><div class="empty-state">
                 <p>Nenhum lead encontrado</p>
             </div></td></tr>`;
@@ -646,7 +745,14 @@
         const conversasBase = window.location.hostname === 'localhost' ? 'http://localhost:8001' : 'https://conversas.crmbrasileirosnoatacama.cloud';
         window._conversasBase = conversasBase;
 
-        tbody.innerHTML = data.leads.map(l => `
+        const html = novos.map(linhaDoLead).join('');
+        // append de verdade: o lote novo entra no fim sem refazer os anteriores
+        if (primeira) tbody.innerHTML = html;
+        else tbody.insertAdjacentHTML('beforeend', html);
+    }
+
+    function linhaDoLead(l) {
+        return `
             <tr>
                 <td><strong>${esc(l.nome)}</strong></td>
                 <td>${l.email ? esc(l.email) : '<span class="text-muted">—</span>'}</td>
@@ -669,22 +775,22 @@
                     </button>
                 </td>
             </tr>
-        `).join('');
+        `;
     }
 
-    function renderPagination(data) {
-        const totalPages = Math.ceil(data.total / PAGE_SIZE);
-        const container = document.getElementById('pagination');
-
-        if (totalPages <= 1) { container.innerHTML = ''; return; }
-
-        let html = `<button ${currentPage === 0 ? 'disabled' : ''} onclick="goToPage(${currentPage - 1})">← Anterior</button>`;
-        html += `<span>Página ${currentPage + 1} de ${totalPages}</span>`;
-        html += `<button ${currentPage >= totalPages - 1 ? 'disabled' : ''} onclick="goToPage(${currentPage + 1})">Próxima →</button>`;
-        container.innerHTML = html;
+    // Item 23: atualiza SO a linha do lead salvo, preservando os lotes ja
+    // carregados. Falso se ele nao esta na tela (lead novo, ou fora do filtro).
+    async function atualizarLinha(id) {
+        const i = leadsNaTela.findIndex(l => l.id === id);
+        if (i < 0) return false;
+        const r = await Auth.apiRequest(`/api/leads/${id}`);
+        if (!r || !r.ok) return false;
+        leadsNaTela[i] = await r.json();
+        const linha = document.getElementById('leadsTableBody').rows[i];
+        if (!linha) return false;
+        linha.outerHTML = linhaDoLead(leadsNaTela[i]);
+        return true;
     }
-
-    function goToPage(page) { currentPage = page; loadLeads(); }
 
     function esc(str) {
         if (!str) return '';
@@ -1124,13 +1230,13 @@
         await Auth.apiRequest(`/api/tags/lead/${leadId}`, { method: 'PUT', body: JSON.stringify({ tag_ids: selectedTagIds }) });
 
         closeLeadModal();
-        loadLeads();
+        if (!(id && await atualizarLinha(parseInt(id)))) reloadLeads();
     }
 
     async function deleteLead(id, nome) {
         if (!confirm(`Desativar o lead "${nome}"?`)) return;
         const resp = await Auth.apiRequest(`/api/leads/${id}`, { method: 'DELETE' });
-        if (resp && resp.ok) loadLeads();
+        if (resp && resp.ok) reloadLeads();
     }
 
     // ─── WhatsApp Helpers ────────────────────────────
@@ -1283,7 +1389,7 @@
                     html += data.detalhes_erros.slice(0, 10).map(e => `• ${esc(e)}`).join('<br>');
                 }
                 resultsDiv.innerHTML = html;
-                loadLeads();
+                reloadLeads();
             }
         } catch (err) {
             const resultsDiv = document.getElementById('importResults');

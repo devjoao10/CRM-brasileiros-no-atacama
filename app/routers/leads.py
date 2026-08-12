@@ -1,3 +1,4 @@
+import base64
 import io
 import csv
 import os
@@ -8,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile
 from app.config import MAX_UPLOAD_SIZE_BYTES
 from app.database import IS_SQLITE
 from sqlalchemy.orm import Session, joinedload, selectinload
-from sqlalchemy import or_, extract, and_, String, func
+from sqlalchemy import or_, extract, and_, String, func, tuple_
 
 from app.database import get_db
 from app.models.lead import Lead
@@ -25,8 +26,54 @@ from app.schemas.lead import (
     DESTINOS_PRINCIPAIS,
 )
 from app.auth import get_current_user, require_admin
+from app.query_filters import campo_personalizado_match
 
 router = APIRouter(prefix="/api/leads", tags=["Leads"])
+
+
+# ─── Paginacao keyset ────────────────────────────────────────────────
+# OFFSET fica caro em profundidade e, sem desempate, a ordem entre
+# created_at iguais e INDEFINIDA: o banco pode devolver os empatados em
+# ordens diferentes entre duas chamadas, e ai a mesma linha aparece em duas
+# paginas ou em nenhuma. O cursor fixa o par (created_at, id) — id e unico,
+# entao a ordem total e deterministica.
+#
+# pipeline.py tem um par equivalente para (updated_at, id). Nao unifiquei:
+# mexer em pipeline.py esta fora do escopo deste pacote.
+
+def _cursor_encode(lead: "Lead") -> str:
+    return base64.urlsafe_b64encode(
+        f"{lead.created_at.isoformat()}|{lead.id}".encode()).decode()
+
+
+def _cursor_decode(cursor: str):
+    """Cursor corrompido/forjado vira 400, nunca 500 nem pagina silenciosa."""
+    try:
+        bruto = base64.urlsafe_b64decode(cursor.encode()).decode()
+        ts, sep, lid = bruto.rpartition("|")
+        if not sep:
+            raise ValueError("sem separador")
+        return datetime.fromisoformat(ts), int(lid)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Cursor inválido")
+
+
+def _keyset_filtro(cursor: str):
+    ts, lid = _cursor_decode(cursor)
+    # (a, b) < (x, y) e exatamente `a < x OR (a = x AND b < y)`, mas escrito
+    # como row-value o banco consegue virar SEEK no indice. Medido em 19.000
+    # leads: com OR o plano e SCAN do indice inteiro (4,1 ms); com row-value e
+    # SEARCH usando ix_leads_created_at (0,2 ms). Mesma forma que pipeline.py.
+    return tuple_(Lead.created_at, Lead.id) < (ts, lid)
+
+
+def _tem_telefone():
+    """
+    "Com telefone" nao e so NOT NULL: a base tem "" e "   " vindos de import.
+    whatsapp e o unico campo de telefone do modelo Lead.
+    (trim() remove espacos; tabulacao em telefone nao e caso real aqui.)
+    """
+    return and_(Lead.whatsapp.isnot(None), func.trim(Lead.whatsapp) != "")
 
 
 def _json_list_contains(column, value: str):
@@ -89,14 +136,28 @@ def list_leads(
     exclude_funnel_id: Optional[int] = Query(
         None, description="Omite os leads que JÁ estão neste funil"
     ),
+    com_telefone: Optional[bool] = Query(
+        None, description="true = só com WhatsApp preenchido; false = só sem; omitido = todos"
+    ),
+    cursor: Optional[str] = Query(
+        None, description="Cursor da página seguinte (vem em next_cursor). Ignora skip."
+    ),
+    include_total: bool = Query(
+        True, description="false pula o COUNT e devolve total=null. Use nas páginas "
+                          "seguintes: o total já é conhecido e não muda."
+    ),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
     Lista todos os leads com paginação e filtros avançados.
-    
+
     O campo destinos é uma lista. O filtro `destino=Atacama` retorna leads que
     possuem "Atacama" em sua lista de destinos.
+
+    **Paginação**: `skip` continua funcionando para quem já usa. Prefira
+    `cursor`: envie o `next_cursor` da resposta anterior e a página seguinte vem
+    sem OFFSET e sem risco de repetir/pular linha em empates de `created_at`.
     """
     query = db.query(Lead).options(
         joinedload(Lead.responsavel),
@@ -150,14 +211,43 @@ def list_leads(
         )
         query = query.filter(~ja_no_funil)
 
-    total = query.count()
-    leads = query.order_by(Lead.created_at.desc()).offset(skip).limit(limit).all()
+    if com_telefone is not None:
+        tem = _tem_telefone()
+        query = query.filter(tem if com_telefone else ~tem)
+
+    # total do conjunto FILTRADO, antes do cursor: "X leads encontrados" nao
+    # pode encolher a cada "Carregar mais".
+    #
+    # Medido com 19.000 leads, o COUNT domina a requisicao quando ha filtro:
+    # 46% no destino, 58% na busca textual, 82% no campo personalizado —
+    # enquanto o SELECT da pagina custa ~1 ms. Como o total nao muda entre as
+    # paginas do MESMO conjunto, quem ja o tem manda include_total=false.
+    # Default True: n8n, pipeline.html e ai_tools nao enviam nada e seguem
+    # recebendo o inteiro.
+    total = query.count() if include_total else None
+
+    if cursor:
+        query = query.filter(_keyset_filtro(cursor))
+        skip = 0          # cursor e skip sao excludentes; o cursor manda
+
+    # limit+1 diz se ha proxima pagina sem um segundo COUNT.
+    # O desempate por id e obrigatorio: sem ele a ordem entre created_at
+    # iguais e indefinida e a paginacao pode repetir ou pular linha.
+    ordenada = query.order_by(Lead.created_at.desc(), Lead.id.desc())
+    if not cursor and skip:
+        ordenada = ordenada.offset(skip)
+    linhas = ordenada.limit(limit + 1).all()
+
+    has_more = len(linhas) > limit
+    leads = linhas[:limit]
 
     return LeadListResponse(
         total=total,
         skip=skip,
         limit=limit,
         leads=[_build_lead_response(l) for l in leads],
+        next_cursor=_cursor_encode(leads[-1]) if has_more and leads else None,
+        has_more=has_more,
     )
 
 
@@ -223,11 +313,13 @@ def segment_leads(
     - **tag_mode=all**: retorna leads que possuem TODAS as tags selecionadas
     - **campo_chave + campo_valor**: filtra por campos personalizados (Ex: chave=origem, valor=Instagram)
     """
-    # So as tags aqui: o ramo de campo_chave abaixo materializa TODOS os leads
-    # que casam os demais filtros, e carregar responsavel/funis de todos eles
-    # sairia mais caro que o N+1 do slice final. Os outros eager loads entram
-    # apenas no ramo paginado.
-    query = db.query(Lead).options(selectinload(Lead.tags))
+    # Todos os eager loads valem aqui: nao existe mais ramo que materialize a
+    # base inteira, entao eles se aplicam sempre ao slice paginado.
+    query = db.query(Lead).options(
+        selectinload(Lead.tags),
+        joinedload(Lead.responsavel),
+        selectinload(Lead.funnel_entries).joinedload(FunnelEntry.funnel),
+    )
 
     # Busca textual
     if search:
@@ -303,38 +395,29 @@ def segment_leads(
     if criado_ate:
         query = query.filter(Lead.created_at <= datetime.combine(criado_ate, datetime.max.time()))
 
-    # Buscar todos para filtro de campo personalizado (SQLite não suporta JSON path queries avançadas)
+    # Campo personalizado: EXISTS no banco (mesmo predicado de Segmentacoes).
+    # Antes este ramo carregava TODO lead que casasse os demais filtros e
+    # varria o dict em Python — 19 mil objetos ORM para devolver 50.
     if campo_chave:
-        all_leads = query.order_by(Lead.created_at.desc()).all()
-        chave = campo_chave.strip().lower()
-        valor = (campo_valor or "").strip().lower()
-        filtered = []
-        for lead in all_leads:
-            cp = lead.campos_personalizados or {}
-            # Busca case-insensitive na chave
-            match_key = next((k for k in cp if k.strip().lower() == chave), None)
-            if match_key is not None:
-                if not valor or valor in str(cp[match_key]).lower():
-                    filtered.append(lead)
-        total = len(filtered)
-        leads = filtered[skip: skip + limit]
-    else:
-        total = query.count()
-        # _build_lead_response le responsavel e funnel_entries: sem isto, uma
-        # query por lead do slice (N+1).
-        leads = (
-            query.options(
-                joinedload(Lead.responsavel),
-                selectinload(Lead.funnel_entries).joinedload(FunnelEntry.funnel),
-            )
-            .order_by(Lead.created_at.desc()).offset(skip).limit(limit).all()
-        )
+        query = query.filter(campo_personalizado_match(
+            Lead.campos_personalizados, campo_chave, campo_valor))
 
+    total = query.count()
+    leads = (
+        query.order_by(Lead.created_at.desc(), Lead.id.desc())
+        .offset(skip).limit(limit).all()
+    )
+
+    # Este endpoint continua em skip/limit de proposito: quem o consome e n8n
+    # e a ferramenta de IA, que paginam por skip. O cursor entrou so em
+    # /api/leads, que e o que a tela usa. A ordenacao ganhou o desempate por
+    # id nos dois, entao a ordem e deterministica aqui tambem.
     return LeadListResponse(
         total=total,
         skip=skip,
         limit=limit,
         leads=[_build_lead_response(l) for l in leads],
+        has_more=skip + len(leads) < total,
     )
 
 

@@ -1,0 +1,64 @@
+# -*- coding: utf-8 -*-
+"""
+Predicados de filtro compartilhados entre routers.
+
+Existe por um motivo so: o filtro de campo personalizado validado no PR #28
+(segments.py) precisa valer identico em leads.py. Copiar as duas dezenas de
+linhas de SQL dialect-aware seria garantir que as duas copias divergissem.
+
+Mantenha este modulo pequeno e sem dependencia de router. So predicados puros.
+"""
+from sqlalchemy import func, select, cast, case, literal
+from sqlalchemy.dialects.postgresql import JSONB
+
+from app.database import IS_SQLITE
+
+# Mesmo conjunto que str.strip() remove nas bordas.
+_ESPACOS = " \t\n\r\v\f"
+
+
+def campo_personalizado_match(coluna, chave: str, valor: str):
+    """
+    EXISTS sobre os pares chave/valor de um campo JSON de objeto, no banco.
+
+    Antes disto o filtro rodava em Python: carregava todo Lead que passasse nos
+    demais criterios e varria o dict. Com 19 mil leads eram 19 mil objetos ORM.
+
+    Espelha exatamente a comparacao que era feita em Python:
+      chave  -> strip + lower dos DOIS lados (a chave crua pode vir " Origem ")
+      valor  -> substring case-insensitive; vazio = exige so a presenca da chave
+
+    O CASE blinda contra JSON legado que nao seja um objeto: jsonb_each_text
+    estoura em lista/escalar e derrubaria a listagem inteira com 500. Sem
+    objeto nao ha chave — resultado vazio, como antes.
+    """
+    chave_norm = (chave or "").strip().lower()
+    valor_norm = (valor or "").strip().lower()
+
+    if IS_SQLITE:
+        seguro = case((func.json_type(coluna) == "object", coluna), else_=literal("{}"))
+        pares = func.json_each(seguro).table_valued("key", "value", "type")
+        chave_col = func.lower(func.trim(pares.c.key, _ESPACOS))
+        # json_each devolve 1/0 para booleano JSON, enquanto o Python via
+        # "True"/"False". A coluna `type` traz 'true'/'false' e recupera a
+        # paridade — senao um campo booleano deixaria de ser encontrado.
+        valor_col = case((pares.c["type"] == "true", literal("true")),
+                         (pares.c["type"] == "false", literal("false")),
+                         else_=pares.c.value)
+    else:
+        # @> nao serve aqui: a chave e comparada normalizada, nao literal.
+        # jsonb_each_text expande os pares e devolve o valor ja como texto —
+        # "Atacama", 25 e true viram 'Atacama', '25' e 'true', igual ao str()
+        # que o Python fazia.
+        jb = cast(coluna, JSONB)
+        seguro = case((func.jsonb_typeof(jb) == "object", jb),
+                      else_=cast(literal("{}"), JSONB))
+        pares = func.jsonb_each_text(seguro).table_valued("key", "value")
+        chave_col = func.lower(func.btrim(pares.c.key, _ESPACOS))
+        valor_col = pares.c.value
+
+    condicoes = [chave_col == chave_norm]
+    if valor_norm:
+        # autoescape: % e _ digitados pelo usuario sao literais, nao curinga
+        condicoes.append(func.lower(valor_col).contains(valor_norm, autoescape=True))
+    return select(literal(1)).select_from(pares).where(*condicoes).exists()

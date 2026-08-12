@@ -186,10 +186,15 @@ class LeadResponse(BaseModel):
 
 
 class LeadListResponse(BaseModel):
-    total: int
+    # null so quando o caller pede include_total=false; quem nao envia o
+    # parametro continua recebendo inteiro.
+    total: Optional[int]
     skip: int
     limit: int
     leads: list[LeadResponse]
+    # Aditivos: quem ja consome total/skip/limit/leads segue igual.
+    next_cursor: Optional[str] = None
+    has_more: bool = False
 
 
 class ImportResponse(BaseModel):
