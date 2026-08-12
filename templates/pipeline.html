@@ -95,9 +95,26 @@
         .detail-actions { padding: var(--space-4) var(--space-6); border-top: 1px solid var(--color-dark-100); display: flex; gap: var(--space-2); flex-shrink: 0; }
 
         /* ===== Modals ===== */
-        /* Deep-link: card alvo. Borda de acento, sem neon — o objetivo e
-           localizacao visual imediata, nao chamar atencao permanentemente. */
-        .kanban-card.card-alvo { border: 2px solid var(--color-primary); box-shadow: 0 0 0 3px rgba(37,99,235,.15); }
+        /* Deep-link: card alvo (?lead_id=).
+           O seletor precisa ser .lead-card — NAO existe .kanban-card em
+           elemento nenhum, era regra morta e o destaque nunca aparecia.
+           O drawer cobre o board com rgba(0,0,0,.4) + blur(3px), entao o anel
+           tem que ser opaco o bastante para atravessar isso. Sem neon e sem
+           animacao continua: o pulso roda 2x e para, o estado fica estatico. */
+        .lead-card.pipeline-target-card {
+            border: 2px solid var(--color-primary);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, .35), var(--shadow-md);
+            background: rgba(37, 99, 235, .04);
+            animation: target-pulse .6s ease-out 2;
+        }
+        @keyframes target-pulse {
+            0%   { box-shadow: 0 0 0 3px rgba(37, 99, 235, .35), var(--shadow-md); }
+            50%  { box-shadow: 0 0 0 7px rgba(37, 99, 235, .22), var(--shadow-md); }
+            100% { box-shadow: 0 0 0 3px rgba(37, 99, 235, .35), var(--shadow-md); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .lead-card.pipeline-target-card { animation: none; }
+        }
         .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: var(--z-modal); align-items: center; justify-content: center; backdrop-filter: blur(4px); }
         .modal-overlay.show { display: flex; }
         .modal { background: var(--color-white); border-radius: var(--radius-2xl); width: 90%; max-width: 560px; max-height: 90vh; overflow-y: auto; box-shadow: var(--shadow-xl); animation: modalSlideIn 0.3s ease; }
@@ -472,6 +489,16 @@
     let stageState = {};        // etapa_id -> estado da coluna
     let highlightLeadId = null; // deep-link: card que fica destacado
 
+    // Fonte unica de verdade do target. No maximo UM card destacado por vez:
+    // setar um novo limpa a marca do anterior, inclusive em outra coluna que
+    // nao vai re-renderizar. Fechar o drawer NAO chama isto de proposito — o
+    // destaque tem que sobreviver justamente para o atendente reachar o lead.
+    function setTargetLead(leadId) {
+        document.querySelectorAll('.pipeline-target-card')
+            .forEach(el => el.classList.remove('pipeline-target-card'));
+        highlightLeadId = leadId;
+    }
+
     function stageInit(id) {
         stageState[id] = { items: [], cursor: null, hasMore: false, total: 0,
                            filtrado: 0, q: '', periodo: '', reqId: 0, loading: false };
@@ -591,8 +618,9 @@
         if (highlightLeadId) {
             const alvo = body.querySelector('[data-lead-id="' + highlightLeadId + '"]');
             if (alvo) {
-                alvo.classList.add('card-alvo');
-                alvo.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                alvo.classList.add('pipeline-target-card');
+                // inline:'center' tira o card de baixo do drawer (470px a direita)
+                alvo.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
             }
         }
     }
@@ -630,7 +658,7 @@
             await loadBoard();
             return;
         }
-        highlightLeadId = lid;
+        setTargetLead(lid);
         // include_lead_id garante o card mesmo se ele for o 700o da etapa
         await loadStage(loc.etapa_id, true, { include_lead_id: lid });
         const st = stageState[loc.etapa_id] || {};
