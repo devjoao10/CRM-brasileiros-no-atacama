@@ -307,7 +307,16 @@ def _json_list_contains(column, value: str):
     return column.cast(JSONB).op("@>")(json.dumps([value]))
 
 
-def _cursor_encode(entry: FunnelEntry) -> str:
+def _cursor_encode(entry: FunnelEntry) -> Optional[str]:
+    """
+    `updated_at` e nullable no DDL (server_default=now(), sem NOT NULL). Pela
+    aplicacao nunca fica NULL — nenhum caminho de codigo o define e o default
+    do banco sempre preenche. Mas uma linha inserida por SQL direto poderia
+    ter NULL e derrubaria o .isoformat() aqui. Sem cursor, a coluna para de
+    paginar em vez de estourar 500.
+    """
+    if entry.updated_at is None:
+        return None
     return f"{entry.updated_at.isoformat()}|{entry.id}"
 
 
@@ -481,22 +490,36 @@ def get_stage_cards(
             summary="Em que funil/etapa um lead está (sem carregar o board)")
 def locate_lead(
     lead_id: int,
+    prefer_funnel_id: Optional[int] = Query(
+        None, description="Funil aberto na tela — tem prioridade, como antes"
+    ),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
     Resolve funil + etapa + entry de um lead.
 
-    Um lead pode estar em varios funis. A regra de escolha e a MESMA que o
-    frontend usava ao varrer o board: a primeira entry encontrada na ordem de
-    criacao. Nao inventamos prioridade nova.
+    Um lead PODE estar em varios funis (nao ha unique em (lead_id, funnel_id);
+    o guard de 409 so impede repetir no MESMO funil).
+
+    Regra de escolha, preservando o comportamento anterior: o frontend antigo
+    procurava o lead APENAS dentro do funil aberto (`boardDataFull`), e nao
+    fazia nada se ele nao estivesse la. Por isso `prefer_funnel_id` vence
+    sempre que houver entry naquele funil — resultado identico ao antigo.
+    O fallback (entry mais antiga) so atua no caso em que o codigo antigo
+    simplesmente nao abria nada.
     """
-    entry = (
-        db.query(FunnelEntry)
-        .filter(FunnelEntry.lead_id == lead_id)
-        .order_by(FunnelEntry.created_at, FunnelEntry.id)
-        .first()
-    )
+    base = db.query(FunnelEntry).filter(FunnelEntry.lead_id == lead_id)
+
+    entry = None
+    if prefer_funnel_id is not None:
+        entry = (
+            base.filter(FunnelEntry.funnel_id == prefer_funnel_id)
+            .order_by(FunnelEntry.created_at, FunnelEntry.id)
+            .first()
+        )
+    if entry is None:
+        entry = base.order_by(FunnelEntry.created_at, FunnelEntry.id).first()
     if not entry:
         raise HTTPException(status_code=404, detail="Lead não está em nenhum funil")
 

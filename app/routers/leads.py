@@ -86,6 +86,9 @@ def list_leads(
     data_chegada_ate: Optional[date] = Query(None, description="Data de chegada até (YYYY-MM-DD)"),
     data_partida_de: Optional[date] = Query(None, description="Data de partida a partir de (YYYY-MM-DD)"),
     data_partida_ate: Optional[date] = Query(None, description="Data de partida até (YYYY-MM-DD)"),
+    exclude_funnel_id: Optional[int] = Query(
+        None, description="Omite os leads que JÁ estão neste funil"
+    ),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -133,6 +136,19 @@ def list_leads(
         query = query.filter(Lead.data_partida >= data_partida_de)
     if data_partida_ate:
         query = query.filter(Lead.data_partida <= data_partida_ate)
+    if exclude_funnel_id is not None:
+        # NOT EXISTS correlacionado: uma unica query, sem N+1 e sem trazer o
+        # funil inteiro para a memoria. Usado pelo dropdown "adicionar lead ao
+        # funil" do Pipeline, que antes filtrava com o board carregado.
+        ja_no_funil = (
+            db.query(FunnelEntry.id)
+            .filter(
+                FunnelEntry.lead_id == Lead.id,
+                FunnelEntry.funnel_id == exclude_funnel_id,
+            )
+            .exists()
+        )
+        query = query.filter(~ja_no_funil)
 
     total = query.count()
     leads = query.order_by(Lead.created_at.desc()).offset(skip).limit(limit).all()

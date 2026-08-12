@@ -619,7 +619,8 @@
         const urlLeadId = new URLSearchParams(window.location.search).get('lead_id');
         if (!urlLeadId) return;
         const lid = parseInt(urlLeadId);
-        const resp = await Auth.apiRequest('/api/pipeline/locate/' + lid);
+        const resp = await Auth.apiRequest('/api/pipeline/locate/' + lid +
+            (currentFunnelId ? '?prefer_funnel_id=' + currentFunnelId : ''));
         if (!resp || !resp.ok) return;
         const loc = await resp.json();
 
@@ -1036,6 +1037,9 @@
         const search = document.getElementById('addLeadSearch').value.trim();
         const params = new URLSearchParams({ limit: 20 });
         if (search) params.set('search', search);
+        // exclusao volta a existir, agora no SQL (NOT EXISTS). O 409 do backend
+        // permanece como protecao contra corrida entre duas abas.
+        if (currentFunnelId) params.set('exclude_funnel_id', currentFunnelId);
 
         const resp = await Auth.apiRequest(`/api/leads?${params}`);
         if (!resp) return;
@@ -1047,10 +1051,7 @@
             return;
         }
 
-        // Sem o board inteiro em memoria nao da para excluir aqui quem ja esta
-        // no funil — a pagina carregada e so uma fatia. O backend ja responde
-        // 409 nesse caso, entao a checagem real acontece no addLeadToFunnel.
-        const available = data.leads;
+        const available = data.leads;   // ja vem sem os que estao no funil
         if (available.length === 0) {
             list.innerHTML = '<div class="add-lead-item" style="color:var(--color-dark-400)">Todos os leads já estão no funil</div>';
             return;
