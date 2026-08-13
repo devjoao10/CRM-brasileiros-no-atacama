@@ -87,7 +87,6 @@
         .add-field-btn:hover { background: rgba(43,108,176,0.05); }
         .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
         .form-row .form-group { margin-bottom: var(--space-4); }
-            .form-row { grid-template-columns: 1fr; }
         .form-group.full-width { grid-column: 1 / -1; }
     @media (max-width: 768px) {
         .form-row { grid-template-columns: 1fr; }
@@ -677,9 +676,21 @@
         const url = id ? `/api/leads/${id}` : '/api/leads';
         const method = id ? 'PUT' : 'POST';
 
-        const resp = await Auth.apiRequest(url, { method, body: JSON.stringify(body) });
-        setLeadSaving(false);
-        salvandoLead = false;
+        let resp;
+        try {
+            resp = await Auth.apiRequest(url, { method, body: JSON.stringify(body) });
+        } catch (e) {
+            // Rede caiu, servidor fora, DNS: o fetch REJEITA e nada depois do
+            // await roda. Sem tratar aqui a promise ficava pendurada e o botao
+            // travado ate recarregar a pagina. Usa o mesmo alerta do modal —
+            // nenhuma arquitetura de notificacao nova.
+            showLeadAlert('Falha de conexão ao salvar. Verifique a internet e tente novamente.');
+            return;
+        } finally {
+            // Ponto UNICO de liberacao: vale para sucesso, erro HTTP e excecao.
+            setLeadSaving(false);
+            salvandoLead = false;
+        }
 
         if (!resp) return;
         if (!resp.ok) {

@@ -66,6 +66,32 @@ def test_os_dois_templates_incluem_o_MESMO_partial():
     assert inc in PIPE, "pipeline.html nao inclui o editor compartilhado"
 
 
+def test_form_row_de_duas_colunas_nao_e_anulado_fora_do_media_query():
+    """
+    A extracao quase levou a regra `.form-row { grid-template-columns: 1fr }`
+    de dentro do @media para o topo do <style>. Solta, ela venceria a regra de
+    duas colunas em QUALQUER largura e o formulario ficaria em coluna unica no
+    desktop — regressao visual que nenhum outro teste aqui pegaria.
+    """
+    css = PARTIAL.split("<style>", 1)[1].split("</style>", 1)[0]
+    fora, prof = [], 0
+    for linha in css.splitlines():
+        if "@media" in linha:
+            prof += 1
+            continue
+        if prof and linha.strip() == "}":
+            prof -= 1
+            continue
+        if not prof and re.search(r"\.form-row\s*\{[^}]*grid-template-columns:\s*1fr\s*[;}]",
+                                  linha):
+            fora.append(linha.strip())
+    assert not fora, (
+        f"regra de coluna unica fora do @media: {fora} — anularia as duas "
+        f"colunas no desktop")
+    assert "grid-template-columns: 1fr 1fr" in css, "as duas colunas sumiram"
+    assert "@media" in css, "o override responsivo tem que continuar existindo"
+
+
 def test_modal_html_existe_uma_vez_so():
     assert PARTIAL.count('id="leadModal"') == 1
     for nome, txt in (("leads.html", LEADS), ("pipeline.html", PIPE)):
@@ -130,6 +156,7 @@ const Auth = { apiRequest: async (url, opts) => {
     pedidos.push({ url, method: (opts && opts.method) || 'GET',
                    body: opts && opts.body ? JSON.parse(opts.body) : null });
     const r = respostas[url] !== undefined ? respostas[url] : respostas['*'];
+    if (r && r.lanca) { const e = new TypeError('Failed to fetch'); throw e; }
     if (r && r.status >= 400) return { ok: false, status: r.status, json: async () => r.body };
     return { ok: true, status: 200, json: async () => (r ? r.body : {}) };
 }};
@@ -400,6 +427,80 @@ def test_nenhum_py_de_aplicacao_alterado():
     if r.returncode != 0:
         return
     assert not r.stdout.strip(), f"backend alterado: {r.stdout.strip()}"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 5b. Erro de rede nao pode travar o editor
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_excecao_de_rede_libera_o_editor():
+    """
+    Quando o fetch REJEITA (offline, servidor fora, DNS), nada depois do await
+    roda. Sem o finally, salvandoLead ficava true e o botao Salvar travado ate
+    recarregar a pagina.
+    """
+    r = _roda("""
+        let chamou = 0;
+        onLeadSaved = async () => { chamou++; };
+        openLeadModal({ id: 7, nome: 'Joao' });
+        let propagou = false;
+        try { await saveLead(); } catch (e) { propagou = true; }
+        console.log(JSON.stringify({
+            salvandoLead, botao: els.leadSaveBtn.disabled, modalAberto,
+            chamou, propagou, requests: pedidos.length,
+            alerta: els.leadModalAlertMsg._text }));
+    """, respostas={"/api/leads/7": {"lanca": True}})
+    assert r["salvandoLead"] is False, "a trava de reentrancia nao foi liberada"
+    assert r["botao"] is False, "o botao Salvar ficou desabilitado para sempre"
+    assert r["modalAberto"] is True, "erro de rede nao pode fechar o modal"
+    assert r["chamou"] == 0, "onLeadSaved rodou sem save confirmado"
+    assert r["requests"] == 1, f"houve request extra: {r['requests']}"
+    assert r["propagou"] is False, (
+        "a excecao vazou de saveLead — promise rejeitada sem tratamento")
+    assert r["alerta"], "o usuario precisa ver o erro"
+    assert "cone" in r["alerta"].lower() or "conex" in r["alerta"].lower(), (
+        f"mensagem pouco clara: {r['alerta']!r}")
+
+
+def test_retry_depois_do_erro_de_rede_funciona():
+    """Prova que nao sobrou estado morto: cai a rede, volta, o save vai."""
+    r = _roda("""
+        let chamou = 0;
+        onLeadSaved = async () => { chamou++; };
+        openLeadModal({ id: 7, nome: 'Joao' });
+        try { await saveLead(); } catch (e) {}
+        const travadoDepoisDaFalha = salvandoLead || els.leadSaveBtn.disabled;
+        respostas['/api/leads/7'] = { body: { id: 7, nome: 'Joao' } };   // rede voltou
+        await saveLead();
+        console.log(JSON.stringify({
+            travadoDepoisDaFalha, chamou, modalAberto,
+            puts: pedidos.filter(p => p.method === 'PUT' && p.url === '/api/leads/7').length }));
+    """, respostas={"/api/leads/7": {"lanca": True}})
+    assert r["travadoDepoisDaFalha"] is False, "ficou travado entre as tentativas"
+    assert r["puts"] == 2, f"a 2a tentativa nao chegou ao servidor: {r['puts']} PUTs"
+    assert r["chamou"] == 1, "so a tentativa bem-sucedida pode disparar onLeadSaved"
+    assert r["modalAberto"] is False, "no sucesso o modal fecha normalmente"
+
+
+def test_reset_da_trava_esta_em_finally_e_nao_duplicado():
+    corpo = _fn("saveLead", PARTIAL)
+    assert "} finally {" in corpo, "o reset tem que estar num finally"
+    depois = corpo.split("} finally {", 1)[1]
+    assert "salvandoLead = false" in depois and "setLeadSaving(false)" in depois, (
+        "o finally precisa liberar as duas travas")
+    assert corpo.count("salvandoLead = false") == 1, (
+        "reset duplicado em varios branches: deixa de ser ponto unico")
+    assert corpo.count("setLeadSaving(false)") == 1
+
+
+def test_erro_de_rede_nao_mexe_em_drawer_board_nem_highlight():
+    corpo = _fn("saveLead", PARTIAL)
+    catch = corpo.split("} catch (e) {", 1)[1].split("} finally {", 1)[0]
+    for proibido in ("closeLeadModal", "closeDetailPanel", "loadBoard",
+                     "loadStage", "clearTargetLead", "location", "onLeadSaved"):
+        assert proibido not in catch, (
+            f"o tratamento de erro de rede chama {proibido}")
+    assert "showLeadAlert" in catch, "usa o mecanismo de erro que ja existe"
 
 
 # ─────────────────────────────────────────────────────────────────────────
