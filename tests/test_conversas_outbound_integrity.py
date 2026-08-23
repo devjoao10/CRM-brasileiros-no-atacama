@@ -38,10 +38,16 @@ os.environ["SECRET_KEY"] = "test-secret-key"
 os.environ["CONVERSAS_SEED_DEV_DATA"] = "false"
 os.environ["META_ACCESS_TOKEN"] = SECRET_SENTINEL
 os.environ["META_PHONE_NUMBER_ID"] = "0000000000"
+# CONV-WINDOW-01: a Graph API de templates e endereçada pelo WABA_ID; sem ele o
+# envio de template falha fechado (comportamento correto). O fetch e mockado
+# adiante, entao nenhuma rede e tocada.
+os.environ["META_WABA_ID"] = "0000000001"
 os.environ["META_APP_SECRET"] = ""
 os.environ["N8N_AGENT_ENABLED"] = "false"
 
 sys.path.insert(0, str(CONVERSAS_DIR))
+
+import datetime as _dt  # noqa: E402
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -135,6 +141,24 @@ def get_conv(conv_id):
         sess.close()
 
 
+# CONV-WINDOW-01: /initiate agora valida o template contra o catalogo APPROVED
+# real da Meta (name+language+aridade) antes de enviar — antes mandava
+# `components=[]` as cegas. O catalogo e mockado aqui para o teste seguir
+# offline; `boas_vindas` sem parametros mantem o cenario original intacto.
+from app.services import meta_templates as _meta_tpl  # noqa: E402
+
+
+async def _fake_fetch_templates(base_url, waba_id, headers):
+    return [{
+        "name": "boas_vindas", "language": "pt_BR", "status": "APPROVED",
+        "category": "UTILITY",
+        "components": [{"type": "BODY", "text": "Ola! Bem-vindo a Brasileiros no Atacama."}],
+    }]
+
+
+_meta_tpl._fetch_meta_templates = _fake_fetch_templates
+_meta_tpl.invalidate_catalog_cache()
+
 # ============ P2: /initiate com template — FALHA ============
 print("P2 — initiate (template) em falha da Meta")
 whatsapp.send_template_message = make_sender(FAIL_RESPONSE)
@@ -170,6 +194,18 @@ check(get_conv(r2.json()["conversation_id"]).ultimo_msg is not None, "preview at
 print("\nP3 — auto-reply end_service em falha")
 whatsapp.send_text_message = make_sender(FAIL_RESPONSE)
 conv_id_p3 = r2.json()["conversation_id"]  # conversa aberta do caso anterior
+# CONV-WINDOW-01: `end_service` e texto LIVRE — so e enviado com a janela aberta.
+# A conversa acima nasceu de /initiate (sem inbound), entao aqui simulamos o
+# cliente tendo respondido: e exatamente o cenario em que a frase automatica
+# DEVE sair, que e o que este caso exercita.
+# (O caso oposto — janela fechada, frase pulada, conversa encerrada mesmo assim —
+#  esta coberto em tests/test_conversas_service_window.py.)
+_s = SessionLocal()
+_s.query(Conversation).filter(Conversation.id == conv_id_p3).update(
+    {"last_customer_msg_at": _dt.datetime.now(_dt.timezone.utc)}
+)
+_s.commit()
+_s.close()
 r3 = client.put(f"/api/conversations/{conv_id_p3}", json={"status": "encerrada"})
 check(r3.status_code == 200, f"PUT status encerrada responde 200 (got {r3.status_code})")
 p3_rows = [m for m in q_messages(conversation_id=conv_id_p3) if m.content == "Atendimento encerrado. Obrigado!"]
@@ -267,7 +303,9 @@ print("\nRETRY — reenvio manual de mensagem failed")
 # cria uma mensagem failed via endpoint principal
 whatsapp.send_text_message = make_sender(FAIL_RESPONSE)
 sess = SessionLocal()
-conv_rt = Conversation(lead_id=1, whatsapp="5511900000008", nome="Cliente RT", status="aberta")
+# CONV-WINDOW-01: o retry e free-form -> exige janela aberta agora.
+conv_rt = Conversation(lead_id=1, whatsapp="5511900000008", nome="Cliente RT", status="aberta",
+                       last_customer_msg_at=_dt.datetime.now(_dt.timezone.utc))
 sess.add(conv_rt)
 sess.commit()
 sess.refresh(conv_rt)

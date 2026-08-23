@@ -1,8 +1,39 @@
+from datetime import datetime, timedelta, timezone
+
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from app.database import Base
+
+# CONV-WINDOW-01: janela de atendimento de 24h da WhatsApp Business Platform.
+SERVICE_WINDOW = timedelta(hours=24)
+
+
+def service_window_open(last_customer_msg_at, now=None) -> bool:
+    """
+    FONTE UNICA da regra de 24h. Funcao PURA — sem DB, sem I/O, sem now() implicito
+    quando `now` e informado. Todo o resto do sistema (guard das rotas, serializacao,
+    frontend) consome ESTE calculo; ninguem reimplementa 24h em outro lugar.
+
+        aberta  <=>  last_customer_msg_at IS NOT NULL
+                     AND now < last_customer_msg_at + 24h
+
+    Exatamente 24h => FECHADA (`<`, nunca `<=`).
+    NULL            => FECHADA (conversa sem inbound do cliente nunca teve janela).
+
+    Timestamps naive sao normalizados como UTC: o PostgreSQL de producao devolve
+    tz-aware (TIMESTAMPTZ) mas o SQLite de dev/CI devolve naive, e comparar os dois
+    levantaria TypeError. Sem esta normalizacao a suite inteira quebra fora de prod.
+    """
+    if last_customer_msg_at is None:
+        return False
+    if last_customer_msg_at.tzinfo is None:
+        last_customer_msg_at = last_customer_msg_at.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return now < last_customer_msg_at + SERVICE_WINDOW
 
 
 class Conversation(Base):
@@ -48,6 +79,16 @@ class Conversation(Base):
         cascade="all, delete-orphan",
         order_by="ConversationNote.created_at",
     )
+
+    @property
+    def service_window_open(self) -> bool:
+        """
+        CONV-WINDOW-01: recalculado a CADA leitura (nunca persistido) — a janela
+        fecha pela passagem do tempo, nao por um evento que pudesse ser gravado.
+        `from_attributes` do Pydantic serializa isto automaticamente, entao a
+        lista, o detalhe e o guard das rotas leem o MESMO valor.
+        """
+        return service_window_open(self.last_customer_msg_at)
 
     def __repr__(self):
         return f"<Conversation(id={self.id}, lead_id={self.lead_id}, nome='{self.nome}')>"

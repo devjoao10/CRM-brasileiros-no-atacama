@@ -10,6 +10,8 @@ API Reference:
 """
 
 import logging
+import re
+import time
 from typing import Optional
 
 import httpx
@@ -17,8 +19,23 @@ from sqlalchemy.orm import Session
 
 from app.models.template import MessageTemplate
 from app.models.api_config import ApiConfig
+from app.services import whatsapp
 
 logger = logging.getLogger(__name__)
+
+# CONV-WINDOW-01: identidade de template na Meta e (name, language) — NUNCA name
+# sozinho. A mesma conta pode ter o mesmo nome em varios idiomas, e enviar o
+# idioma errado e um envio errado (a Meta aceita e o cliente recebe em ingles).
+_PARAM_RE = re.compile(r"\{\{(\d+)\}\}")
+
+# Cache EM MEMORIA do catalogo aprovado. Existe porque abrir o seletor de
+# templates numa conversa expirada faria um round-trip a Graph API a cada clique.
+# Curto de proposito: um template revogado/pausado na Meta some do seletor em no
+# maximo 5 min. NAO e tabela, NAO persiste, morre com o processo — a fonte de
+# verdade continua sendo a Meta.
+_CATALOG_TTL_SECONDS = 300
+_catalog_cache: Optional[dict] = None
+_catalog_cached_at: float = 0.0
 
 
 def _get_api_config(db: Session) -> Optional[ApiConfig]:
@@ -149,6 +166,193 @@ def _build_template_components(template: MessageTemplate) -> list:
     return components
 
 
+async def _fetch_meta_templates(base_url: str, waba_id: str, headers: dict) -> list:
+    """
+    GET /{WABA_ID}/message_templates, seguindo `paging.next` ate o fim.
+    SOMENTE LEITURA — nunca escreve na Meta nem no banco.
+
+    Extraido de `sync_template_statuses` para ser compartilhado com o catalogo
+    read-only: o dropdown do composer NAO pode disparar um sync (que escreveria
+    status no banco) so para listar o que enviar.
+
+    Levanta httpx.HTTPStatusError em resposta != 200 (os chamadores traduzem).
+    """
+    url = f"{base_url}/{waba_id}/message_templates"
+    params: dict = {
+        "fields": "name,language,status,category,components",
+        "limit": 250,
+    }
+    collected: list = []
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        next_url = url
+        while next_url:
+            response = await client.get(next_url, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+            collected.extend(data.get("data", []))
+            next_url = data.get("paging", {}).get("next")
+            params = {}  # a URL de `next` ja carrega os parametros
+
+    return collected
+
+
+def count_body_params(text: str) -> int:
+    """
+    Aridade de um corpo de template: quantos {{n}} POSICIONAIS distintos ele exige.
+
+    Conta indices distintos (nao ocorrencias): `alerta_lead` repete {{1}} em duas
+    frases e continua exigindo um unico valor. Se os indices nao forem exatamente
+    1..N contiguos, devolve o MAIOR indice — a Meta exige o array completo ate ele,
+    e pedir a mais e seguro; pedir a menos monta payload invalido.
+    """
+    if not text:
+        return 0
+    idx = {int(m) for m in _PARAM_RE.findall(text)}
+    return max(idx) if idx else 0
+
+
+def _describe_template(raw: dict) -> dict:
+    """
+    Traduz um template cru da Graph API para o contrato do frontend, e decide se
+    ESTE pacote sabe envia-lo.
+
+    Capacidades implementadas (definidas pelo inventario real da WABA — 34/34
+    APPROVED, nenhum header de midia, nenhum botao, nenhum parametro de header):
+      - BODY textual, com ou sem {{n}} posicionais
+      - HEADER TEXT ESTATICO (sem {{n}})
+      - FOOTER (estatico, sem parametros por especificacao da Meta)
+
+    Fora disso o template e listado como INDISPONIVEL com motivo visivel. Nunca
+    escondido em silencio, e nunca enviado com payload adivinhado.
+    """
+    components = raw.get("components") or []
+    header = next((c for c in components if c.get("type") == "HEADER"), None)
+    body = next((c for c in components if c.get("type") == "BODY"), None)
+    footer = next((c for c in components if c.get("type") == "FOOTER"), None)
+    buttons = next((c for c in components if c.get("type") == "BUTTONS"), None)
+
+    body_text = (body or {}).get("text") or ""
+    header_text = (header or {}).get("text") or None
+    header_format = (header or {}).get("format")
+
+    unsupported = None
+    if not body:
+        unsupported = "sem componente BODY"
+    elif header and header_format != "TEXT":
+        unsupported = f"header de midia ({header_format}) ainda nao suportado"
+    elif header_text and count_body_params(header_text) > 0:
+        unsupported = "header com parametros ainda nao suportado"
+    elif buttons:
+        unsupported = "botoes ainda nao suportados"
+
+    return {
+        "name": raw.get("name") or "",
+        "language": raw.get("language") or "",
+        "category": raw.get("category") or "",
+        "status": raw.get("status") or "",
+        "header_text": header_text,
+        "body_text": body_text,
+        "footer_text": (footer or {}).get("text") or None,
+        "body_params": count_body_params(body_text),
+        "supported": unsupported is None,
+        "unsupported_reason": unsupported,
+    }
+
+
+def invalidate_catalog_cache() -> None:
+    """Usado pelos testes e por qualquer mudanca de credencial."""
+    global _catalog_cache, _catalog_cached_at
+    _catalog_cache = None
+    _catalog_cached_at = 0.0
+
+
+async def list_approved_templates(db: Session, *, force: bool = False) -> dict:
+    """
+    Catalogo READ-ONLY dos templates APPROVED da conta, direto da Meta.
+
+    NAO consulta a tabela local `message_templates`: o status local so muda em
+    sync manual e pode estar desatualizado — um template revogado continuaria
+    "APPROVED" no banco e o envio falharia na cara do operador.
+
+    Retorna {"ok": True, "templates": [...]} ou {"ok": False, "error": <seguro>}.
+    O erro NUNCA vaza token, header ou URL com credencial.
+    """
+    global _catalog_cache, _catalog_cached_at
+
+    if not force and _catalog_cache is not None:
+        if time.monotonic() - _catalog_cached_at < _CATALOG_TTL_SECONDS:
+            return _catalog_cache
+
+    creds = whatsapp.get_waba_credentials(db)
+    if creds is None:
+        return {
+            "ok": False,
+            "error": "Meta API nao configurada. Configure Access Token e WABA ID em Configuracoes > API WhatsApp.",
+        }
+    token, waba_id, base_url = creds
+
+    try:
+        raw = await _fetch_meta_templates(base_url, waba_id, {"Authorization": f"Bearer {token}"})
+    except httpx.HTTPStatusError as e:
+        summary = f"HTTP {e.response.status_code}"
+        try:
+            err = e.response.json().get("error", {})
+            if err.get("message"):
+                summary += f": {err['message']}"
+        except Exception:
+            pass
+        logger.error(f"Falha ao listar templates na Meta: {summary}")
+        return {"ok": False, "error": f"Nao foi possivel carregar os templates ({summary})."}
+    except httpx.TimeoutException:
+        return {"ok": False, "error": "Tempo esgotado ao consultar a Meta. Tente novamente."}
+    except Exception as e:
+        logger.error(f"Erro inesperado ao listar templates: {type(e).__name__}")
+        return {"ok": False, "error": "Nao foi possivel carregar os templates. Tente novamente."}
+
+    templates = [
+        _describe_template(t) for t in raw if (t.get("status") or "").upper() == "APPROVED"
+    ]
+    templates.sort(key=lambda t: (t["name"], t["language"]))
+
+    result = {"ok": True, "templates": templates}
+    _catalog_cache = result
+    _catalog_cached_at = time.monotonic()
+    logger.info(f"Catalogo de templates atualizado: {len(templates)} APPROVED de {len(raw)} totais.")
+    return result
+
+
+async def find_approved_template(db: Session, name: str, language: str) -> Optional[dict]:
+    """
+    Busca por (name, language) — a chave real. Devolve None se o par nao existir
+    entre os APPROVED, e por isso vale tambem como validacao de envio: template
+    nao aprovado simplesmente nao e encontrado.
+    """
+    catalog = await list_approved_templates(db)
+    if not catalog.get("ok"):
+        return None
+    for t in catalog["templates"]:
+        if t["name"] == name and t["language"] == language:
+            return t
+    return None
+
+
+def render_template_body(body_text: str, params: list) -> str:
+    """
+    Substitui {{n}} pelos valores informados, para o HISTORICO refletir o que o
+    cliente REALMENTE recebeu ("Ola Joao", nao "Ola {{1}}").
+
+    Nao e a renderizacao oficial — quem renderiza de verdade e a Meta. E a melhor
+    aproximacao possivel sem coluna nova, e por isso e usada apenas em
+    `Message.content`, jamais no payload enviado.
+    """
+    def sub(match):
+        i = int(match.group(1)) - 1
+        return str(params[i]) if 0 <= i < len(params) else match.group(0)
+
+    return _PARAM_RE.sub(sub, body_text or "")
+
+
 async def create_template_on_meta(
     template: MessageTemplate, db: Session
 ) -> dict:
@@ -260,30 +464,12 @@ async def sync_template_statuses(db: Session) -> dict:
     if not _is_meta_configured(config):
         return {"success": False, "error": "Meta API não configurada. Configure as credenciais em Configurações > API WhatsApp."}
 
-    url = f"{_build_base_url(config)}/{config.meta_waba_id}/message_templates"
-    headers = _build_headers(config)
-    params = {"limit": 250}
-
     try:
-        all_meta_templates = []
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            # Paginate through all templates
-            next_url = url
-            while next_url:
-                response = await client.get(next_url, headers=headers, params=params)
-                if response.status_code != 200:
-                    error_data = response.json()
-                    error_msg = error_data.get("error", {}).get("message", response.text)
-                    return {"success": False, "error": f"Meta API: {error_msg}"}
-
-                data = response.json()
-                all_meta_templates.extend(data.get("data", []))
-
-                # Check for pagination
-                paging = data.get("paging", {})
-                next_url = paging.get("next")
-                params = {}  # Next URL already has params
+        # CONV-WINDOW-01: paginacao compartilhada com o catalogo read-only —
+        # uma unica implementacao de "listar templates da WABA".
+        all_meta_templates = await _fetch_meta_templates(
+            _build_base_url(config), config.meta_waba_id, _build_headers(config)
+        )
 
         # Build lookup by name
         meta_lookup = {}
@@ -334,6 +520,15 @@ async def sync_template_statuses(db: Session) -> dict:
         logger.info(f"Sincronização concluída: {synced} templates atualizados.")
         return {"success": True, "synced": synced, "total_meta": len(all_meta_templates), "details": details}
 
+    except httpx.HTTPStatusError as e:
+        # `_fetch_meta_templates` levanta em != 200; traduz aqui para a MESMA
+        # mensagem de antes da extracao (e sem deixar `str(e)` vazar a URL).
+        error_msg = f"HTTP {e.response.status_code}"
+        try:
+            error_msg = e.response.json().get("error", {}).get("message", error_msg)
+        except Exception:
+            pass
+        return {"success": False, "error": f"Meta API: {error_msg}"}
     except httpx.TimeoutException:
         return {"success": False, "error": "Timeout ao conectar com a Meta API."}
     except Exception as e:

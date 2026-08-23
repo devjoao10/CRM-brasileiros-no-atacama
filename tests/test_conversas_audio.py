@@ -43,6 +43,8 @@ os.environ["CONVERSAS_MEDIA_DIR"] = str(STORAGE)
 
 sys.path.insert(0, str(CONVERSAS_DIR))
 
+import datetime as _dt  # noqa: E402
+
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
@@ -122,7 +124,11 @@ def mock_send_ok():
 
 def make_conv(wpp):
     s = SessionLocal()
-    c = Conversation(lead_id=1, whatsapp=wpp, nome="Cliente Audio", status="aberta")
+    # CONV-WINDOW-01: outbound free-form exige janela de 24h aberta, ou seja
+    # uma inbound recente do cliente. Sem isto o backend responde 409
+    # WINDOW_CLOSED — que e o comportamento correto, nao um bug do teste.
+    c = Conversation(lead_id=1, whatsapp=wpp, nome="Cliente Audio", status="aberta",
+                     last_customer_msg_at=_dt.datetime.now(_dt.timezone.utc))
     s.add(c)
     s.commit()
     s.refresh(c)

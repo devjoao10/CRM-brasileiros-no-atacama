@@ -41,6 +41,8 @@ os.environ["CONVERSAS_MEDIA_DIR"] = str(STORAGE)
 
 sys.path.insert(0, str(CONVERSAS_DIR))
 
+import datetime as _dt  # noqa: E402
+
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
@@ -116,7 +118,9 @@ def mock_fail_send():
 
 
 s = SessionLocal()
-conv = Conversation(lead_id=1, whatsapp="5511900055555", nome="Cliente Tipos", status="aberta")
+# CONV-WINDOW-01: midia e free-form -> exige janela aberta (inbound recente).
+conv = Conversation(lead_id=1, whatsapp="5511900055555", nome="Cliente Tipos", status="aberta",
+                    last_customer_msg_at=_dt.datetime.now(_dt.timezone.utc))
 s.add(conv)
 s.commit()
 s.refresh(conv)

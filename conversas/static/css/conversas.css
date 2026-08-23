@@ -1877,3 +1877,81 @@ button:disabled {
     font-family: var(--font);
     cursor: pointer;
 }
+
+/* ─── CONV-WINDOW-01: janela de 24h da Meta ─────────────────────────── */
+/* Substitui o composer quando service_window_open=false. A autoridade e o
+   backend (409 WINDOW_CLOSED); isto e a UX que evita o operador digitar em vao. */
+.chat-window-closed {
+    background: var(--white);
+    border-top: 1px solid var(--dark-200);
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-start;
+}
+
+.window-closed-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--error);
+}
+
+.window-closed-text {
+    font-size: 12px;
+    color: var(--dark-500);
+    line-height: 1.45;
+    margin: 0;
+    max-width: 520px;
+}
+
+.btn-window-template {
+    margin-top: 4px;
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 9px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--font);
+    cursor: pointer;
+    transition: opacity var(--transition);
+}
+
+.btn-window-template:hover:not(:disabled) { opacity: .9; }
+.btn-window-template:disabled { opacity: .55; cursor: default; }
+
+/* Indicador da lista. Vermelho e exclusivo desta regra — nao colide com o
+   online-dot (verde), o badge de nao-lidas (numerico) nem os chips de tag. */
+.conv-window-lock {
+    display: inline-flex;
+    align-items: center;
+    color: var(--error);
+    flex-shrink: 0;
+}
+
+/* Seletor de template: campos de parametro e preview */
+.tpl-item { padding: 10px; border-radius: 6px; margin-bottom: 4px; }
+.tpl-item.selectable { cursor: pointer; }
+.tpl-item.selectable:hover { background: var(--dark-100); }
+.tpl-item.disabled { opacity: .55; cursor: not-allowed; }
+.tpl-name { font-weight: 600; font-size: 12px; color: var(--primary); }
+.tpl-lang {
+    font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+    background: var(--dark-100); color: var(--dark-500); text-transform: uppercase;
+}
+.tpl-body {
+    font-size: 11px; color: var(--dark-500); line-height: 1.4;
+    white-space: pre-wrap; word-break: break-word;
+}
+.tpl-reason { font-size: 10px; color: var(--error); margin-top: 3px; }
+.tpl-param-input {
+    width: 100%; box-sizing: border-box; margin-top: 4px;
+    border: 1px solid var(--dark-200); border-radius: 6px;
+    padding: 6px 8px; font-size: 12px; font-family: var(--font); outline: none;
+}
+.tpl-param-input:focus { border-color: var(--primary); }

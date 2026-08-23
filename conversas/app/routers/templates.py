@@ -22,6 +22,7 @@ from app.schemas.template import (
 )
 from app.services import whatsapp
 from app.services import meta_templates
+from app.services.outbound import classify_wa_response
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/templates", tags=["Templates"])
@@ -98,6 +99,31 @@ async def list_templates(
         templates=[TemplateResponse.from_orm_model(t) for t in templates],
         total=total,
     )
+
+
+@router.get("/meta/approved")
+async def list_meta_approved_templates(
+    refresh: bool = Query(False, description="Ignora o cache de 5 min e reconsulta a Meta"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    CONV-WINDOW-01 — catalogo READ-ONLY dos templates APPROVED direto da Meta.
+
+    Fonte do seletor do composer. NAO le a tabela local (status local so muda em
+    sync manual e pode estar velho) e NAO escreve nada: nem na Meta, nem no banco.
+    Cache em memoria de 5 min.
+
+    Rota declarada ANTES de `/{template_id}` de proposito — "meta" nao e um int e
+    cairia no conversor de path da outra rota.
+
+    503 quando a Meta esta indisponivel: o frontend precisa distinguir "nao ha
+    templates" de "nao consegui carregar" — e no segundo caso NUNCA liberar texto.
+    """
+    result = await meta_templates.list_approved_templates(db, force=refresh)
+    if not result.get("ok"):
+        raise HTTPException(status_code=503, detail=result.get("error", "Nao foi possivel carregar os templates."))
+    return {"templates": result["templates"], "total": len(result["templates"])}
 
 
 @router.get("/{template_id}", response_model=TemplateResponse)
@@ -296,7 +322,14 @@ async def send_template(
         db=db,
     )
 
-    if result:
-        return {"message": f"Template '{template.name}' enviado para {data.to}", "response": result}
-    else:
-        raise HTTPException(status_code=500, detail="Falha ao enviar template via WhatsApp API")
+    # CONV-WINDOW-01 (bug legado): `if result:` dava 200 em falha — o dict de erro
+    # {"error": True, ...} devolvido por `send_template_message` e TRUTHY. Um envio
+    # recusado pela Meta respondia "Template enviado". Classificacao real agora,
+    # pelo mesmo contrato que todo o resto do outbound usa.
+    r = classify_wa_response(result)
+    if not r["ok"]:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Falha ao enviar template via WhatsApp API: {r['error_summary']}",
+        )
+    return {"message": f"Template '{template.name}' enviado para {data.to}", "response": result}

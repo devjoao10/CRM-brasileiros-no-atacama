@@ -347,7 +347,13 @@
                 processChatNotifications(data, true);
                 const oldCount = (activeConversation.messages || []).length;
                 const newCount = (data.messages || []).length;
-                if (newCount !== oldCount) {
+                // CONV-WINDOW-01: a janela fecha pela PASSAGEM DO TEMPO — as 24h
+                // viram sem que nenhuma mensagem nova chegue. Comparar so a
+                // contagem deixaria o composer aberto indefinidamente numa janela
+                // ja fechada. Sem timer paralelo: o polling de 5s ja existia.
+                const windowChanged =
+                    activeConversation.service_window_open !== data.service_window_open;
+                if (newCount !== oldCount || windowChanged) {
                     activeConversation = data;
                     renderChat();
                     renderLeadPanel();
@@ -493,116 +499,24 @@
         });
 
         // --- TEMPLATE LOGIC ---
+        // CONV-WINDOW-01: seletor de templates APROVADOS da Meta.
+        // Um unico seletor serve os dois estados (janela aberta e fechada) — por
+        // isso o dropdown mora fora de .chat-input no HTML.
         const btnShowTemplates = document.getElementById('btnShowTemplates');
         const btnCloseTemplates = document.getElementById('btnCloseTemplates');
         const templatesDropdown = document.getElementById('templatesDropdown');
         const templatesList = document.getElementById('templatesList');
 
         if (btnShowTemplates) {
-            btnShowTemplates.addEventListener('click', async () => {
-                templatesDropdown.style.display = 'block';
-                templatesList.innerHTML = '<div style="padding: 10px; text-align: center; font-size: 12px; color: var(--dark-400);">Carregando...</div>';
-                
-                try {
-                    // Fetch ALL templates — not filtered by status
-                    const res = await Auth.apiRequest('/api/templates');
-                    if (!res.ok) throw new Error();
-                    const data = await res.json();
-                    
-                    if (!data.templates || data.templates.length === 0) {
-                        templatesList.innerHTML = '<div style="padding: 10px; text-align: center; font-size: 12px; color: var(--dark-400);">Nenhum template cadastrado.<br><a href="/templates" style="color:var(--primary);">Criar template</a></div>';
-                        return;
-                    }
-                    
-                    templatesList.innerHTML = '';
-                    data.templates.forEach(t => {
-                        const el = document.createElement('div');
-                        el.style.cssText = 'padding: 10px; border-radius: 6px; cursor: pointer; transition: background 0.2s; margin-bottom: 4px;';
-                        el.onmouseover = () => el.style.background = 'var(--dark-100)';
-                        el.onmouseout = () => el.style.background = 'transparent';
-                        
-                        // Name row with status badge
-                        const nameRow = document.createElement('div');
-                        nameRow.style.cssText = 'display: flex; align-items: center; gap: 6px; margin-bottom: 2px;';
-                        
-                        const name = document.createElement('span');
-                        name.style.cssText = 'font-weight: 600; font-size: 12px; color: var(--primary);';
-                        name.textContent = t.name;
-                        
-                        const badge = document.createElement('span');
-                        const badgeColors = {
-                            'APPROVED': { bg: '#e6f4ea', color: '#1e7e34' },
-                            'PENDING': { bg: '#fff8e1', color: '#f57f17' },
-                            'REJECTED': { bg: '#fde8e8', color: '#c62828' },
-                        };
-                        const bc = badgeColors[t.status] || { bg: '#eee', color: '#666' };
-                        badge.style.cssText = `font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 4px; background: ${bc.bg}; color: ${bc.color}; text-transform: uppercase;`;
-                        badge.textContent = t.status === 'APPROVED' ? 'Aprovado' : t.status === 'PENDING' ? 'Em Análise' : t.status;
-                        
-                        nameRow.appendChild(name);
-                        nameRow.appendChild(badge);
-                        
-                        const body = document.createElement('div');
-                        body.style.cssText = 'font-size: 11px; color: var(--dark-500); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
-                        body.textContent = t.body_text;
-                        
-                        el.appendChild(nameRow);
-                        el.appendChild(body);
-                        
-                        el.addEventListener('click', async () => {
-                            templatesDropdown.style.display = 'none';
-                            if (!activeConversation) return;
-
-                            try {
-                                let sendRes;
-                                if (t.status === 'APPROVED') {
-                                    sendRes = await Auth.apiRequest(`/api/conversations/${activeConversation.id}/messages`, {
-                                        method: 'POST',
-                                        body: JSON.stringify({
-                                            content: t.body_text,
-                                            msg_type: 'template',
-                                            template_name: t.name
-                                        })
-                                    });
-                                } else {
-                                    sendRes = await Auth.apiRequest(`/api/conversations/${activeConversation.id}/messages`, {
-                                        method: 'POST',
-                                        body: JSON.stringify({
-                                            content: t.body_text,
-                                            msg_type: 'text'
-                                        })
-                                    });
-                                }
-
-                                if (sendRes.ok) {
-                                    showToast(t.status === 'APPROVED' ? 'Template oficial enviado!' : 'Mensagem enviada como texto!');
-                                    loadChat(activeConversation.id);
-                                    loadConversations();
-                                } else {
-                                    const err = await sendRes.json();
-                                    showToast(err.detail || 'Erro ao enviar');
-                                }
-                            } catch (e) {
-                                showToast('Erro de conexão');
-                            }
-                        });
-                        
-                        templatesList.appendChild(el);
-                    });
-                } catch (e) {
-                    templatesList.innerHTML = '<div style="padding: 10px; text-align: center; font-size: 12px; color: var(--error);">Erro ao carregar templates.</div>';
-                }
-            });
-            
-            btnCloseTemplates.addEventListener('click', () => {
-                templatesDropdown.style.display = 'none';
-            });
-            
-            // Close dropdown when clicking outside
+            btnShowTemplates.addEventListener('click', openTemplatePicker);
+            document.getElementById('btnOpenTemplatePicker').addEventListener('click', openTemplatePicker);
+            btnCloseTemplates.addEventListener('click', closeTemplatePicker);
             document.addEventListener('click', (e) => {
-                if (!templatesDropdown.contains(e.target) && e.target !== btnShowTemplates && !btnShowTemplates.contains(e.target)) {
-                    templatesDropdown.style.display = 'none';
-                }
+                if (templatesDropdown.style.display === 'none') return;
+                const inside = templatesDropdown.contains(e.target)
+                    || btnShowTemplates.contains(e.target)
+                    || document.getElementById('btnOpenTemplatePicker').contains(e.target);
+                if (!inside) closeTemplatePicker();
             });
         }
         // --- END TEMPLATE LOGIC ---
@@ -659,6 +573,9 @@
             if (handleQrPaletteKeydown(e)) return;
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
+                // CONV-WINDOW-01: Enter e um caminho de envio independente do
+                // #btnSend — desabilitar so o botao deixaria esta porta aberta.
+                if (windowClosed()) { applyWindowState(activeConversation); return; }
                 sendMessage();
             }
         });
@@ -973,10 +890,285 @@
         showToast(`Buscando conversa com ${nome || whatsapp}...`);
     }
 
+    // ─── CONV-WINDOW-01: janela de 24h da Meta ─────────────────────────
+    // O valor vem SEMPRE do backend (`service_window_open` em ConversationResponse).
+    // O JS nunca recalcula 24 horas — se recalculasse, frontend e backend
+    // discordariam no minuto da virada.
+
+    let tplSending = false;   // guard de duplo clique (UI)
+
+    /**
+     * Aplica o estado da janela ao composer. Esconder o composer NAO basta:
+     * Enter, o input de arquivo e os botoes de reenvio continuariam vivos.
+     * Cada mecanismo free-form e desligado explicitamente.
+     */
+    function applyWindowState(conv) {
+        const open = !!(conv && conv.service_window_open);
+        const composer = document.getElementById('chatComposer');
+        const closedBox = document.getElementById('windowClosedBox');
+        if (!composer || !closedBox) return;
+
+        composer.style.display = open ? '' : 'none';
+        closedBox.style.display = open ? 'none' : '';
+
+        // Redundante com o display:none (o backend e a autoridade de verdade),
+        // mas impede submit por atalho/foco preso enquanto o no existe.
+        const input = document.getElementById('msgInput');
+        const btnSend = document.getElementById('btnSend');
+        const btnAttach = document.getElementById('btnAttach');
+        if (input) input.disabled = !open;
+        if (btnSend) btnSend.disabled = !open;
+        if (btnAttach) btnAttach.disabled = !open;
+
+        if (!open) {
+            closeQrPalette(false);
+            closeVarPalette();
+        } else {
+            document.getElementById('windowClosedText').textContent =
+                'O cliente não envia uma mensagem há mais de 24 horas. '
+                + 'Para retomar o atendimento, envie um template aprovado.';
+        }
+    }
+
+    /** Janela fechada => nenhum caminho free-form pode disparar. */
+    function windowClosed() {
+        return !!(activeConversation && activeConversation.service_window_open === false);
+    }
+
+    /**
+     * 409 WINDOW_CLOSED: a janela fechou entre o render e o POST. O backend
+     * recusou ANTES de tocar a Meta e sem persistir Message. Aqui so refletimos:
+     * marca a conversa como fechada e troca o composer na hora.
+     */
+    async function handleWindowClosed(detail) {
+        if (activeConversation) activeConversation.service_window_open = false;
+        applyWindowState(activeConversation);
+        showToast((detail && detail.message) || 'Janela de 24h encerrada. Envie um template aprovado.');
+        loadConversations();
+    }
+
+    /** Extrai {code, message} do corpo de erro sem quebrar em detail string. */
+    async function readErrorDetail(resp) {
+        try {
+            const body = await resp.json();
+            const d = body && body.detail;
+            if (d && typeof d === 'object') return d;
+            if (typeof d === 'string') return { message: d };
+        } catch (_) { /* sem corpo JSON */ }
+        return {};
+    }
+
+    function closeTemplatePicker() {
+        document.getElementById('templatesDropdown').style.display = 'none';
+    }
+
+    async function openTemplatePicker(e) {
+        if (e) e.stopPropagation();
+        if (!activeConversation) { showToast('Abra uma conversa primeiro'); return; }
+
+        const dropdown = document.getElementById('templatesDropdown');
+        const list = document.getElementById('templatesList');
+        dropdown.style.display = 'block';
+        list.textContent = '';
+        list.appendChild(noticeEl('Carregando templates aprovados...'));
+
+        const resp = await Auth.apiRequest('/api/templates/meta/approved');
+        // Falha ao listar NUNCA libera texto livre: o composer segue como esta.
+        if (!resp || !resp.ok) {
+            const d = resp ? await readErrorDetail(resp) : {};
+            list.textContent = '';
+            list.appendChild(noticeEl(d.message || 'Não foi possível carregar os templates.', true));
+            const retry = document.createElement('button');
+            retry.type = 'button';
+            retry.className = 'btn-window-template';
+            retry.textContent = 'Tentar novamente';
+            retry.addEventListener('click', (ev) => { ev.stopPropagation(); openTemplatePicker(); });
+            list.appendChild(retry);
+            return;
+        }
+
+        const data = await resp.json();
+        const templates = data.templates || [];
+        list.textContent = '';
+        if (!templates.length) {
+            list.appendChild(noticeEl('Nenhum template aprovado na conta Meta.'));
+            return;
+        }
+        templates.forEach(t => list.appendChild(templateItemEl(t)));
+    }
+
+    function noticeEl(text, isError) {
+        const el = document.createElement('div');
+        el.style.cssText = 'padding:10px; text-align:center; font-size:12px; color:'
+            + (isError ? 'var(--error)' : 'var(--dark-400)') + ';';
+        el.textContent = text;
+        return el;
+    }
+
+    /**
+     * Um item do seletor. Template com estrutura ainda nao suportada aparece
+     * DESABILITADO com o motivo visivel — nunca some em silencio, nunca vira
+     * payload adivinhado.
+     */
+    function templateItemEl(t) {
+        const el = document.createElement('div');
+        el.className = 'tpl-item' + (t.supported ? ' selectable' : ' disabled');
+
+        const nameRow = document.createElement('div');
+        nameRow.style.cssText = 'display:flex; align-items:center; gap:6px; margin-bottom:2px;';
+        const name = document.createElement('span');
+        name.className = 'tpl-name';
+        name.textContent = t.name;
+        const lang = document.createElement('span');
+        lang.className = 'tpl-lang';
+        lang.textContent = t.language;
+        nameRow.appendChild(name);
+        nameRow.appendChild(lang);
+        el.appendChild(nameRow);
+
+        if (t.header_text) {
+            const h = document.createElement('div');
+            h.className = 'tpl-body';
+            h.style.fontWeight = '600';
+            h.textContent = t.header_text;
+            el.appendChild(h);
+        }
+        const body = document.createElement('div');
+        body.className = 'tpl-body';
+        body.textContent = t.body_text;
+        el.appendChild(body);
+
+        if (!t.supported) {
+            const reason = document.createElement('div');
+            reason.className = 'tpl-reason';
+            reason.textContent = 'Este template possui componentes ainda não suportados: '
+                + (t.unsupported_reason || 'estrutura desconhecida') + '.';
+            el.appendChild(reason);
+            return el;
+        }
+
+        el.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            openTemplateForm(t);
+        });
+        return el;
+    }
+
+    /** Formulario de parametros + preview. A aridade vem da Meta, via backend. */
+    function openTemplateForm(t) {
+        const list = document.getElementById('templatesList');
+        list.textContent = '';
+
+        const head = document.createElement('div');
+        head.className = 'tpl-item';
+        const name = document.createElement('span');
+        name.className = 'tpl-name';
+        name.textContent = t.name;
+        const lang = document.createElement('span');
+        lang.className = 'tpl-lang';
+        lang.style.marginLeft = '6px';
+        lang.textContent = t.language;
+        head.appendChild(name);
+        head.appendChild(lang);
+        list.appendChild(head);
+
+        const preview = document.createElement('div');
+        preview.className = 'tpl-body';
+        preview.style.cssText = 'background:var(--dark-100); border-radius:6px; padding:8px; margin:8px 0;';
+
+        const inputs = [];
+        const form = document.createElement('div');
+        form.style.padding = '0 10px';
+        for (let i = 1; i <= t.body_params; i++) {
+            const label = document.createElement('label');
+            label.style.cssText = 'font-size:11px; color:var(--dark-500); display:block; margin-top:6px;';
+            label.textContent = '{{' + i + '}}';
+            const inp = document.createElement('input');
+            inp.type = 'text';
+            inp.className = 'tpl-param-input';
+            inp.addEventListener('input', updatePreview);
+            label.appendChild(inp);
+            form.appendChild(label);
+            inputs.push(inp);
+        }
+
+        function values() { return inputs.map(i => i.value); }
+        function updatePreview() {
+            const vals = values();
+            preview.textContent = t.body_text.replace(/\{\{(\d+)\}\}/g, (m, n) => {
+                const v = vals[Number(n) - 1];
+                return v ? v : m;
+            });
+            send.disabled = tplSending || vals.some(v => !v.trim());
+        }
+
+        const send = document.createElement('button');
+        send.type = 'button';
+        send.className = 'btn-window-template';
+        send.style.margin = '8px 10px';
+        send.textContent = 'Enviar template';
+        send.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            sendTemplate(t, values(), send);
+        });
+
+        list.appendChild(form);
+        list.appendChild(preview);
+        list.appendChild(send);
+        updatePreview();
+    }
+
+    /**
+     * Envia o template. Guard de duplo clique e de UI (botao disabled + flag):
+     * idempotencia contra duas requisicoes INDEPENDENTES fica fora deste pacote.
+     */
+    async function sendTemplate(t, params, btn) {
+        if (tplSending || !activeConversation) return;
+        tplSending = true;
+        btn.disabled = true;
+        const label = btn.textContent;
+        btn.textContent = 'Enviando...';
+
+        try {
+            const resp = await Auth.apiRequest(`/api/conversations/${activeConversation.id}/messages`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    content: t.body_text,
+                    msg_type: 'template',
+                    template_name: t.name,
+                    template_language: t.language,
+                    template_params: params,
+                }),
+            });
+
+            if (resp && resp.ok) {
+                closeTemplatePicker();
+                // Template enviado NAO reabre a janela: so uma inbound do cliente
+                // reabre. O composer continua bloqueado por construcao — o backend
+                // nao tocou em last_customer_msg_at.
+                document.getElementById('windowClosedText').textContent =
+                    'Template enviado. Aguardando uma resposta do cliente para reabrir a janela de atendimento.';
+                showToast('Template enviado.');
+                loadChat(activeConversation.id);
+                loadConversations();
+            } else {
+                // Falha NAO cria mensagem falsa e NAO libera texto: so informa e
+                // deixa tentar de novo.
+                const d = resp ? await readErrorDetail(resp) : {};
+                showToast(d.message || 'Não foi possível enviar o template. Tente novamente.');
+            }
+        } finally {
+            tplSending = false;
+            btn.disabled = false;
+            btn.textContent = label;
+        }
+    }
+
     async function sendMessage() {
         const input = document.getElementById('msgInput');
         const content = input.value.trim();
         if (!content || !activeConversation) return;
+        if (windowClosed()) { applyWindowState(activeConversation); return; }
 
         input.value = '';
         input.style.height = 'auto';
@@ -1003,13 +1195,17 @@
             // CONV-08: o envio falhou. O backend NAO marca a mensagem como 'sent' e a
             // persiste como 'failed'. Recarrega o chat para exibir o status de falha
             // (X vermelho) e avisa o operador com uma mensagem segura (sem segredos).
-            let detail = 'Falha ao enviar a mensagem. Tente novamente.';
-            try {
-                if (resp) {
-                    const err = await resp.json();
-                    if (err && typeof err.detail === 'string') detail = err.detail;
-                }
-            } catch (_) { /* resposta sem corpo JSON */ }
+            const d = resp ? await readErrorDetail(resp) : {};
+            // CONV-WINDOW-01 (race): a janela fechou entre o render e o POST.
+            // Devolve o texto ao composer antes de trocar a tela — o operador
+            // nao perde o que escreveu — e passa a exibir o bloco de template.
+            if (resp && resp.status === 409 && d.code === 'WINDOW_CLOSED') {
+                input.value = content;
+                await handleWindowClosed(d);
+                loadChat(activeConversation.id);
+                return;
+            }
+            let detail = d.message || 'Falha ao enviar a mensagem. Tente novamente.';
             // CONV-VAR-01: 422 = variavel nao resolvida. O backend BLOQUEOU o
             // envio e nao persistiu nada, entao devolvemos o texto original ao
             // composer para o vendedor corrigir o token sem reescrever tudo.
@@ -1530,6 +1726,7 @@
     // CONV-04: o texto digitado no input vira caption (imagem/video/documento).
     async function sendMediaFile(file) {
         if (!activeConversation || !file) return;
+        if (windowClosed()) { applyWindowState(activeConversation); return; }
         const input = document.getElementById('msgInput');
         const caption = (input.value || '').trim();
         const fd = new FormData();
@@ -1546,9 +1743,13 @@
         if (resp.ok) {
             showToast('Mídia enviada');
         } else {
-            let detail = 'Falha ao enviar a mídia.';
-            try { const e = await resp.json(); if (e && e.detail) detail = e.detail; } catch (_) { }
-            showToast(detail);
+            const d = await readErrorDetail(resp);
+            if (resp.status === 409 && d.code === 'WINDOW_CLOSED') {
+                await handleWindowClosed(d);
+                loadChat(activeConversation.id);
+                return;
+            }
+            showToast(d.message || 'Falha ao enviar a mídia.');
         }
         loadChat(activeConversation.id);
         loadConversations();
@@ -1611,6 +1812,9 @@
     // CONV-08b: reenvio manual de mensagem outbound com falha
     window._retryMessage = async function (msgId) {
         if (!activeConversation) return;
+        // CONV-WINDOW-01: reenvio e free-form — o botao some com a janela fechada,
+        // mas o clique tambem e barrado aqui (e no backend, que e a autoridade).
+        if (windowClosed()) { applyWindowState(activeConversation); return; }
         const resp = await Auth.apiRequest(
             `/api/conversations/${activeConversation.id}/messages/${Number(msgId)}/retry`,
             { method: 'POST' }
@@ -1618,20 +1822,34 @@
         if (resp && resp.ok) {
             showToast('Mensagem reenviada');
         } else {
-            let detail = 'Falha ao reenviar a mensagem.';
-            try {
-                if (resp) {
-                    const err = await resp.json();
-                    if (err && err.detail) detail = err.detail;
-                }
-            } catch (_) { /* resposta sem corpo JSON */ }
-            showToast(detail);
+            const d = resp ? await readErrorDetail(resp) : {};
+            if (resp && resp.status === 409 && d.code === 'WINDOW_CLOSED') {
+                await handleWindowClosed(d);
+                loadChat(activeConversation.id);
+                return;
+            }
+            showToast(d.message || 'Falha ao reenviar a mensagem.');
         }
         loadChat(activeConversation.id);
         loadConversations();
     };
 
     // ─── Rendering ──────────────────────────────
+    /**
+     * CONV-WINDOW-01: cadeado vermelho da lista. Significa UMA coisa e so uma —
+     * "a Meta ainda permite envio livre para este contato?". Nao e unread (badge
+     * numerico), nao e online (ponto verde), nao e BIA (rotulo de responsavel),
+     * nao e tag (chip colorido) e nao e fila. Vermelho e exclusivo desta regra.
+     * Funciona nas cinco inboxes porque todas serializam ConversationResponse.
+     */
+    function windowLockHtml(conv) {
+        if (conv.service_window_open !== false) return '';
+        return '<span class="conv-window-lock" title="Janela de 24h encerrada" aria-label="Janela de 24h encerrada">'
+            + '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true">'
+            + '<path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zM9 6c0-1.66 1.34-3 3-3s3 1.34 3 3v2H9V6zm9 14H6V10h12v10z"/>'
+            + '</svg></span>';
+    }
+
     function renderConversationList() {
         const list = document.getElementById('convList');
         // PACOTE-B: categoria, busca, responsavel e tag ja vieram filtrados do
@@ -1679,6 +1897,7 @@
                     <div class="conv-info">
                         <div class="conv-info-top">
                             <span class="conv-name">${escapeHtml(conv.nome || conv.whatsapp)}</span>
+                            ${windowLockHtml(conv)}
                             <span class="conv-time">${time}</span>
                         </div>
                         <div class="conv-preview">
@@ -1728,6 +1947,9 @@
         // CONV-06: botao Assumir/Liberar
         updateClaimButton(conv);
 
+        // CONV-WINDOW-01: composer normal x bloco "Janela de 24h encerrada"
+        applyWindowState(conv);
+
         // Messages
         const container = document.getElementById('chatMessages');
         container.innerHTML = '';
@@ -1771,9 +1993,15 @@
             else if (msg.status === 'delivered') statusIcon = '<span class="message-status delivered">&#10003;&#10003;</span>';
             else if (msg.status === 'read') statusIcon = '<span class="message-status read">&#10003;&#10003;</span>';
             else if (msg.status === 'failed') {
-                statusIcon = '<span class="message-status" style="color:var(--error)" title="Falha no envio">&#10007;</span>';
+                // CONV-WINDOW-01: `last_error` ja e um resumo SEGURO produzido por
+                // whatsapp._error_result (nunca token/header/payload). Antes so
+                // aparecia um X mudo e o operador nao descobria a causa real.
+                const why = msg.last_error ? `Falha no envio: ${msg.last_error}` : 'Falha no envio';
+                statusIcon = `<span class="message-status" style="color:var(--error)" title="${escapeHtml(why)}">&#10007;</span>`;
                 // CONV-08b: reenvio manual — so para mensagens persistidas (com id do banco)
-                if (msg.id) {
+                // CONV-WINDOW-01: com a janela fechada o reenvio nao e oferecido
+                // (o backend recusaria de todo jeito — 409 WINDOW_CLOSED).
+                if (msg.id && !windowClosed()) {
                     statusIcon += `<button class="msg-retry-btn" onclick="window._retryMessage(${Number(msg.id)})" title="Reenviar mensagem" style="background:none; border:none; cursor:pointer; color:var(--error); font-size:13px; padding:0 2px; vertical-align:middle;">&#8635;</button>`;
                 }
             }
