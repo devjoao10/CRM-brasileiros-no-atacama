@@ -84,20 +84,24 @@ async def _build_template_send(db: Session, name: str, language: str, params: Op
     (components_payload, texto_renderizado).
 
     Valida, nesta ordem:
-      1. (name, language) existe e esta APPROVED  -> senao 404
+      1. (name, language) APPROVED na Meta **E** autorizado no atendimento -> senao 404
       2. estrutura suportada por este pacote      -> senao 422 com o motivo
       3. aridade EXATA do BODY                    -> senao 422
 
     A aridade vem da Meta, nunca do frontend: N-1 e N+1 sao recusados igualmente.
     Header e sempre TEXT estatico no inventario atual, entao nao entra no payload.
+
+    CONV-CURATION-01: esconder do dropdown nao e bloquear. Este builder e o
+    caminho UNICO de template do operador (composer e /initiate), entao um POST
+    montado a mao com `alerta_novo_lead` para aqui — nao no JavaScript.
     """
     from app.services import meta_templates
 
-    tpl = await meta_templates.find_approved_template(db, name, language)
+    tpl = await meta_templates.find_service_template(db, name, language)
     if tpl is None:
         raise HTTPException(
             status_code=404,
-            detail=f"Template '{name}' ({language}) nao esta aprovado na Meta ou nao existe.",
+            detail=f"Template '{name}' ({language}) nao esta disponivel para o atendimento.",
         )
     if not tpl["supported"]:
         raise HTTPException(

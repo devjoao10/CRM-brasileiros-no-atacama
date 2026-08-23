@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.auth import get_current_user, User
+from app.auth import get_current_user, require_admin, User
 from app.models.template import MessageTemplate
 from app.schemas.template import (
     TemplateCreate,
@@ -19,6 +19,7 @@ from app.schemas.template import (
     TemplateResponse,
     TemplateListResponse,
     TemplateSendRequest,
+    ServiceAvailabilityUpdate,
 )
 from app.services import whatsapp
 from app.services import meta_templates
@@ -103,16 +104,21 @@ async def list_templates(
 
 @router.get("/meta/approved")
 async def list_meta_approved_templates(
-    refresh: bool = Query(False, description="Ignora o cache de 5 min e reconsulta a Meta"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    CONV-WINDOW-01 — catalogo READ-ONLY dos templates APPROVED direto da Meta.
+    CONV-WINDOW-01 / CONV-CURATION-01 — catalogo do ATENDIMENTO.
 
-    Fonte do seletor do composer. NAO le a tabela local (status local so muda em
-    sync manual e pode estar velho) e NAO escreve nada: nem na Meta, nem no banco.
-    Cache em memoria de 5 min.
+    Fonte do seletor do composer: APPROVED na Meta **E** autorizado pelo admin.
+    NAO le a tabela local de templates (status local so muda em sync manual e
+    pode estar velho) e NAO escreve nada: nem na Meta, nem no banco.
+
+    O filtro de curadoria e feito AQUI. Templates internos (alertas de lead,
+    notificacoes de CRM, hello_world, testes) nunca chegam ao navegador do
+    atendente — esconder no frontend nao seria esconder.
+
+    Exige usuario autenticado.
 
     Rota declarada ANTES de `/{template_id}` de proposito — "meta" nao e um int e
     cairia no conversor de path da outra rota.
@@ -120,10 +126,56 @@ async def list_meta_approved_templates(
     503 quando a Meta esta indisponivel: o frontend precisa distinguir "nao ha
     templates" de "nao consegui carregar" — e no segundo caso NUNCA liberar texto.
     """
-    result = await meta_templates.list_approved_templates(db, force=refresh)
+    result = await meta_templates.list_service_templates(db)
     if not result.get("ok"):
         raise HTTPException(status_code=503, detail=result.get("error", "Nao foi possivel carregar os templates."))
     return {"templates": result["templates"], "total": len(result["templates"])}
+
+
+@router.get("/service-availability")
+async def list_service_availability(
+    refresh: bool = Query(False, description="Ignora o cache de 5 min e reconsulta a Meta"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """
+    CONV-CURATION-01 — tela de curadoria (ADMIN).
+
+    Todos os APPROVED da Meta com a marca `available` de cada um. Precisa listar
+    os NAO autorizados tambem — sem isso nao haveria como autorizar o primeiro.
+    E o unico lugar do sistema onde um template interno aparece, e so para admin.
+    """
+    result = await meta_templates.list_approved_templates(db, force=refresh)
+    if not result.get("ok"):
+        raise HTTPException(status_code=503, detail=result.get("error", "Nao foi possivel carregar os templates."))
+
+    allowed = meta_templates.authorized_keys(db)
+    items = [
+        {**t, "available": (t["name"], t["language"]) in allowed}
+        for t in result["templates"]
+    ]
+    return {"templates": items, "total": len(items), "available": sum(1 for i in items if i["available"])}
+
+
+@router.put("/service-availability")
+async def update_service_availability(
+    data: ServiceAvailabilityUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """
+    CONV-CURATION-01 — liga/desliga um template no atendimento (ADMIN).
+
+    Chave (name, language), idempotente nos dois sentidos. Efeito IMEDIATO: a
+    autorizacao e lida do banco a cada requisicao, sem cache — revogar precisa
+    valer agora, nao daqui a 5 minutos.
+    """
+    meta_templates.set_service_availability(db, data.name, data.language, data.available)
+    logger.info(
+        f"Template '{data.name}' ({data.language}) "
+        f"{'liberado para' if data.available else 'removido do'} atendimento por {current_user.email}"
+    )
+    return {"name": data.name, "language": data.language, "available": data.available}
 
 
 @router.get("/{template_id}", response_model=TemplateResponse)

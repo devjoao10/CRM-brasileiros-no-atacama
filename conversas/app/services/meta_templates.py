@@ -17,7 +17,7 @@ from typing import Optional
 import httpx
 from sqlalchemy.orm import Session
 
-from app.models.template import MessageTemplate
+from app.models.template import MessageTemplate, ServiceTemplate
 from app.models.api_config import ApiConfig
 from app.services import whatsapp
 
@@ -322,19 +322,80 @@ async def list_approved_templates(db: Session, *, force: bool = False) -> dict:
     return result
 
 
-async def find_approved_template(db: Session, name: str, language: str) -> Optional[dict]:
+def authorized_keys(db: Session) -> set:
     """
-    Busca por (name, language) — a chave real. Devolve None se o par nao existir
-    entre os APPROVED, e por isso vale tambem como validacao de envio: template
-    nao aprovado simplesmente nao e encontrado.
+    CONV-CURATION-01 — pares (name, language) que o CRM autoriza no atendimento.
+
+    Lido do banco a CADA chamada, DE PROPOSITO: o cache de 5 min e dos dados da
+    META (name/status/components, que mudam raramente e so no Business Manager).
+    A autorizacao e decisao do admin daqui e precisa valer na hora — uma
+    revogacao nao pode continuar em vigor por ate 5 minutos.
+
+    Uma unica query por requisicao (a tabela tem no maximo algumas dezenas de
+    linhas), nunca uma por template.
+    """
+    return {
+        (name, language)
+        for name, language in db.query(ServiceTemplate.name, ServiceTemplate.language).all()
+    }
+
+
+def set_service_availability(db: Session, name: str, language: str, available: bool) -> bool:
+    """
+    Liga/desliga um template no atendimento. Idempotente nos dois sentidos.
+    Retorna o estado final. NAO valida contra a Meta: quem valida e a leitura
+    (o catalogo cruza com APPROVED), entao autorizar algo inexistente e inocuo.
+    """
+    row = (
+        db.query(ServiceTemplate)
+        .filter(ServiceTemplate.name == name, ServiceTemplate.language == language)
+        .first()
+    )
+    if available and row is None:
+        db.add(ServiceTemplate(name=name, language=language))
+    elif not available and row is not None:
+        db.delete(row)
+    db.commit()
+    return available
+
+
+async def list_service_templates(db: Session) -> dict:
+    """
+    Catalogo do ATENDIMENTO: APPROVED na Meta **E** autorizado localmente.
+
+    As duas condicoes sao obrigatorias e nenhuma sobrepoe a outra: a Meta manda
+    no status (autorizar localmente nunca torna um PENDING enviavel) e o CRM
+    manda na finalidade (aprovado nao significa que serve para falar com cliente).
+
+    O filtro e do BACKEND. O frontend nunca recebe template interno para depois
+    esconder — se recebesse, um `view-source` ja seria a lista completa.
     """
     catalog = await list_approved_templates(db)
     if not catalog.get("ok"):
+        return catalog
+    allowed = authorized_keys(db)
+    return {
+        "ok": True,
+        "templates": [t for t in catalog["templates"] if (t["name"], t["language"]) in allowed],
+    }
+
+
+async def find_service_template(db: Session, name: str, language: str) -> Optional[dict]:
+    """
+    Busca por (name, language) — a chave real — no MESMO catalogo que o seletor
+    enxerga. Ler daqui, e nao repetir o cruzamento APPROVED x autorizado, e o que
+    garante que o envio nunca aceite algo que o seletor nao ofereceria.
+
+    None quando qualquer condicao falha, e por isso vale como validacao de envio:
+    nao aprovado ou nao autorizado simplesmente nao e encontrado.
+    """
+    catalog = await list_service_templates(db)
+    if not catalog.get("ok"):
         return None
-    for t in catalog["templates"]:
-        if t["name"] == name and t["language"] == language:
-            return t
-    return None
+    return next(
+        (t for t in catalog["templates"] if t["name"] == name and t["language"] == language),
+        None,
+    )
 
 
 def render_template_body(body_text: str, params: list) -> str:

@@ -101,3 +101,14 @@ class TemplateListResponse(BaseModel):
 class TemplateSendRequest(BaseModel):
     to: str = Field(..., description="Número do WhatsApp no formato internacional")
     variables: Optional[dict] = Field(None, description='{"header": ["João"], "body": ["12345"]}')
+
+
+class ServiceAvailabilityUpdate(BaseModel):
+    """
+    CONV-CURATION-01 — libera/remove um template do atendimento.
+    A chave é (name, language): a Meta admite o mesmo nome em vários idiomas e
+    tratá-los como um só ofereceria ao cliente um template no idioma errado.
+    """
+    name: str = Field(..., min_length=1, max_length=512)
+    language: str = Field(..., min_length=2, max_length=10)
+    available: bool

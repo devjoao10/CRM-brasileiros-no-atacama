@@ -1955,3 +1955,59 @@ button:disabled {
     padding: 6px 8px; font-size: 12px; font-family: var(--font); outline: none;
 }
 .tpl-param-input:focus { border-color: var(--primary); }
+
+/* ─── CONV-CURATION-01: curadoria de templates do atendimento ────────── */
+.svc-avail {
+    background: var(--white);
+    border: 1px solid var(--dark-200);
+    border-radius: var(--radius-md);
+    padding: 16px 18px;
+    margin-bottom: 18px;
+}
+
+.svc-avail-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.svc-avail-head h3 { font-size: 14px; margin: 0 0 2px; color: var(--dark-600); }
+.svc-avail-sub { font-size: 12px; color: var(--dark-500); margin: 0; line-height: 1.45; }
+.svc-avail-sub.warn { color: var(--error); font-weight: 600; }
+
+.svc-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    border-top: 1px solid var(--dark-100);
+    font-size: 12px;
+}
+
+.svc-row-name { font-weight: 600; color: var(--dark-600); }
+.svc-row-meta { color: var(--dark-400); font-size: 11px; }
+.svc-row-body {
+    flex: 1;
+    color: var(--dark-500);
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+
+.svc-badge {
+    font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+    background: #e6f4ea; color: #1e7e34; text-transform: uppercase; flex-shrink: 0;
+}
+
+.svc-toggle {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--dark-500); cursor: pointer; flex-shrink: 0;
+    user-select: none;
+}
+
+.svc-toggle input { cursor: pointer; }
+.svc-toggle.busy { opacity: .5; pointer-events: none; }

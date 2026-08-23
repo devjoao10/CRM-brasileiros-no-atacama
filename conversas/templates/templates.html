@@ -61,6 +61,21 @@
                 </div>
             </div>
 
+            <!-- CONV-CURATION-01: curadoria do atendimento. APROVADO PELA META nao e
+                 o mesmo que AUTORIZADO PARA FALAR COM CLIENTE — a conta tem alertas
+                 de lead, notificacoes de CRM e templates de teste, todos aprovados.
+                 Somente admin ve e altera esta secao. -->
+            <section class="svc-avail" id="svcAvailSection" style="display:none;">
+                <div class="svc-avail-head">
+                    <div>
+                        <h3>Disponíveis no atendimento</h3>
+                        <p class="svc-avail-sub" id="svcAvailSummary">Carregando templates da Meta...</p>
+                    </div>
+                    <button class="btn-secondary" id="btnReloadSvcAvail" title="Reconsultar a Meta agora">Recarregar</button>
+                </div>
+                <div id="svcAvailList"><!-- Populated by JS --></div>
+            </section>
+
             <!-- Filters -->
             <div class="page-filters">
                 <div class="filter-group">

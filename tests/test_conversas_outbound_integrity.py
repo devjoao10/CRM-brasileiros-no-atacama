@@ -159,6 +159,16 @@ async def _fake_fetch_templates(base_url, waba_id, headers):
 _meta_tpl._fetch_meta_templates = _fake_fetch_templates
 _meta_tpl.invalidate_catalog_cache()
 
+# CONV-CURATION-01: APPROVED na Meta ja nao basta — o template precisa estar
+# autorizado no atendimento. Esta suite prova a INTEGRIDADE do outbound, entao
+# libera o `boas_vindas` que ela usa; a curadoria tem suite propria.
+from app.models.template import ServiceTemplate  # noqa: E402
+
+_s = SessionLocal()
+_s.add(ServiceTemplate(name="boas_vindas", language="pt_BR"))
+_s.commit()
+_s.close()
+
 # ============ P2: /initiate com template — FALHA ============
 print("P2 — initiate (template) em falha da Meta")
 whatsapp.send_template_message = make_sender(FAIL_RESPONSE)

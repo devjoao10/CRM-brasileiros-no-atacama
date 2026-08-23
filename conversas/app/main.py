@@ -10,7 +10,7 @@ from app.database import engine, Base
 from app.auth import User  # noqa: F401 — ensure table is known
 from app.models.conversation import Conversation, Message  # noqa: F401
 from app.models.quick_reply import QuickReply  # noqa: F401
-from app.models.template import MessageTemplate  # noqa: F401
+from app.models.template import MessageTemplate, ServiceTemplate  # noqa: F401 — CONV-CURATION-01
 from app.models.auto_reply import AutoReply, BusinessHours  # noqa: F401
 from app.models.api_config import ApiConfig  # noqa: F401
 from app.models.message_variable import MessageVariable  # noqa: F401 — CONV-VAR-01
