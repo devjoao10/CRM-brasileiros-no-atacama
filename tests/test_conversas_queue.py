@@ -180,7 +180,11 @@ print("\nCONV-06 — frontend (grep)")
 js = (CONVERSAS_DIR / "static" / "js" / "conversas.js").read_text(encoding="utf-8")
 html = (CONVERSAS_DIR / "templates" / "conversas.html").read_text(encoding="utf-8")
 # CONV-HOTFIX-POSTDEPLOY-01: derivacao tolerante a status legado 'aguardando'
-check("isOpenStatus(c.status) && !c.atendente_id" in js, "aba Aguardando filtra por estado DERIVADO")
+# PACOTE-B: a aba "Aguardando" (filtro em JS) foi substituida pela categoria
+# "Fila de espera" resolvida NO SQL (?inbox=fila). O guard passa a exigir que o
+# frontend NAO refiltre categoria localmente — a derivacao vive no backend.
+check("inbox: activeInbox" in js, "categoria da fila resolvida no servidor (?inbox=)")
+check("c.atendente_id === me.id" not in js, "frontend NAO refiltra 'meus' em JS")
 check("s === 'aberta' || s === 'aguardando'" in js, "derivacao tolera status legado 'aguardando'")
 check("updateClaimButton" in js and "claimOrRelease" in js, "botao assumir/liberar presente")
 check('id="btnClaim"' in html, "botao no header do chat")
