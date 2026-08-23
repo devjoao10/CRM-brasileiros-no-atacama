@@ -78,7 +78,15 @@ def _require_open_window(conversation: Conversation) -> None:
         )
 
 
-async def _build_template_send(db: Session, name: str, language: str, params: Optional[list]):
+async def _build_template_send(
+    db: Session,
+    name: str,
+    language: str,
+    params: Optional[list],
+    *,
+    conversation: Optional[Conversation] = None,
+    user: Optional[User] = None,
+):
     """
     Valida um envio de template contra os `components` REAIS da Meta e devolve
     (components_payload, texto_renderizado).
@@ -87,6 +95,7 @@ async def _build_template_send(db: Session, name: str, language: str, params: Op
       1. (name, language) APPROVED na Meta **E** autorizado no atendimento -> senao 404
       2. estrutura suportada por este pacote      -> senao 422 com o motivo
       3. aridade EXATA do BODY                    -> senao 422
+      4. variaveis (@TOKEN) nos parametros        -> senao 422 (fail closed)
 
     A aridade vem da Meta, nunca do frontend: N-1 e N+1 sao recusados igualmente.
     Header e sempre TEXT estatico no inventario atual, entao nao entra no payload.
@@ -94,6 +103,13 @@ async def _build_template_send(db: Session, name: str, language: str, params: Op
     CONV-CURATION-01: esconder do dropdown nao e bloquear. Este builder e o
     caminho UNICO de template do operador (composer e /initiate), entao um POST
     montado a mao com `alerta_novo_lead` para aqui — nao no JavaScript.
+
+    CONV-VAR-02: e tambem por ser esse caminho unico que a resolucao de
+    variaveis mora AQUI, e nao em cada rota. O corpo do template e montado
+    pela Meta a partir de {{1}}..{{N}}, mas os VALORES desses placeholders sao
+    nossos — entao passam pelo MESMO `variables_service.render_strict` das
+    mensagens rapidas antes de virar payload. Frontend antigo, bug de JS ou
+    POST manual nao conseguem fazer a Meta receber `@TOKEN` literal.
     """
     from app.services import meta_templates
 
@@ -117,6 +133,18 @@ async def _build_template_send(db: Session, name: str, language: str, params: Op
             detail=f"Template '{name}' exige {expected} parametro(s); {len(values)} enviado(s).",
         )
 
+    # CONV-VAR-02: um UNICO VariableContext para a lista inteira — o lead do CRM
+    # e lido uma vez por envio, nao uma vez por parametro. A resolucao e por
+    # parametro (nao sobre o corpo montado) porque e assim que a Meta consome
+    # {{1}}..{{N}}: um valor colado a texto do template — "Cliente{{1}}" — nao
+    # pode mudar o resultado. `render_strict` levanta no PRIMEIRO problema,
+    # antes de existir qualquer payload: fail closed por construcao.
+    ctx = variables_service.VariableContext(db, conversation=conversation, user=user)
+    try:
+        values = [variables_service.render_strict(db, v, ctx) for v in values]
+    except variables_service.VariableResolutionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
     components = []
     if expected:
         components.append({
@@ -124,6 +152,8 @@ async def _build_template_send(db: Session, name: str, language: str, params: Op
             "parameters": [{"type": "text", "text": v} for v in values],
         })
 
+    # Mesma lista `values` (ja resolvida) no payload e no historico: Message.content
+    # nao tem como divergir do que a Meta renderizou para o cliente.
     return components, meta_templates.render_template_body(tpl["body_text"], values)
 
 # ─── PACOTE-B: categorias do inbox ────────────────────────────────────
@@ -346,7 +376,8 @@ async def initiate_conversation(
         # HTTPException aqui e intencional: 404/422 sao ERRO DO CHAMADOR e nao
         # podem ser engolidos como "message_sent: false".
         components, body_text = await _build_template_send(
-            db, data.template_name, lang, data.template_params
+            db, data.template_name, lang, data.template_params,
+            conversation=conversation, user=current_user,
         )
         try:
             wa_response = await whatsapp.send_template_message(
@@ -773,10 +804,11 @@ async def send_message(
     # texto renderizado (foi o que o cliente recebeu) e por isso o retry
     # reenvia exatamente o mesmo conteudo.
     # CONV-VAR-01-HARD-01: cobre TAMBEM o branch de midia por `media_url`
-    # (usado por chamadas diretas a API), onde `content` e a legenda. Fica de
-    # fora apenas `msg_type='template'`: o corpo do template e renderizado nos
-    # servidores da Meta a partir de placeholders posicionais {{1}}, entao
-    # substituicao textual nao se aplica — e escopo do CONV-VAR-02.
+    # (usado por chamadas diretas a API), onde `content` e a legenda.
+    # CONV-VAR-02: `msg_type='template'` nao passa por AQUI porque `data.content`
+    # e descartado — o corpo vem da Meta. Quem resolve as variaveis do template
+    # e `_build_template_send`, sobre os `template_params`, com o MESMO
+    # `render_strict`. Nao ha caminho de template sem resolucao.
     is_template = data.msg_type == "template"
 
     # CONV-WINDOW-01: template APROVADO e exatamente o que a Meta permite fora da
@@ -807,7 +839,8 @@ async def send_message(
         # ANTES de enviar. `content` passa a ser o corpo RENDERIZADO — o historico
         # mostra "Ola Joao", que foi o que o cliente recebeu, nao "Ola {{1}}".
         components, content = await _build_template_send(
-            db, data.template_name, data.template_language or "pt_BR", data.template_params
+            db, data.template_name, data.template_language or "pt_BR", data.template_params,
+            conversation=conversation, user=current_user,
         )
         wa_response = await whatsapp.send_template_message(
             to=conversation.whatsapp,

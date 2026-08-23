@@ -8,7 +8,7 @@ Regras do token (validadas aqui, antes de tocar o banco):
 """
 
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Annotated, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -144,7 +144,14 @@ class CatalogResponse(BaseModel):
 
 
 class PreviewRequest(BaseModel):
-    text: str = Field(..., max_length=5000)  # mesmo limite de MessageCreate.content
+    text: str = Field("", max_length=5000)  # mesmo limite de MessageCreate.content
+    # CONV-VAR-02: parametros posicionais de um template ({{1}}..{{N}}). Cada um
+    # e resolvido SEPARADAMENTE, como no envio — previa e envio nao podem
+    # divergir. `text` continua sendo o caminho das mensagens rapidas.
+    # Limites: 32 itens (nenhum template da conta chega perto) e o MESMO teto de
+    # 5000 por item — a previa nao pode ser um caminho de entrada mais frouxo
+    # que o envio.
+    texts: Optional[List[Annotated[str, Field(max_length=5000)]]] = Field(None, max_length=32)
     conversation_id: Optional[int] = None
 
 
@@ -157,5 +164,6 @@ class PreviewProblem(BaseModel):
 
 class PreviewResponse(BaseModel):
     rendered: str
+    rendered_list: List[str] = []   # CONV-VAR-02: um item por `texts`, na ordem
     problems: List[PreviewProblem]
     ok: bool

@@ -79,6 +79,12 @@ async def preview_text(
     """
     Prévia com o MESMO mecanismo do envio: a interface nunca reimplementa a
     resolução, então prévia e envio não podem divergir.
+
+    `text` é a prévia de uma mensagem (rápida ou digitada). `texts` é a prévia
+    dos parâmetros de um template — cada um resolvido SEPARADAMENTE, exatamente
+    como `_build_template_send` faz antes de montar o payload da Meta. Um único
+    `VariableContext` serve a lista inteira: o lead do CRM é lido uma vez, não
+    uma vez por variável.
     """
     conversation = None
     if data.conversation_id:
@@ -90,8 +96,16 @@ async def preview_text(
 
     ctx = variables_service.VariableContext(db, conversation=conversation, user=current_user)
     rendered, problems = variables_service.render(db, data.text, ctx)
+
+    rendered_list = []
+    for item in (data.texts or []):
+        item_rendered, item_problems = variables_service.render(db, item, ctx)
+        rendered_list.append(item_rendered)
+        problems.extend(item_problems)
+
     return PreviewResponse(
         rendered=rendered,
+        rendered_list=rendered_list,
         problems=[p._asdict() for p in problems],
         ok=not problems,
     )
