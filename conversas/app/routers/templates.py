@@ -23,6 +23,7 @@ from app.schemas.template import (
 )
 from app.services import whatsapp
 from app.services import meta_templates
+from app.services import variables as variables_service
 from app.services.outbound import classify_wa_response
 
 logger = logging.getLogger(__name__)
@@ -352,18 +353,36 @@ async def send_template(
                    "Apenas templates aprovados pelo Meta podem ser enviados."
         )
 
+    # CONV-VAR-02: esta rota recebe um NUMERO (`data.to`), nao uma conversa —
+    # nao existe cliente/atendente/protocolo para resolver. Ainda assim ela fala
+    # com a Meta, entao o mesmo `render_strict` roda aqui com contexto VAZIO:
+    # texto literal passa, variavel FIXA resolve (nao depende de conversa) e
+    # qualquer variavel que precise da conversa BLOQUEIA em 422. O invariante
+    # "a Meta nunca recebe @TOKEN" vale no sistema inteiro, nao so no composer.
+    ctx = variables_service.VariableContext(db)
+
+    def _resolve(values):
+        try:
+            return [variables_service.render_strict(db, str(v), ctx) for v in values]
+        except variables_service.VariableResolutionError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{exc} Envie pelo atendimento (/api/conversations/"
+                       f"{{id}}/messages) para que a variavel seja preenchida.",
+            )
+
     # Build components from variables
     components = []
     if data.variables:
         if "header" in data.variables:
             components.append({
                 "type": "header",
-                "parameters": [{"type": "text", "text": v} for v in data.variables["header"]]
+                "parameters": [{"type": "text", "text": v} for v in _resolve(data.variables["header"])]
             })
         if "body" in data.variables:
             components.append({
                 "type": "body",
-                "parameters": [{"type": "text", "text": v} for v in data.variables["body"]]
+                "parameters": [{"type": "text", "text": v} for v in _resolve(data.variables["body"])]
             })
 
     result = await whatsapp.send_template_message(

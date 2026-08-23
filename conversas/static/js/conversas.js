@@ -1099,13 +1099,36 @@
         }
 
         function values() { return inputs.map(i => i.value); }
-        function updatePreview() {
-            const vals = values();
+
+        function paint(vals) {
             preview.textContent = t.body_text.replace(/\{\{(\d+)\}\}/g, (m, n) => {
                 const v = vals[Number(n) - 1];
                 return v ? v : m;
             });
+        }
+
+        // CONV-VAR-02: a previa NUNCA resolve @TOKEN em JS — pede ao backend,
+        // que usa o mesmo resolvedor do envio. Enquanto a resposta nao chega,
+        // mostra o texto cru; se o backend falhar, a previa fica crua e o envio
+        // segue sendo a autoridade (ele bloqueia o que nao resolver).
+        let previewSeq = 0;
+        async function updatePreview() {
+            const vals = values();
+            paint(vals);
             send.disabled = tplSending || vals.some(v => !v.trim());
+            if (!activeConversation || !vals.some(v => v.includes('@'))) return;
+            const seq = ++previewSeq;
+            try {
+                const resp = await Auth.apiRequest('/api/variables/preview', {
+                    method: 'POST',
+                    body: JSON.stringify({ texts: vals, conversation_id: activeConversation.id }),
+                });
+                if (seq !== previewSeq || !resp || !resp.ok) return;   // resposta atrasada
+                const data = await resp.json();
+                if (Array.isArray(data.rendered_list) && data.rendered_list.length === vals.length) {
+                    paint(data.rendered_list);
+                }
+            } catch (e) { /* previa crua ja pintada */ }
         }
 
         const send = document.createElement('button');
