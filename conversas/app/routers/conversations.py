@@ -45,6 +45,39 @@ router = APIRouter(prefix="/api/conversations", tags=["Conversas"])
 LEGACY_OPEN_STATUSES = ("aberta", "aguardando")
 
 
+def _apply_human_state(
+    conversation: Conversation,
+    atendente_id: Optional[int],
+    *,
+    keep_queue_position: bool = False,
+) -> None:
+    """
+    PACOTE-A — ponto UNICO que escreve o estado operacional da conversa.
+
+    Invariante (fonte unica de verdade do futuro inbox):
+      atendente definido -> alguem esta atendendo  -> queued_at = NULL
+      atendente NULL     -> esperando na fila      -> queued_at = momento de entrada
+
+    `is_bot_active` vira False em TODOS os casos: chegar aqui significa que a
+    conversa saiu do universo da BIA (handoff, claim, assign, release, initiate).
+    A unica volta para a BIA e a REABERTURA de uma conversa encerrada (webhook).
+
+    `keep_queue_position=True` preserva um queued_at existente — e o que torna o
+    handoff idempotente: retry do n8n NAO manda a conversa para o fim da fila.
+    O release NAO usa essa flag: liberar e, por decisao de negocio, entrar de
+    novo no fim da fila.
+
+    NAO toca responsavel_id/responsavel_nome: responsabilidade COMERCIAL e do
+    CRM e nao pode ser escrita por operacao de fila.
+    """
+    conversation.atendente_id = atendente_id
+    conversation.is_bot_active = False
+    if atendente_id is not None:
+        conversation.queued_at = None
+    elif not (keep_queue_position and conversation.queued_at):
+        conversation.queued_at = datetime.now(timezone.utc)
+
+
 def _repair_responsavel_cache(db: Session, conversation: Conversation, lead_resp: dict) -> bool:
     """
     CONV-HOTFIX-POSTDEPLOY-01: read-repair do snapshot responsavel_id/nome da
@@ -161,6 +194,9 @@ async def initiate_conversation(
             status='aberta',
             is_bot_active=False,  # humano inicia o contato
             unread_count=0,
+            # PACOTE-A: quem inicia o contato ja e o atendente — nao entra na
+            # fila de espera. Sempre o usuario autenticado, nunca hardcode.
+            atendente_id=current_user.id,
         )
         db.add(conversation)
         db.commit()
@@ -606,6 +642,53 @@ async def send_message(
     return MessageResponse.model_validate(message)
 
 
+@router.post("/{conversation_id}/handoff", response_model=ConversationResponse)
+async def handoff_conversation(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    PACOTE-A — receptor do handoff BIA -> humano.
+
+    Chamado pelo n8n (Gerenciador de Leads) DEPOIS que a atribuicao comercial
+    (`responsavel_id=5`) foi concluida com sucesso. Autenticacao pelo mesmo
+    `get_current_user` de todas as rotas: o n8n ja se autentica por X-API-Key.
+    NAO ha mecanismo de auth novo.
+
+    A conversa e identificada por `conversation_id` — inequivoco. Nao existe
+    variante por lead: um lead pode ter mais de uma conversa e escolher "a mais
+    recente" seria heuristica silenciosa.
+
+    Efeito (idempotente):
+      - is_bot_active = False (a BIA para de ser acionada no proximo inbound)
+      - atendente_id NULL     -> queued_at = queued_at OR now()  (preserva a
+        posicao na fila em retries do n8n)
+      - atendente_id definido -> queued_at = NULL (RACE: um humano assumiu
+        antes do callback chegar; nao recolocar na fila)
+
+    NAO escreve responsavel_id/responsavel_nome nem toca a tabela `leads`.
+    """
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id
+    ).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+
+    _apply_human_state(
+        conversation,
+        conversation.atendente_id,
+        keep_queue_position=True,
+    )
+    db.commit()
+    db.refresh(conversation)
+    logger.info(
+        f"Handoff BIA->humano na conversa {conversation_id} "
+        f"(atendente={conversation.atendente_id}, queued_at={conversation.queued_at})"
+    )
+    return ConversationResponse.model_validate(conversation)
+
+
 @router.post("/{conversation_id}/claim", response_model=ConversationResponse)
 async def claim_conversation(
     conversation_id: int,
@@ -626,7 +709,8 @@ async def claim_conversation(
         raise HTTPException(status_code=409, detail="Conversa encerrada — reabra antes de assumir")
     if conversation.atendente_id and conversation.atendente_id != current_user.id:
         raise HTTPException(status_code=409, detail="Conversa ja esta em atendimento por outro usuario")
-    conversation.atendente_id = current_user.id
+    # PACOTE-A: assumir tira da fila e desliga a BIA (trava 409 acima intacta).
+    _apply_human_state(conversation, current_user.id)
     db.commit()
     db.refresh(conversation)
     logger.info(f"Conversa {conversation_id} assumida pelo usuario {current_user.id}")
@@ -655,7 +739,9 @@ async def assign_conversation(
     target = db.query(User).filter(User.id == data.user_id, User.is_active == True).first()  # noqa: E712
     if not target:
         raise HTTPException(status_code=404, detail="Usuario nao encontrado ou inativo")
-    conversation.atendente_id = target.id
+    # PACOTE-A: /assign = "este atendimento agora e seu" (nao e reserva),
+    # entao sai da fila exatamente como o claim.
+    _apply_human_state(conversation, target.id)
     db.commit()
     db.refresh(conversation)
     logger.info(
@@ -680,7 +766,9 @@ async def release_conversation(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversa nao encontrada")
     if conversation.atendente_id is not None:
-        conversation.atendente_id = None
+        # PACOTE-A: liberar = volta para o FIM da fila (queued_at novo).
+        # Diferente do retry de handoff, que preserva a posicao.
+        _apply_human_state(conversation, None)
         db.commit()
         db.refresh(conversation)
         logger.info(f"Conversa {conversation_id} devolvida a fila pelo usuario {current_user.id}")

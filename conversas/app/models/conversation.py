@@ -16,13 +16,17 @@ class Conversation(Base):
     status = Column(String(20), default="aberta", nullable=False, index=True)
     ultimo_msg = Column(Text, nullable=True)
     unread_count = Column(Integer, default=0, nullable=False)
-    atendente_id = Column(Integer, nullable=True)
+    atendente_id = Column(Integer, nullable=True, index=True)
     is_bot_active = Column(Boolean, default=True, nullable=False)
     responsavel_id = Column(Integer, nullable=True, index=True)     # Synced with CRM lead.responsavel_id
     responsavel_nome = Column(String(200), nullable=True)           # Cached name for display
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     last_customer_msg_at = Column(DateTime(timezone=True), nullable=True)  # Janela 24h Meta
+    # PACOTE-A: momento em que a conversa ENTROU na fila de atendimento humano.
+    # NAO e atividade do cliente (last_customer_msg_at), nem updated_at/created_at.
+    # Preenchido no handoff BIA->humano e no release; zerado quando alguem assume.
+    queued_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
     # Relationships
     messages = relationship(
