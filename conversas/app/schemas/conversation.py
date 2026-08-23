@@ -9,6 +9,13 @@ class MessageCreate(BaseModel):
     msg_type: str = Field(default="text")
     media_url: Optional[str] = None
     template_name: Optional[str] = None
+    # CONV-WINDOW-01: a identidade de um template na Meta e (name, language).
+    # `pt_BR` como default preserva o comportamento das chamadas antigas, que so
+    # mandavam o nome.
+    template_language: Optional[str] = Field(default="pt_BR")
+    # Parametros posicionais do BODY, na ordem {{1}}, {{2}}, ... A aridade e
+    # validada no BACKEND contra os `components` reais da Meta.
+    template_params: Optional[List[str]] = None
 
 
 class NoteCreate(BaseModel):
@@ -109,6 +116,10 @@ class ConversationResponse(BaseModel):
     responsavel_nome: Optional[str] = None
     last_customer_msg_at: Optional[datetime] = None
     queued_at: Optional[datetime] = None  # PACOTE-A: entrada na fila humana
+    # CONV-WINDOW-01: janela de 24h da Meta. Campo COMPUTADO (property do model),
+    # nunca coluna — recalculado a cada serializacao. Sem `expires_at`: a UI nao
+    # tem countdown, so o booleano.
+    service_window_open: bool = False
     created_at: datetime
     updated_at: datetime
     # CONV-05 — tags aplicadas a conversa (aditivo)
@@ -144,3 +155,4 @@ class InitiateConversation(BaseModel):
     lead_id: Optional[int] = Field(None, description="ID do lead no CRM para vincular")
     template_name: Optional[str] = Field(None, description="Nome do template WhatsApp a enviar")
     template_language: Optional[str] = Field(default="pt_BR", description="Idioma do template")
+    template_params: Optional[List[str]] = Field(None, description="Parâmetros posicionais do BODY")

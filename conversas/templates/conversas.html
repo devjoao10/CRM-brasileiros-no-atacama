@@ -116,21 +116,40 @@
                     <!-- Messages populated by JS -->
                 </div>
 
-                <div class="chat-input" style="position: relative;">
+                <!-- CONV-WINDOW-01: o dropdown de templates vive AQUI, e nao dentro
+                     de .chat-input, porque precisa abrir tambem com o composer
+                     escondido (janela fechada). Um so seletor para os dois estados. -->
+                <div class="composer-area" style="position: relative;">
+
+                <div id="templatesDropdown" style="display: none; position: absolute; bottom: 100%; left: 20px; width: 320px; max-height: 340px; overflow-y: auto; background: var(--white); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); border: 1px solid var(--dark-200); z-index: 100;">
+                    <div style="padding: 12px; border-bottom: 1px solid var(--dark-200); font-weight: 600; font-size: 13px; color: var(--dark-500); display: flex; justify-content: space-between; align-items: center;">
+                        Templates aprovados
+                        <button id="btnCloseTemplates" style="background: none; border: none; cursor: pointer; color: var(--dark-400); font-size: 16px;">&times;</button>
+                    </div>
+                    <div id="templatesList" style="padding: 8px;">
+                        <!-- Templates populated by JS -->
+                    </div>
+                </div>
+
+                <!-- CONV-WINDOW-01: substitui o composer quando service_window_open=false.
+                     O backend e a autoridade (409 WINDOW_CLOSED); isto e UX. -->
+                <div class="chat-window-closed" id="windowClosedBox" style="display:none;">
+                    <div class="window-closed-title">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zM9 6c0-1.66 1.34-3 3-3s3 1.34 3 3v2H9V6zm9 14H6V10h12v10z"/></svg>
+                        Janela de 24h encerrada
+                    </div>
+                    <p class="window-closed-text" id="windowClosedText">
+                        O cliente não envia uma mensagem há mais de 24 horas.
+                        Para retomar o atendimento, envie um template aprovado.
+                    </p>
+                    <button type="button" class="btn-window-template" id="btnOpenTemplatePicker">Enviar template</button>
+                </div>
+
+                <div class="chat-input" id="chatComposer" style="position: relative;">
                     <button class="btn-action" id="btnShowTemplates" title="Enviar Template" style="width: 42px; height: 42px; border: none; background: transparent; color: var(--dark-400); border-radius: var(--radius-full); cursor: pointer; transition: all var(--transition); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
                         <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
                     </button>
                     
-                    <div id="templatesDropdown" style="display: none; position: absolute; bottom: 65px; left: 20px; width: 300px; max-height: 300px; overflow-y: auto; background: var(--white); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); border: 1px solid var(--dark-200); z-index: 100;">
-                        <div style="padding: 12px; border-bottom: 1px solid var(--dark-200); font-weight: 600; font-size: 13px; color: var(--dark-500); display: flex; justify-content: space-between; align-items: center;">
-                            Modelos (Templates)
-                            <button id="btnCloseTemplates" style="background: none; border: none; cursor: pointer; color: var(--dark-400); font-size: 16px;">&times;</button>
-                        </div>
-                        <div id="templatesList" style="padding: 8px;">
-                            <!-- Templates populated by JS -->
-                        </div>
-                    </div>
-
                     <!-- CONV-03/04: anexo de midia (tipos aceitos pela Meta; validacao final = media_policy no backend) -->
                     <button class="btn-action" id="btnAttach" title="Anexar mídia (áudio, imagem, vídeo, documento)" style="width: 42px; height: 42px; border: none; background: transparent; color: var(--dark-400); border-radius: var(--radius-full); cursor: pointer; transition: all var(--transition); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
                         <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></svg>
@@ -158,6 +177,8 @@
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="#fff"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
                     </button>
                 </div>
+
+                </div><!-- /.composer-area -->
             </div>
         </section>
 

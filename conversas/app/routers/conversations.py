@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.auth import get_current_user, User
-from app.models.conversation import Conversation, Message
+from app.models.conversation import Conversation, Message, service_window_open
 from app.schemas.conversation import (
     ConversationResponse,
     ConversationDetail,
@@ -44,6 +44,83 @@ router = APIRouter(prefix="/api/conversations", tags=["Conversas"])
 # status='aguardando' persistido. Ate a normalizacao (m007, opcional), essas
 # linhas sao tratadas como ABERTAS em todos os filtros derivados.
 LEGACY_OPEN_STATUSES = ("aberta", "aguardando")
+
+# ─── CONV-WINDOW-01: janela de 24h da Meta ────────────────────────────
+# O BACKEND e a autoridade. O frontend desabilita o composer por UX, mas quem
+# recusa e isto: entre o render da tela e o POST podem passar as 24h, e o
+# operador clicaria "Enviar" numa janela que ja fechou.
+#
+# O guard NAO desce para whatsapp.send_text_message/send_media_message de
+# proposito: la nao ha Conversation (so um telefone), exigiria uma query extra
+# por envio e capturaria BIA, greeting, waiting e out_of_hours — caminhos que
+# rodam DENTRO do webhook de inbound, com a janela recem-reaberta. O guard fica
+# nas rotas de OPERADOR, que ja carregaram a Conversation.
+WINDOW_CLOSED_MESSAGE = (
+    "Janela de 24h encerrada. O cliente nao envia uma mensagem ha mais de 24 horas; "
+    "apenas um template aprovado pode retomar o atendimento."
+)
+
+
+def _require_open_window(conversation: Conversation) -> None:
+    """
+    Recusa free-form com janela fechada, ANTES de qualquer chamada a Meta e ANTES
+    de persistir qualquer Message — nada de mensagem 'failed' fantasma para uma
+    regra que ja conheciamos.
+
+    409 com `detail.code = WINDOW_CLOSED`: o frontend precisa distinguir isto de
+    uma falha generica da Meta para trocar o composer imediatamente. A regra de
+    negocio e NOSSA — nao dependemos do erro 131047 da Meta para aplica-la.
+    """
+    if not conversation.service_window_open:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "WINDOW_CLOSED", "message": WINDOW_CLOSED_MESSAGE},
+        )
+
+
+async def _build_template_send(db: Session, name: str, language: str, params: Optional[list]):
+    """
+    Valida um envio de template contra os `components` REAIS da Meta e devolve
+    (components_payload, texto_renderizado).
+
+    Valida, nesta ordem:
+      1. (name, language) existe e esta APPROVED  -> senao 404
+      2. estrutura suportada por este pacote      -> senao 422 com o motivo
+      3. aridade EXATA do BODY                    -> senao 422
+
+    A aridade vem da Meta, nunca do frontend: N-1 e N+1 sao recusados igualmente.
+    Header e sempre TEXT estatico no inventario atual, entao nao entra no payload.
+    """
+    from app.services import meta_templates
+
+    tpl = await meta_templates.find_approved_template(db, name, language)
+    if tpl is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Template '{name}' ({language}) nao esta aprovado na Meta ou nao existe.",
+        )
+    if not tpl["supported"]:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Este template possui componentes ainda nao suportados: {tpl['unsupported_reason']}.",
+        )
+
+    values = [str(p) for p in (params or [])]
+    expected = tpl["body_params"]
+    if len(values) != expected:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Template '{name}' exige {expected} parametro(s); {len(values)} enviado(s).",
+        )
+
+    components = []
+    if expected:
+        components.append({
+            "type": "body",
+            "parameters": [{"type": "text", "text": v} for v in values],
+        })
+
+    return components, meta_templates.render_template_body(tpl["body_text"], values)
 
 # ─── PACOTE-B: categorias do inbox ────────────────────────────────────
 # FONTE UNICA dos predicados. A listagem e o /counts consomem esta MESMA
@@ -257,19 +334,22 @@ async def initiate_conversation(
 
     # Envia o template se fornecido
     if data.template_name:
+        lang = data.template_language or 'pt_BR'
+        # CONV-WINDOW-01: mesma validacao do composer — APPROVED na Meta,
+        # estrutura suportada e aridade exata. Antes, `components=[]` era enviado
+        # mesmo para template que exige valores (payload invalido garantido) e o
+        # nome cru virava `body_text` quando o template nao existia localmente.
+        # HTTPException aqui e intencional: 404/422 sao ERRO DO CHAMADOR e nao
+        # podem ser engolidos como "message_sent: false".
+        components, body_text = await _build_template_send(
+            db, data.template_name, lang, data.template_params
+        )
         try:
-            from app.models.template import MessageTemplate
-            t = db.query(MessageTemplate).filter(
-                MessageTemplate.name == data.template_name
-            ).first()
-            lang = t.language if t else (data.template_language or 'pt_BR')
-            body_text = t.body_text if t else data.template_name
-
             wa_response = await whatsapp.send_template_message(
                 to=wpp_clean,
                 template_name=data.template_name,
                 language=lang,
-                components=[],
+                components=components,
                 db=db,
             )
 
@@ -281,9 +361,9 @@ async def initiate_conversation(
             )
             message_sent = (msg.status == 'sent')
             if message_sent:
-                logger.info(f"Template '{data.template_name}' enviado para {wpp_clean}")
+                logger.info(f"Template '{data.template_name}' ({lang}) enviado para {wpp_clean}")
         except Exception as e:
-            logger.error(f"Erro ao enviar template para {wpp_clean}: {e}")
+            logger.error(f"Erro ao enviar template para {wpp_clean}: {type(e).__name__}")
 
     return {
         "conversation_id": conversation.id,
@@ -569,7 +649,19 @@ async def update_conversation(
                 variables_service.VariableContext(db, conversation=conversation, user=current_user),
                 trigger="end_service",
             )
-            if auto_text:
+            # CONV-WINDOW-01: `end_service` e texto LIVRE disparado por acao
+            # humana (PUT status='encerrada'), e encerrar uma conversa parada ha
+            # dias e justamente o caso comum — entao pode cair fora da janela.
+            # Nao e um caminho da BIA/webhook: respeita a mesma regra.
+            # O encerramento em si JA foi commitado acima; so a frase automatica
+            # e pulada, nunca o encerramento (mesma semantica de quando a
+            # resolucao de variavel falha).
+            if auto_text and not conversation.service_window_open:
+                logger.info(
+                    f"Frase de encerramento pulada na conversa {conversation.id}: "
+                    "janela de 24h encerrada (apenas template poderia ser enviado)."
+                )
+            elif auto_text:
                 # CONV-08b: status fiel ao resultado do envio (nunca 'sent' em falha).
                 wa_response = await whatsapp.send_text_message(conversation.whatsapp, auto_text, db)
                 record_outbound_message(
@@ -681,8 +773,15 @@ async def send_message(
     # fora apenas `msg_type='template'`: o corpo do template e renderizado nos
     # servidores da Meta a partir de placeholders posicionais {{1}}, entao
     # substituicao textual nao se aplica — e escopo do CONV-VAR-02.
+    is_template = data.msg_type == "template"
+
+    # CONV-WINDOW-01: template APROVADO e exatamente o que a Meta permite fora da
+    # janela — e o unico caminho de retomada. So o free-form e bloqueado.
+    if not is_template:
+        _require_open_window(conversation)
+
     content = data.content
-    if data.msg_type != "template":
+    if not is_template:
         try:
             content = variables_service.render_strict(
                 db,
@@ -697,17 +796,21 @@ async def send_message(
 
     if data.msg_type == "text":
         wa_response = await whatsapp.send_text_message(conversation.whatsapp, content, db)
-    elif data.msg_type == "template" and data.template_name:
-        # Puxa o template do banco para checar o idioma (default pt_BR)
-        from app.models.template import MessageTemplate
-        t = db.query(MessageTemplate).filter(MessageTemplate.name == data.template_name).first()
-        lang = t.language if t else "pt_BR"
+    elif is_template:
+        if not data.template_name:
+            raise HTTPException(status_code=422, detail="template_name e obrigatorio para msg_type='template'")
+        # CONV-WINDOW-01: valida contra a Meta (APPROVED + estrutura + aridade)
+        # ANTES de enviar. `content` passa a ser o corpo RENDERIZADO — o historico
+        # mostra "Ola Joao", que foi o que o cliente recebeu, nao "Ola {{1}}".
+        components, content = await _build_template_send(
+            db, data.template_name, data.template_language or "pt_BR", data.template_params
+        )
         wa_response = await whatsapp.send_template_message(
             to=conversation.whatsapp,
             template_name=data.template_name,
-            language=lang,
-            components=[],  # TODO: extract variables from content if needed
-            db=db
+            language=data.template_language or "pt_BR",
+            components=components,
+            db=db,
         )
     elif data.media_url:
         wa_response = await whatsapp.send_media_message(
@@ -886,6 +989,10 @@ async def send_media_message_upload(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversa nao encontrada")
 
+    # CONV-WINDOW-01: midia (imagem/video/audio/documento) e free-form. Recusa
+    # ANTES de ler o arquivo, antes da politica de midia e antes do upload a Meta.
+    _require_open_window(conversation)
+
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Arquivo vazio")
@@ -958,6 +1065,12 @@ async def retry_message(
         raise HTTPException(status_code=400, detail="Apenas mensagens enviadas podem ser reenviadas")
     if message.status != "failed":
         raise HTTPException(status_code=409, detail="Apenas mensagens com falha podem ser reenviadas")
+
+    # CONV-WINDOW-01: reenvio e um envio novo aos olhos da Meta — a janela conta
+    # a partir de AGORA, nao de quando a mensagem original falhou. Sem isto, o
+    # botao de retry no historico seria uma porta dos fundos para texto livre.
+    # (template ja e recusado logo abaixo, entao aqui so ha free-form.)
+    _require_open_window(conversation)
 
     if message.msg_type == "text":
         wa_response = await whatsapp.send_text_message(conversation.whatsapp, message.content, db)

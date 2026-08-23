@@ -312,6 +312,16 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
     else:
         content = f"[{msg_type.upper()}]"
 
+    # CONV-WINDOW-01: a documentacao oficial da Meta diz que a janela abre quando
+    # "a WhatsApp user messages you or calls you", mas NAO enumera os tipos, e a
+    # referencia de webhook de `reaction` nao menciona a customer service window
+    # em nenhum ponto. Sem prova oficial, reagir NAO reabre a janela: um
+    # falso-ABERTO liberaria texto livre que a Meta recusaria (erro na cara do
+    # operador); um falso-FECHADO no maximo exige um template a mais.
+    # A reacao continua sendo persistida como Message e continua contando em
+    # unread_count — so nao avanca o relogio da janela.
+    opens_window = msg_type != "reaction"
+
     # Extract sender name from contacts
     sender_name = ""
     contacts = value.get("contacts", [])
@@ -346,7 +356,7 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
             status="aberta",
             ultimo_msg=content[:200] if content else "",
             unread_count=1,
-            last_customer_msg_at=datetime.now(tz.utc),
+            last_customer_msg_at=datetime.now(tz.utc) if opens_window else None,
         )
         db.add(conversation)
         db.flush()
@@ -364,7 +374,8 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
             conversation.is_bot_active = True
             conversation.queued_at = None
         conversation.status = "aberta"
-        conversation.last_customer_msg_at = datetime.now(tz.utc)
+        if opens_window:
+            conversation.last_customer_msg_at = datetime.now(tz.utc)
         if sender_name and not conversation.nome:
             conversation.nome = sender_name
 

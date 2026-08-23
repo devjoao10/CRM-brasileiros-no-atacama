@@ -13,7 +13,12 @@ from typing import Optional
 import httpx
 from sqlalchemy.orm import Session
 
-from app.config import META_ACCESS_TOKEN, META_PHONE_NUMBER_ID, META_API_BASE
+from app.config import (
+    META_ACCESS_TOKEN,
+    META_PHONE_NUMBER_ID,
+    META_API_BASE,
+    META_WABA_ID,
+)
 from app.models.api_config import ApiConfig
 
 logger = logging.getLogger(__name__)
@@ -33,6 +38,30 @@ def _get_credentials(db: Optional[Session] = None) -> tuple[str, str, str]:
 
     # Fallback to env vars
     return META_ACCESS_TOKEN, META_PHONE_NUMBER_ID, META_API_BASE
+
+
+def get_waba_credentials(db: Optional[Session] = None) -> Optional[tuple[str, str, str]]:
+    """
+    Credenciais de NIVEL WABA (gestao de templates), com a MESMA prioridade do
+    envio: DB primeiro, env como fallback.
+
+    Existe porque `_get_credentials` devolve o phone_number_id (envio) e a Graph
+    API de templates e enderecada pelo WABA_ID. Antes deste pacote o servico de
+    templates lia SO do banco, entao um deploy configurado por variavel de
+    ambiente — que e como producao roda (docker-compose.yml passa META_WABA_ID) —
+    respondia "Meta API nao configurada" mesmo com o envio de mensagens funcionando.
+
+    Retorna (access_token, waba_id, api_base) ou None se faltar qualquer um.
+    """
+    if db:
+        config = db.query(ApiConfig).filter(ApiConfig.id == 1).first()
+        if config and config.is_connected and config.meta_access_token and config.meta_waba_id:
+            version = config.meta_api_version or "v21.0"
+            return config.meta_access_token, config.meta_waba_id, f"https://graph.facebook.com/{version}"
+
+    if META_ACCESS_TOKEN and META_WABA_ID:
+        return META_ACCESS_TOKEN, META_WABA_ID, META_API_BASE
+    return None
 
 
 def is_configured(db: Optional[Session] = None) -> bool:

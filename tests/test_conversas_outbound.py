@@ -42,6 +42,8 @@ os.environ["META_PHONE_NUMBER_ID"] = "0000000000"
 # conversas/ no inicio do path para `import app.*` = conversas/app
 sys.path.insert(0, str(CONVERSAS_DIR))
 
+import datetime as _dt  # noqa: E402
+
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
@@ -72,6 +74,8 @@ conv = Conversation(
     status="aberta",
     unread_count=3,
     ultimo_msg="preview original",
+    # CONV-WINDOW-01: texto livre exige janela de 24h aberta.
+    last_customer_msg_at=_dt.datetime.now(_dt.timezone.utc),
 )
 db.add(conv)
 db.commit()

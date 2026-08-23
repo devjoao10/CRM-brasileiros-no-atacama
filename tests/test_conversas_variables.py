@@ -40,6 +40,8 @@ os.environ["N8N_AGENT_ENABLED"] = "false"
 
 sys.path.insert(0, str(CONVERSAS_DIR))
 
+import datetime as _dt  # noqa: E402
+
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
@@ -126,13 +128,17 @@ whatsapp.send_text_message = _fake_send_text
 
 # ─── Fixtures de dados ────────────────────────────────────────────────
 session = SessionLocal()
+# CONV-WINDOW-01: os envios deste teste sao free-form -> janela aberta.
+_AGORA = _dt.datetime.now(_dt.timezone.utc)
 conv_a = Conversation(
     lead_id=0, whatsapp="5511988887777", nome="João Pedro Baldo",
     status="aberta", responsavel_nome="Julia Atendente",
+    last_customer_msg_at=_AGORA,
 )
 conv_b = Conversation(
     lead_id=0, whatsapp="5511911112222", nome="Érica  Souza",
     status="aberta", responsavel_nome="Outro Responsavel",
+    last_customer_msg_at=_AGORA,
 )
 # lead_id REAL: a tabela `leads` (do CRM) nao existe no banco de teste do
 # Conversas, entao a leitura do CRM levanta de verdade — e so assim o caminho
@@ -140,6 +146,7 @@ conv_b = Conversation(
 conv_crm = Conversation(
     lead_id=42, whatsapp="5511933334444", nome="Carlos Lead CRM",
     status="aberta", responsavel_nome="Julia Atendente",
+    last_customer_msg_at=_AGORA,
 )
 session.add_all([conv_a, conv_b, conv_crm])
 session.add(BusinessHours(weekday=0, is_open=True, open_time="13:00", close_time="19:00"))
