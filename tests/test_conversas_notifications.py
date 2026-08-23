@@ -92,10 +92,16 @@ check("seenInboundIds" in section and "new Set()" in section,
       "Set de ids de mensagens inbound ja vistas (conversa aberta)")
 check("direction !== 'inbound'" in section,
       "so mensagens INBOUND contam (outbound nunca notifica)")
-check("c.id === activeConversation.id) return" in section,
-      "delta da lista PULA a conversa aberta (sem notificacao dupla)")
-check("processListNotifications(conversations)" in js,
-      "hook do delta da lista no loadConversations")
+# PACOTE-B: a fonte do delta deixou de ser o array da listagem (agora filtrado
+# por categoria) e passou a ser o mapa `unread` do /counts, que cobre o
+# universo ABERTO inteiro. A SEMANTICA e a mesma — e por isso continua sendo
+# exigida aqui: baseline na 1a carga, delta positivo, conversa aberta pulada.
+check("id === activeConversation.id) return" in section,
+      "delta PULA a conversa aberta (sem notificacao dupla)")
+check("processUnreadNotifications(data.unread || {})" in js,
+      "hook do delta ligado ao /counts (independe da categoria selecionada)")
+check("processUnreadNotifications(conversations)" not in js,
+      "delta NAO le mais a lista filtrada (operador nao fica cego fora da aba)")
 check("processChatNotifications(data, true)" in js
       and "processChatNotifications(activeConversation, false)" in js,
       "hooks do chat: poll notifica, abertura so baselina")

@@ -210,19 +210,22 @@ html_ui = (CONVERSAS_DIR / "templates" / "conversas.html").read_text(encoding="u
 
 # A raiz do bug do UI-03: .conv-filters era compartilhada entre a linha de
 # abas E o bloco de selects. Agora cada area tem classe DEDICADA.
-check('class="conv-filter-tabs"' in html_ui, "html: linha de abas usa .conv-filter-tabs")
+check('class="conv-inbox"' in html_ui, "html: seletor de inbox usa .conv-inbox (classe dedicada)")
 check('class="conv-sidebar-filter-selects"' in html_ui,
       "html: bloco de selects usa .conv-sidebar-filter-selects")
 check('class="conv-filters"' not in html_ui,
       "html: classe ambigua .conv-filters ELIMINADA")
-check(".conv-filter-tabs {" in css and "overflow-x: auto" in css
-      and "flex-wrap: nowrap" in css and "white-space: nowrap" in css,
-      "css: .conv-filter-tabs rolavel em uma linha (overflow-x/nowrap)")
-check("flex: 0 0 auto" in css, "css: abas nao encolhem (flex 0 0 auto)")
-check(".conv-filter-tabs button" in js_ui, "js: clique/estado das abas mira .conv-filter-tabs")
+# PACOTE-B: a linha de abas rolavel foi substituida pelo seletor de inbox
+# (<details> nativo). A INTENCAO do guard (classes dedicadas, sem seletor
+# ambiguo, sem colisao com o bloco de selects) segue valendo no novo markup.
+check(".conv-inbox {" in css and ".conv-inbox-menu {" in css,
+      "css: seletor de inbox com classes dedicadas")
+check("flex: 0 0 auto" in css, "css: badge/caret nao encolhem (flex 0 0 auto)")
+check(".conv-inbox-menu button[data-inbox]" in js_ui,
+      "js: clique das categorias mira .conv-inbox-menu")
 check(".conv-filters button" not in js_ui, "js: NENHUM seletor antigo .conv-filters restante")
-check("initTabsDragScroll" in js_ui and "dragged" in js_ui,
-      "js: drag-to-scroll escopado presente")
+check(".conv-filter-tabs" not in js_ui and ".conv-filter-tabs" not in html_ui,
+      "js/html: abas antigas ELIMINADAS (um unico sistema de categoria)")
 check("conversas.css?v=" in html_ui and "conversas.js?v=" in html_ui,
       "html: referencias de CSS e JS com cache-bust")
 for page in ("settings.html", "templates.html"):

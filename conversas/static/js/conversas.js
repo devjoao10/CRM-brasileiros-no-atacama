@@ -9,7 +9,40 @@
     // ─── State ──────────────────────────────────
     let conversations = [];
     let activeConversation = null;
-    let activeFilter = 'all';
+    // PACOTE-B: categoria do inbox (server-side). Substitui activeFilter, que
+    // filtrava em JS sobre a pagina carregada.
+    const INBOX_KEYS = ['meus', 'fila', 'bia', 'todos', 'encerradas'];
+    const INBOX_LABELS = {
+        meus: 'Meus atendimentos',
+        fila: 'Fila de espera',
+        bia: 'Atendimentos BIA',
+        todos: 'Todos',
+        encerradas: 'Encerradas',
+    };
+    const INBOX_EMPTY = {
+        meus: 'Nenhum atendimento seu no momento.',
+        fila: 'Nenhum cliente aguardando atendimento.',
+        bia: 'Nenhum atendimento com a BIA no momento.',
+        todos: 'Nenhum atendimento humano aberto.',
+        encerradas: 'Nenhuma conversa encerrada.',
+    };
+    const INBOX_STORAGE_KEY = 'conversas_inbox';
+    const PAGE_SIZE = 50;
+    // Teto do parametro `limit` no backend (Query(..., le=200)). O polling
+    // nunca pede mais que isso numa tacada.
+    const MAX_PAGE_LIMIT = 200;
+    let activeInbox = 'meus';
+    // Tamanho da JANELA atualmente carregada. NAO e um segundo sistema de
+    // paginacao: e so quantas linhas o polling deve reconsultar a partir do
+    // offset 0 para nao jogar fora o que o usuario carregou com "Carregar mais".
+    let loadedWindowSize = PAGE_SIZE;
+    let inboxCounts = {};
+    let listTotal = 0;
+    let listError = false;
+    // Guarda de corrida: so a resposta do pedido MAIS RECENTE pode renderizar.
+    // Sem isto, clicar Fila e logo BIA deixaria a resposta lenta da Fila
+    // sobrescrever a categoria ja selecionada.
+    let listRequestSeq = 0;
     let activeResponsavelFilter = '';
     let activeTagFilter = '';   // CONV-05
     let allTags = [];           // CONV-05
@@ -115,28 +148,37 @@
         }
     }
 
-    // Delta da LISTA (chamado a cada loadConversations, antes do render).
-    function processListNotifications(convs) {
+    // Delta de nao-lidas do UNIVERSO ABERTO, vindo do /counts.
+    //
+    // PACOTE-B: antes esta deteccao lia o array da listagem, que era a lista
+    // INTEIRA sem filtro. Com o inbox filtrando no servidor, ler a lista
+    // deixaria o operador cego para mensagens fora da aba selecionada — por
+    // isso a fonte agora e o mapa `unread` do /counts, independente da
+    // categoria. A semantica (baseline na 1a carga, delta positivo por
+    // conversa, conversa ABERTA tratada pelo processChatNotifications)
+    // permanece exatamente a mesma.
+    function processUnreadNotifications(unreadMap) {
         try {
             const st = notificationState;
+            const cur = new Map();
+            Object.keys(unreadMap).forEach(k => cur.set(Number(k), Number(unreadMap[k]) || 0));
             if (!st.baselined) {
-                convs.forEach(c => st.unreadByConv.set(c.id, c.unread_count || 0));
+                st.unreadByConv = cur;
                 st.baselined = true; // 1a carga = baseline: NUNCA notifica
                 return;
             }
             let novas = 0;
-            convs.forEach(c => {
-                const prev = st.unreadByConv.get(c.id);
-                const cur = c.unread_count || 0;
-                st.unreadByConv.set(c.id, cur);
+            cur.forEach((n, id) => {
                 // conversa aberta: deteccao pertence ao processChatNotifications
-                if (activeConversation && c.id === activeConversation.id) return;
-                const delta = (prev === undefined) ? cur : cur - prev;
+                if (activeConversation && id === activeConversation.id) return;
+                const prev = st.unreadByConv.get(id);
+                const delta = (prev === undefined) ? n : n - prev;
                 if (delta > 0) novas += delta;
             });
+            st.unreadByConv = cur;
             if (novas > 0) notifyNewInbound(novas);
         } catch (err) {
-            console.warn('Notificacao (lista) ignorada:', err);
+            console.warn('Notificacao (unread) ignorada:', err);
         }
     }
 
@@ -286,11 +328,17 @@
         setupMobileLayout();              // CONV-MOBILE-PWA-01: lista primeiro
         setupMobileInfoPanel();           // CONV-MOBILE-RESPONSIVE-02
         loadTags();          // CONV-05
+        restoreActiveInbox();   // PACOTE-B: default 'meus' (ou ultima escolha)
+        loadCounts();
         loadConversations();
 
         // Poll for new messages every 5 seconds
         pollInterval = setInterval(async () => {
-            loadConversations();
+            loadCounts();          // badges + deteccao de notificacao
+            // Acima do teto do backend nao da para reconsultar a janela em UMA
+            // chamada; preservar o que esta na tela vale mais que atualizar,
+            // e qualquer acao do usuario recarrega. Badges seguem vivos.
+            if (loadedWindowSize <= MAX_PAGE_LIMIT) loadConversations('refresh');
             if (activeConversation) {
                 const resp = await Auth.apiRequest(`/api/conversations/${activeConversation.id}`);
                 if (!resp || !resp.ok) return;
@@ -357,20 +405,40 @@
         });
 
         // Search
+        // PACOTE-B: busca vai ao SERVIDOR (com debounce), senao encontraria
+        // apenas o que ja esta na pagina carregada.
+        let searchTimer = null;
         document.getElementById('searchInput').addEventListener('input', (e) => {
-            searchTerm = e.target.value.toLowerCase();
-            renderConversationList();
+            searchTerm = e.target.value;
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(() => loadConversations(), 300);
         });
 
-        // Status filters
-        document.querySelectorAll('.conv-filter-tabs button').forEach(btn => {
+        // PACOTE-B: seletor de inbox. Trocar de categoria refaz a BUSCA no
+        // servidor (nao refiltra array local) e zera a paginacao.
+        document.querySelectorAll('.conv-inbox-menu button[data-inbox]').forEach(btn => {
             btn.addEventListener('click', () => {
-                document.querySelectorAll('.conv-filter-tabs button').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                activeFilter = btn.dataset.filter;
-                renderConversationList();
+                setActiveInbox(btn.dataset.inbox);
+                const sel = document.getElementById('inboxSelector');
+                if (sel) sel.open = false;
+                loadConversations();
             });
         });
+        // Escape fecha o dropdown — ESCOPADO ao proprio <details>, sem
+        // keydown global (invariante compartilhado dos pacotes anteriores).
+        const inboxSel = document.getElementById('inboxSelector');
+        if (inboxSel) {
+            inboxSel.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && inboxSel.open) {
+                    inboxSel.open = false;
+                    const sum = inboxSel.querySelector('summary');
+                    if (sum) sum.focus();
+                }
+            });
+            document.addEventListener('click', (e) => {
+                if (inboxSel.open && !inboxSel.contains(e.target)) inboxSel.open = false;
+            });
+        }
 
         // Responsavel filter
         document.getElementById('filterResponsavel').addEventListener('change', (e) => {
@@ -564,43 +632,6 @@
             if (e.target === e.currentTarget) closePreview();
         });
 
-        // CONV-BF-UI-03: drag-to-scroll das abas de filtro — ESCOPADO ao
-        // container das abas (nao sequestra eventos globais; arrasto real
-        // nao dispara troca de aba; roda do mouse rola horizontalmente).
-        (function initTabsDragScroll() {
-            const firstTab = document.querySelector('.conv-filter-tabs button[data-filter]');
-            const bar = firstTab ? firstTab.parentElement : null;
-            if (!bar) return;
-            let isDown = false, startX = 0, startScroll = 0, dragged = false;
-            bar.addEventListener('mousedown', (e) => {
-                isDown = true;
-                dragged = false;
-                startX = e.pageX;
-                startScroll = bar.scrollLeft;
-            });
-            window.addEventListener('mousemove', (e) => {
-                if (!isDown) return;
-                const dx = e.pageX - startX;
-                if (Math.abs(dx) > 5) dragged = true;
-                bar.scrollLeft = startScroll - dx;
-            });
-            window.addEventListener('mouseup', () => { isDown = false; });
-            // clique que na verdade foi arrasto nao muda o filtro
-            bar.addEventListener('click', (e) => {
-                if (dragged) {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    dragged = false;
-                }
-            }, true);
-            bar.addEventListener('wheel', (e) => {
-                if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-                    bar.scrollLeft += e.deltaY;
-                    e.preventDefault();
-                }
-            }, { passive: false });
-        })();
-
         // CONV-06: assumir/liberar conversa
         document.getElementById('btnClaim').addEventListener('click', claimOrRelease);
 
@@ -732,21 +763,103 @@
     }
 
     // ─── API Calls ──────────────────────────────
-    async function loadConversations() {
-        let url = '/api/conversations?limit=200';
-        if (activeResponsavelFilter !== '') {
-            url += `&responsavel_id=${activeResponsavelFilter}`;
-        }
-        if (activeTagFilter !== '') {
-            url += `&tag_id=${Number(activeTagFilter)}`;  // CONV-05
-        }
+    // PACOTE-B: categoria ativa (default 'meus'; ultima escolha preservada no
+    // localStorage ja usado pelo Auth — sem infraestrutura nova).
+    function setActiveInbox(key) {
+        if (!INBOX_KEYS.includes(key)) key = 'meus';
+        activeInbox = key;
+        loadedWindowSize = PAGE_SIZE;   // troca de categoria zera a paginacao
+        try { localStorage.setItem(INBOX_STORAGE_KEY, key); } catch (e) { /* ignora */ }
+        const label = document.getElementById('inboxCurrentLabel');
+        if (label) label.textContent = INBOX_LABELS[key];
+        document.querySelectorAll('.conv-inbox-menu button[data-inbox]').forEach(b => {
+            b.setAttribute('aria-selected', String(b.dataset.inbox === key));
+        });
+        renderInboxCounts();
+    }
 
-        const resp = await Auth.apiRequest(url);
-        if (!resp || !resp.ok) return;
+    function restoreActiveInbox() {
+        let saved = null;
+        try { saved = localStorage.getItem(INBOX_STORAGE_KEY); } catch (e) { /* ignora */ }
+        setActiveInbox(INBOX_KEYS.includes(saved) ? saved : 'meus');
+    }
 
+    function renderInboxCounts() {
+        document.querySelectorAll('.conv-inbox-badge[data-count]').forEach(el => {
+            const n = Number(inboxCounts[el.dataset.count] || 0);
+            el.textContent = String(n);
+            el.setAttribute('data-zero', n === 0 ? '1' : '0');
+        });
+        const cur = document.getElementById('inboxCurrentCount');
+        if (cur) {
+            const n = Number(inboxCounts[activeInbox] || 0);
+            cur.textContent = String(n);
+            cur.setAttribute('data-zero', n === 0 ? '1' : '0');
+        }
+    }
+
+    // Contagens REAIS por categoria + dataset de notificacao. Uma falha aqui
+    // NAO pode derrubar o inbox: a lista continua utilizavel sem badge.
+    async function loadCounts() {
+        try {
+            const resp = await Auth.apiRequest('/api/conversations/counts');
+            if (!resp || !resp.ok) return;
+            const data = await resp.json();
+            inboxCounts = data || {};
+            renderInboxCounts();
+            // CONV-NOTIFICATIONS-01 + PACOTE-B: a deteccao usa o mapa `unread`
+            // do /counts (universo ABERTO inteiro), NAO a lista filtrada —
+            // senao trocar de aba deixaria o operador cego para mensagens de
+            // fora dela.
+            processUnreadNotifications(data.unread || {});
+        } catch (err) {
+            console.warn('Counts ignorado (nao derruba o inbox):', err);
+        }
+    }
+
+    // mode: undefined = busca NOVA (volta a pagina 1 e zera a janela)
+    //       'append'      = proxima pagina ("Carregar mais"), amplia a janela
+    //       'refresh'     = polling: reconsulta offset 0 ate loadedWindowSize
+    //                       e SUBSTITUI a lista (nunca faz append, nunca
+    //                       reseta para PAGE_SIZE)
+    async function loadConversations(mode) {
+        const isAppend = mode === 'append';
+        const isRefresh = mode === 'refresh';
+        const seq = ++listRequestSeq;
+        if (!isAppend && !isRefresh) loadedWindowSize = PAGE_SIZE;
+        const limit = isRefresh ? Math.min(loadedWindowSize, MAX_PAGE_LIMIT) : PAGE_SIZE;
+        const params = new URLSearchParams({
+            inbox: activeInbox,
+            limit: String(limit),
+            // offset deriva da janela ja carregada — sem estado paralelo.
+            offset: String(isAppend ? conversations.length : 0),
+        });
+        if (searchTerm) params.set('search', searchTerm);
+        if (activeResponsavelFilter !== '') params.set('responsavel_id', activeResponsavelFilter);
+        if (activeTagFilter !== '') params.set('tag_id', String(Number(activeTagFilter)));
+
+        let resp = null;
+        try {
+            resp = await Auth.apiRequest(`/api/conversations?${params.toString()}`);
+        } catch (err) {
+            resp = null;
+        }
+        // Resposta obsoleta (o usuario ja trocou de categoria/filtro): descarta.
+        if (seq !== listRequestSeq) return;
+
+        if (!resp || !resp.ok) {
+            listError = true;
+            renderConversationList();
+            return;
+        }
+        listError = false;
         const data = await resp.json();
-        conversations = data.conversations || [];
-        processListNotifications(conversations);  // CONV-NOTIFICATIONS-01 (antes do render)
+        if (seq !== listRequestSeq) return;
+        const page = data.conversations || [];
+        conversations = isAppend ? conversations.concat(page) : page;
+        listTotal = Number(data.total || 0);
+        // A janela so CRESCE com append/busca nova; o refresh a mantem.
+        if (!isRefresh) loadedWindowSize = Math.max(PAGE_SIZE, conversations.length);
         renderConversationList();
     }
 
@@ -1521,43 +1634,28 @@
     // ─── Rendering ──────────────────────────────
     function renderConversationList() {
         const list = document.getElementById('convList');
-        let filtered = conversations;
+        // PACOTE-B: categoria, busca, responsavel e tag ja vieram filtrados do
+        // SQL. A ordem e a do servidor (a Fila depende disso: FIFO por
+        // queued_at). NENHUM filtro de categoria em JS aqui.
+        const filtered = conversations;
 
-        if (activeFilter === 'aguardando') {
-            // CONV-06: fila = derivado (aberta + sem atendente)
-            filtered = filtered.filter(c => isOpenStatus(c.status) && !c.atendente_id);
-        } else if (activeFilter === 'minhas') {
-            // CONV-07: atribuidas a mim
-            const me = Auth.getUser() || {};
-            filtered = filtered.filter(c => c.atendente_id === me.id);
-        } else if (activeFilter === 'aberta') {
-            filtered = filtered.filter(c => isOpenStatus(c.status));
-        } else if (activeFilter !== 'all') {
-            filtered = filtered.filter(c => c.status === activeFilter);
-        }
-
-        if (searchTerm) {
-            filtered = filtered.filter(c =>
-                (c.nome || '').toLowerCase().includes(searchTerm) ||
-                (c.whatsapp || '').includes(searchTerm)
-            );
-        }
-
-        // Update badge
-        const openCount = conversations.filter(c => isOpenStatus(c.status) && c.unread_count > 0).length;
-        const badge = document.getElementById('badgeAberta');
-        if (openCount > 0) {
-            badge.textContent = openCount;
-            badge.style.display = 'inline-block';
-        } else {
-            badge.style.display = 'none';
+        // ERRO != VAZIO: falha de rede nao pode se passar por "nada aqui".
+        if (listError) {
+            list.innerHTML = `
+                <div class="conv-list-error">
+                    <p>Não foi possível carregar as conversas.</p>
+                    <p style="font-size:12px; opacity:.8;">Verifique a conexão — nova tentativa no próximo ciclo.</p>
+                </div>
+            `;
+            return;
         }
 
         if (filtered.length === 0) {
+            const msg = INBOX_EMPTY[activeInbox] || 'Nenhuma conversa encontrada';
             list.innerHTML = `
                 <div style="text-align:center; padding:40px 20px; color:var(--dark-400);">
                     <svg viewBox="0 0 24 24" width="40" height="40" fill="currentColor" opacity="0.3" style="margin-bottom:8px;"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12z"/></svg>
-                    <p style="font-size:13px;">Nenhuma conversa encontrada</p>
+                    <p style="font-size:13px;">${escapeHtml(msg)}</p>
                 </div>
             `;
             return;
@@ -1596,6 +1694,17 @@
                 </div>
             `;
         }).join('');
+
+        // PACOTE-B: nada de cap silencioso. Se o total do servidor excede o
+        // que ja foi carregado, o restante fica acessivel explicitamente.
+        if (listTotal > filtered.length) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'conv-list-more';
+            btn.textContent = `Carregar mais (${filtered.length} de ${listTotal})`;
+            btn.addEventListener('click', () => loadConversations('append'));
+            list.appendChild(btn);
+        }
     }
 
     function renderChat() {

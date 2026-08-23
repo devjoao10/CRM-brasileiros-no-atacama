@@ -183,7 +183,12 @@ html = (CONVERSAS_DIR / "templates" / "conversas.html").read_text(encoding="utf-
 check("escapeHtml(n.content)" in js and "escapeHtml(n.user_nome" in js,
       "nota renderizada com conteudo E autor escapados")
 check("window._deleteNote(${Number(n.id)})" in js, "delete usa id numerico coercido")
-check("c.atendente_id === me.id" in js, "aba Minhas filtra pelo usuario logado")
+# PACOTE-B: "Minhas" virou a categoria "Meus atendimentos", resolvida NO SQL
+# com o usuario AUTENTICADO (o cliente nao envia mais o proprio id). O guard
+# passa a exigir exatamente isso — inclusive a ausencia do filtro em JS.
+check('data-inbox="meus"' in html, "categoria 'Meus atendimentos' no seletor de inbox")
+check("c.atendente_id === me.id" not in js,
+      "frontend NAO filtra 'meus' em JS (predicado vive no backend)")
 check('id="selectAtendente"' in html and 'id="btnAddNote"' in html,
       "select de atendente + notas no painel")
 check("NUNCA são enviadas ao WhatsApp" in html, "aviso explicito na UI")

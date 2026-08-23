@@ -157,69 +157,123 @@ body {
     color: var(--dark-400);
 }
 
-/* Filter tabs
-   CONV-BF-UI-03: as 5 abas ficam em UMA linha rolavel horizontal (nav
-   segmentada). overflow-x + touch scroll nativo; o drag com mouse e feito
-   por um JS minimo escopado ao container (conversas.js). Nada de wrap,
-   nada de esconder/encolher abas. So a LINHA rola — nunca a pagina. */
-.conv-filter-tabs {
-    display: flex;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    overflow-y: hidden;
-    white-space: nowrap;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: thin;               /* Firefox: barra discreta */
-    padding: 0 12px;
+/* PACOTE-B: seletor de inbox (substitui a linha de abas CONV-BF-UI-03).
+   <details>/<summary> nativo: o [open] governa o menu por CSS, sem JS de
+   abrir/fechar e sem keydown global. Tokens do design system existente. */
+.conv-inbox {
+    position: relative;
     border-bottom: 1px solid var(--dark-200);
-    gap: 0;
 }
 
-.conv-filter-tabs::-webkit-scrollbar {
-    height: 3px;
+.conv-inbox-current {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    min-height: 44px;                    /* tap target mobile */
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 700;
+    font-family: var(--font);
+    color: var(--dark);
+    list-style: none;
+    user-select: none;
 }
 
-.conv-filter-tabs::-webkit-scrollbar-thumb {
-    background: var(--dark-300);
-    border-radius: 2px;
+.conv-inbox-current::-webkit-details-marker { display: none; }
+
+.conv-inbox-current:hover { color: var(--primary); }
+.conv-inbox-current:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+
+.conv-inbox-label { flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.conv-inbox-caret { flex: 0 0 auto; transition: transform var(--transition); }
+.conv-inbox[open] .conv-inbox-caret { transform: rotate(180deg); }
+
+.conv-inbox-menu {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 20;
+    margin: 0;
+    padding: 4px 0;
+    list-style: none;
+    background: var(--white);
+    border: 1px solid var(--dark-200);
+    border-radius: var(--radius-md);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    max-height: 60vh;
+    overflow-y: auto;
 }
 
-.conv-filter-tabs button {
-    flex: 0 0 auto;
-    padding: 10px 10px;
+.conv-inbox-menu button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 11px 16px;
+    min-height: 44px;
     border: none;
     background: transparent;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 600;
     font-family: var(--font);
     color: var(--dark-500);
     cursor: pointer;
-    border-bottom: 2px solid transparent;
-    transition: all var(--transition);
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    white-space: nowrap;
+    text-align: left;
+    transition: background var(--transition), color var(--transition);
 }
 
-.conv-filter-tabs button:hover {
-    color: var(--primary);
-}
+.conv-inbox-menu button > span:first-child,
+.conv-inbox-menu button { white-space: nowrap; }
 
-.conv-filter-tabs button.active {
-    color: var(--primary);
-    border-bottom-color: var(--primary);
-}
+.conv-inbox-menu button:hover { background: var(--dark-100); color: var(--primary); }
+.conv-inbox-menu button[aria-selected="true"] { color: var(--primary); }
 
-.conv-filter-tabs button .badge {
+.conv-inbox-sep { border-top: 1px solid var(--dark-200); margin-top: 4px; padding-top: 4px; }
+
+.conv-inbox-badge {
+    flex: 0 0 auto;
+    margin-left: auto;
     display: inline-block;
-    background: var(--error);
-    color: white;
+    min-width: 20px;
+    background: var(--dark-200);
+    color: var(--dark-600, var(--dark));
     font-size: 10px;
-    padding: 1px 6px;
-    border-radius: var(--radius-full);
-    margin-left: 4px;
     font-weight: 700;
+    padding: 2px 7px;
+    border-radius: var(--radius-full);
+    text-align: center;
 }
+
+.conv-inbox-badge[data-zero="1"] { visibility: hidden; }
+
+/* Estado de ERRO da lista — nunca deve parecer "vazio" (resultado valido). */
+.conv-list-error {
+    padding: 24px 20px;
+    text-align: center;
+    color: var(--error);
+    font-size: 13px;
+}
+
+.conv-list-more {
+    display: block;
+    width: calc(100% - 32px);
+    margin: 8px 16px 16px;
+    padding: 10px;
+    min-height: 44px;
+    border: 1px solid var(--dark-200);
+    border-radius: var(--radius-md);
+    background: var(--white);
+    font-size: 12px;
+    font-weight: 700;
+    font-family: var(--font);
+    color: var(--primary);
+    cursor: pointer;
+}
+
+.conv-list-more:hover { background: var(--dark-100); }
 
 /* Conversation list */
 .conv-list {
@@ -1263,7 +1317,7 @@ body {
 
 @media (max-width: 640px) {
     /* guarda de overflow horizontal do shell (conteudo largo rola em
-       containers proprios, como .conv-filter-tabs ja faz) */
+       containers proprios, como .conv-inbox-menu ja faz) */
     body { overflow-x: hidden; }
 
     /* teclado mobile: dvh acompanha o viewport dinamico (fallback = a
@@ -1294,7 +1348,8 @@ body {
     /* alvos de toque ~40-44px */
     .conv-sidebar-actions button,
     .sidebar-nav-btn { width: 40px; height: 40px; }
-    .conv-filter-tabs button { padding: 13px 14px; }
+    .conv-inbox-current { padding: 13px 14px; }
+    .conv-inbox-menu button { padding: 13px 14px; }
     .chat-input .btn-send { width: 44px; height: 44px; }
 
     /* composer sempre visivel/tocavel com teclado aberto (safe-area p/

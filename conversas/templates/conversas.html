@@ -41,16 +41,25 @@
                 </div>
             </div>
 
+            <!-- PACOTE-B: seletor de inbox. <details>/<summary> nativo — abre por
+                 clique E teclado (Enter/Espaco) sem JS, sem keydown global novo. -->
+            <details class="conv-inbox" id="inboxSelector">
+                <summary class="conv-inbox-current">
+                    <span class="conv-inbox-label" id="inboxCurrentLabel">Meus atendimentos</span>
+                    <span class="conv-inbox-badge" id="inboxCurrentCount">0</span>
+                    <svg class="conv-inbox-caret" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M7 10l5 5 5-5z"/></svg>
+                </summary>
+                <ul class="conv-inbox-menu" role="listbox">
+                    <li><button type="button" role="option" data-inbox="meus">Meus atendimentos <span class="conv-inbox-badge" data-count="meus">0</span></button></li>
+                    <li><button type="button" role="option" data-inbox="fila">Fila de espera <span class="conv-inbox-badge" data-count="fila">0</span></button></li>
+                    <li><button type="button" role="option" data-inbox="bia">Atendimentos BIA <span class="conv-inbox-badge" data-count="bia">0</span></button></li>
+                    <li><button type="button" role="option" data-inbox="todos">Todos <span class="conv-inbox-badge" data-count="todos">0</span></button></li>
+                    <li class="conv-inbox-sep"><button type="button" role="option" data-inbox="encerradas">Encerradas <span class="conv-inbox-badge" data-count="encerradas">0</span></button></li>
+                </ul>
+            </details>
+
             <div class="conv-search">
                 <input type="text" id="searchInput" placeholder="Buscar conversa...">
-            </div>
-
-            <div class="conv-filter-tabs" data-tabs-scroll>
-                <button class="active" data-filter="all">Todas</button>
-                <button data-filter="aberta">Abertas <span class="badge" id="badgeAberta" style="display:none">0</span></button>
-                <button data-filter="aguardando">Aguardando</button>
-                <button data-filter="minhas">Minhas</button>
-                <button data-filter="encerrada">Encerradas</button>
             </div>
 
             <div class="conv-sidebar-filter-selects" style="padding: 6px 16px; border-bottom: 1px solid var(--dark-200); display:flex; flex-direction:column; gap:6px;">

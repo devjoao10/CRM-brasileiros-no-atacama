@@ -9,7 +9,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import set_committed_value
-from sqlalchemy import desc, update as sa_update
+from sqlalchemy import and_, desc, func, update as sa_update
+from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.auth import get_current_user, User
@@ -43,6 +44,48 @@ router = APIRouter(prefix="/api/conversations", tags=["Conversas"])
 # status='aguardando' persistido. Ate a normalizacao (m007, opcional), essas
 # linhas sao tratadas como ABERTAS em todos os filtros derivados.
 LEGACY_OPEN_STATUSES = ("aberta", "aguardando")
+
+# ─── PACOTE-B: categorias do inbox ────────────────────────────────────
+# FONTE UNICA dos predicados. A listagem e o /counts consomem esta MESMA
+# funcao — se divergissem, o badge mostraria um numero que a lista nao
+# reproduz. Estado operacional vem do PACOTE-A (is_bot_active/atendente_id/
+# queued_at); responsavel_id (comercial, do CRM) NUNCA classifica categoria.
+INBOX_CATEGORIES = ("meus", "fila", "bia", "todos", "encerradas")
+
+
+def _inbox_predicates(inbox: str, current_user_id: int) -> list:
+    """
+    Predicados de cada categoria. `meus` recebe o id do usuario AUTENTICADO —
+    a rota nunca aceita user_id do cliente para esta categoria.
+    """
+    aberta = Conversation.status.in_(LEGACY_OPEN_STATUSES)
+    humana = Conversation.is_bot_active.is_(False)
+    if inbox == "bia":
+        return [aberta, Conversation.is_bot_active.is_(True)]
+    if inbox == "fila":
+        return [aberta, humana, Conversation.atendente_id.is_(None)]
+    if inbox == "meus":
+        return [aberta, humana, Conversation.atendente_id == current_user_id]
+    if inbox == "todos":
+        return [aberta, humana]
+    if inbox == "encerradas":
+        return [Conversation.status == "encerrada"]
+    raise HTTPException(
+        status_code=422,
+        detail=f"inbox invalido (use {', '.join(INBOX_CATEGORIES)})",
+    )
+
+
+def _inbox_order(inbox: str) -> list:
+    """
+    Fila = FIFO por entrada na fila (regra de negocio rigida): mais antigo
+    primeiro, legado sem queued_at por ultimo, `id` como desempate
+    deterministico. Demais categorias: atividade recente.
+    """
+    if inbox == "fila":
+        return [Conversation.queued_at.asc().nullslast(), Conversation.id.asc()]
+    return [desc(Conversation.updated_at), Conversation.id.desc()]
+
 
 
 def _apply_human_state(
@@ -258,15 +301,26 @@ async def list_conversations(
     search: Optional[str] = Query(None, description="Buscar por nome ou WhatsApp"),
     responsavel_id: Optional[int] = Query(None, description="Filtrar por responsavel (0 = Agente IA)"),
     tag_id: Optional[int] = Query(None, description="CONV-05: filtrar por tag aplicada"),
-    queue: Optional[str] = Query(None, description="CONV-06: 'fila' (aberta sem atendente, mais antiga primeiro) | 'em_atendimento'"),
-    atendente_id: Optional[int] = Query(None, description="CONV-07: filtrar por atendente (0 = sem atendente)"),
+    queue: Optional[str] = Query(None, description="CONV-06 (legado): 'fila' | 'em_atendimento'"),
+    atendente_id: Optional[int] = Query(None, description="CONV-07 (legado): filtrar por atendente (0 = sem atendente)"),
+    inbox: Optional[str] = Query(None, description="PACOTE-B: meus | fila | bia | todos | encerradas"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """List all conversations with optional filters."""
-    query = db.query(Conversation)
+    """
+    List all conversations with optional filters.
+
+    PACOTE-B: `inbox` e a categoria do novo seletor e e aplicada NO SQL, antes
+    de count/ordenacao/paginacao — o frontend nao filtra categoria em JS.
+    Combina com search/responsavel_id/tag_id (intersecao, tudo server-side).
+    Os parametros legados (status/queue/atendente_id) seguem funcionando para
+    callers e testes existentes; a UI nova simplesmente nao os usa.
+    """
+    # selectinload: sem isto, serializar N conversas dispara N SELECTs de tags
+    # (a lista e repolada a cada 5s). 1 query extra em lote no lugar de N.
+    query = db.query(Conversation).options(selectinload(Conversation.tags))
 
     if status:
         if status == "aberta":
@@ -300,17 +354,20 @@ async def list_conversations(
         else:
             query = query.filter(Conversation.atendente_id == atendente_id)
 
-    # CONV-06: fila e ESTADO DERIVADO (fonte unica: status + atendente_id).
-    # 'aguardando' novo NUNCA e persistido (whitelist no PUT); linhas legadas
-    # pre-whitelist contam como abertas ate a normalizacao (m007, opcional).
-    order_clause = desc(Conversation.updated_at)
+    # PACOTE-B: categoria do inbox — MESMOS predicados do /counts.
+    order_by = [desc(Conversation.updated_at)]
+    if inbox is not None:
+        query = query.filter(*_inbox_predicates(inbox, current_user.id))
+        order_by = _inbox_order(inbox)
+
+    # CONV-06 (legado): fila e ESTADO DERIVADO (status + atendente_id).
     if queue == "fila":
         query = query.filter(
             Conversation.status.in_(LEGACY_OPEN_STATUSES),
             Conversation.atendente_id.is_(None),
         )
         # quem espera ha mais tempo primeiro
-        order_clause = Conversation.last_customer_msg_at.asc()
+        order_by = [Conversation.last_customer_msg_at.asc()]
     elif queue == "em_atendimento":
         query = query.filter(
             Conversation.status.in_(LEGACY_OPEN_STATUSES),
@@ -320,7 +377,7 @@ async def list_conversations(
         raise HTTPException(status_code=422, detail="queue invalida (use 'fila' ou 'em_atendimento')")
 
     total = query.count()
-    conversations = query.order_by(order_clause).offset(offset).limit(limit).all()
+    conversations = query.order_by(*order_by).offset(offset).limit(limit).all()
 
     # CONV-HOTFIX-POSTDEPLOY-01: para conversas vinculadas o responsavel do
     # lead no CRM e a fonte de verdade — UMA query em lote por pagina +
@@ -345,6 +402,39 @@ async def list_conversations(
         # commit depois da serializacao: o expire do commit nao forca um
         # re-SELECT por conversa da pagina (caminho quente da UI)
         db.commit()
+    return payload
+
+
+@router.get("/counts", summary="PACOTE-B: contagem por categoria do inbox")
+async def conversation_counts(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    PACOTE-B — contagem REAL de cada categoria (nao da pagina carregada).
+
+    UMA query agregada com COUNT(*) FILTER, usando os MESMOS
+    `_inbox_predicates` da listagem: badge e lista nao podem divergir.
+    `meus` usa `current_user.id`; nao existe parametro de usuario nesta rota.
+
+    `unread` e o dataset de NOTIFICACAO, deliberadamente separado da categoria
+    visual: {conversation_id: unread_count} de todas as conversas ABERTAS com
+    pendencia, independente da aba aberta. Sem isso, filtrar a lista por
+    categoria deixaria o operador cego para mensagens fora da aba atual
+    (regressao real — hoje as notificacoes leem a lista inteira sem filtro).
+    """
+    counts_query = db.query(*[
+        func.count().filter(and_(*_inbox_predicates(cat, current_user.id))).label(cat)
+        for cat in INBOX_CATEGORIES
+    ]).select_from(Conversation)
+    row = counts_query.one()
+    payload = {cat: int(getattr(row, cat) or 0) for cat in INBOX_CATEGORIES}
+
+    unread_rows = db.query(Conversation.id, Conversation.unread_count).filter(
+        Conversation.status.in_(LEGACY_OPEN_STATUSES),
+        Conversation.unread_count > 0,
+    ).all()
+    payload["unread"] = {str(cid): int(n or 0) for cid, n in unread_rows}
     return payload
 
 
