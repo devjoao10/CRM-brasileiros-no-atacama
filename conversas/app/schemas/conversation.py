@@ -108,6 +108,7 @@ class ConversationResponse(BaseModel):
     responsavel_id: Optional[int] = None
     responsavel_nome: Optional[str] = None
     last_customer_msg_at: Optional[datetime] = None
+    queued_at: Optional[datetime] = None  # PACOTE-A: entrada na fila humana
     created_at: datetime
     updated_at: datetime
     # CONV-05 — tags aplicadas a conversa (aditivo)

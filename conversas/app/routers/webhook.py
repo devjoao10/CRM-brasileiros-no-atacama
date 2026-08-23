@@ -355,6 +355,14 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
         # Update existing conversation
         conversation.ultimo_msg = content[:200] if content else conversation.ultimo_msg
         conversation.unread_count = (conversation.unread_count or 0) + 1
+        # PACOTE-A: REABERTURA e um ciclo NOVO de atendimento — volta para a
+        # BIA e nao herda o atendente anterior. Mensagem em conversa que JA
+        # estava aberta nao pode tocar o estado operacional (senao qualquer
+        # inbound reativaria a BIA e furaria o FIFO).
+        if conversation.status == "encerrada":
+            conversation.atendente_id = None
+            conversation.is_bot_active = True
+            conversation.queued_at = None
         conversation.status = "aberta"
         conversation.last_customer_msg_at = datetime.now(tz.utc)
         if sender_name and not conversation.nome:
