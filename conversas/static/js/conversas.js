@@ -991,7 +991,13 @@
         const templates = data.templates || [];
         list.textContent = '';
         if (!templates.length) {
-            list.appendChild(noticeEl('Nenhum template aprovado na conta Meta.'));
+            // CONV-CURATION-01: o backend so devolve APPROVED **e** autorizado.
+            // Lista vazia quase sempre significa curadoria ainda nao feita — nao
+            // "a conta nao tem templates". O composer segue BLOQUEADO: nao existe
+            // consolo de texto livre.
+            list.appendChild(noticeEl(
+                'Nenhum template disponível para o atendimento. '
+                + 'Um administrador precisa liberá-los em Templates > "Disponíveis no atendimento".'));
             return;
         }
         templates.forEach(t => list.appendChild(templateItemEl(t)));

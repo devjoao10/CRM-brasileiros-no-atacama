@@ -12,7 +12,103 @@
         if (!Auth.requireAuth()) return;
         setupEventListeners();
         loadTemplates();
+        loadServiceAvailability();   // CONV-CURATION-01
     });
+
+    // ─── CONV-CURATION-01: curadoria do atendimento ────────────────────
+    // APROVADO PELA META != AUTORIZADO PARA FALAR COM CLIENTE. A conta tem
+    // alertas de lead, notificacoes de CRM e templates de teste, todos
+    // APPROVED. Aqui o admin escolhe quais o atendente pode oferecer.
+    //
+    // A secao inteira so aparece para admin: a rota responde 403 para os
+    // demais e nos escondemos em vez de mostrar um erro. Quem decide e o
+    // backend — isto e apresentacao.
+
+    async function loadServiceAvailability() {
+        const section = document.getElementById('svcAvailSection');
+        const list = document.getElementById('svcAvailList');
+        const summary = document.getElementById('svcAvailSummary');
+
+        const resp = await Auth.apiRequest('/api/templates/service-availability');
+        if (!resp || resp.status === 403) return;   // usuario comum: secao nem aparece
+        section.style.display = '';
+
+        if (!resp.ok) {
+            list.textContent = '';
+            summary.textContent = 'Não foi possível carregar os templates da Meta. Tente recarregar.';
+            summary.className = 'svc-avail-sub warn';
+            return;
+        }
+
+        const data = await resp.json();
+        const templates = data.templates || [];
+        summary.className = 'svc-avail-sub' + (data.available === 0 ? ' warn' : '');
+        summary.textContent = data.available === 0
+            ? `Nenhum template liberado. Enquanto isso, os atendentes não conseguem retomar `
+              + `conversas fora da janela de 24h. Marque abaixo os ${templates.length} aprovados que podem ir a um cliente.`
+            : `${data.available} de ${templates.length} templates aprovados liberados para o atendimento.`;
+
+        list.textContent = '';
+        templates.forEach(t => list.appendChild(svcRowEl(t)));
+    }
+
+    function svcRowEl(t) {
+        const row = document.createElement('div');
+        row.className = 'svc-row';
+
+        const name = document.createElement('span');
+        name.className = 'svc-row-name';
+        name.textContent = t.name;
+
+        const meta = document.createElement('span');
+        meta.className = 'svc-row-meta';
+        meta.textContent = `${t.language} · ${t.category || '—'}`;
+
+        const badge = document.createElement('span');
+        badge.className = 'svc-badge';
+        badge.textContent = t.status;   // sempre APPROVED aqui; explicito mesmo assim
+
+        const body = document.createElement('span');
+        body.className = 'svc-row-body';
+        body.textContent = t.body_text || '';
+
+        const toggle = document.createElement('label');
+        toggle.className = 'svc-toggle';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = !!t.available;
+        const cbText = document.createElement('span');
+        cbText.textContent = 'Disponível no atendimento';
+        toggle.appendChild(cb);
+        toggle.appendChild(cbText);
+
+        cb.addEventListener('change', async () => {
+            const wanted = cb.checked;
+            toggle.classList.add('busy');
+            const resp = await Auth.apiRequest('/api/templates/service-availability', {
+                method: 'PUT',
+                body: JSON.stringify({ name: t.name, language: t.language, available: wanted }),
+            });
+            toggle.classList.remove('busy');
+            if (resp && resp.ok) {
+                t.available = wanted;
+                showToast(wanted
+                    ? `"${t.name}" liberado para o atendimento`
+                    : `"${t.name}" removido do atendimento`);
+                loadServiceAvailability();   // resumo e contagem sempre coerentes
+            } else {
+                cb.checked = !wanted;        // o estado exibido nunca mente sobre o servidor
+                showToast('Não foi possível alterar a disponibilidade.');
+            }
+        });
+
+        row.appendChild(name);
+        row.appendChild(meta);
+        row.appendChild(badge);
+        row.appendChild(body);
+        row.appendChild(toggle);
+        return row;
+    }
 
     function setupEventListeners() {
         document.getElementById('btnLogout').addEventListener('click', () => Auth.logout());
@@ -26,6 +122,12 @@
 
         // Sync button
         document.getElementById('btnSyncTemplates').addEventListener('click', syncTemplates);
+
+        // CONV-CURATION-01: reconsulta a Meta ignorando o cache de 5 min
+        document.getElementById('btnReloadSvcAvail').addEventListener('click', async () => {
+            await Auth.apiRequest('/api/templates/service-availability?refresh=true');
+            loadServiceAvailability();
+        });
 
         // Filters
         document.getElementById('filterStatus').addEventListener('change', loadTemplates);

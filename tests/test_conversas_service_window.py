@@ -182,6 +182,16 @@ wh.crm_service.auto_link_conversation = _noop_false
 
 s = SessionLocal()
 s.add(AutoReply(trigger="end_service", title="Encerramento", message="Atendimento encerrado.", is_active=True))
+# CONV-CURATION-01: APPROVED na Meta ja nao basta — o template tambem precisa
+# estar autorizado no atendimento. Esta suite prova a JANELA de 24h, entao
+# autoriza tudo que a Meta aprovou e deixa a curadoria para
+# tests/test_conversas_template_curation.py. `promo_pendente` fica de fora por
+# nao ser APPROVED: e o proprio caso de "autorizar nao sobrepoe o status Meta".
+from app.models.template import ServiceTemplate  # noqa: E402
+
+for _t in META_RAW:
+    if _t["status"] == "APPROVED":
+        s.add(ServiceTemplate(name=_t["name"], language=_t["language"]))
 s.commit()
 s.close()
 
