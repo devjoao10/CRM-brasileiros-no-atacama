@@ -2,24 +2,55 @@
  * Login Page Logic
  */
 
+/**
+ * Destino interno seguro do `?next=` — bloqueia open redirect
+ * (`?next=https://evil.com`, `?next=//evil.com`, `javascript:`).
+ */
+function safeNext() {
+    const raw = new URLSearchParams(window.location.search).get('next');
+    if (!raw) return null;
+    try {
+        // URL() resolve o valor contra a própria origem: qualquer destino
+        // externo (`//evil.com`, `https://evil.com`, `javascript:`) cai em
+        // outra origin. Valor malformado cai no catch e vira o destino padrão.
+        const url = new URL(raw, window.location.origin);
+        return url.origin === window.location.origin ? url.pathname + url.search : null;
+    } catch (e) {
+        return null;
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
-    // If already logged in, validate token before redirecting
+    // If already logged in, validate the session before redirecting.
+    //
+    // AUTH-LOOP-01: valida com a MESMA credencial que as páginas protegidas
+    // exigem — o cookie de sessão — e não com o JWT do localStorage. Antes,
+    // um localStorage válido + cookie ausente fazia /api/auth/me responder 200
+    // e /hub responder 302 para /login, em loop infinito até o 429.
     if (Auth.isAuthenticated()) {
-        fetch('/api/auth/me', {
-            headers: { 'Authorization': `Bearer ${Auth.getToken()}` }
-        }).then(res => {
-            if (res.ok) {
-                const next = new URLSearchParams(window.location.search).get('next');
-                window.location.href = next || '/hub';
-            } else {
-                // Token expirado ou inválido — limpa e fica no login
+        fetch('/api/auth/me', { credentials: 'same-origin', cache: 'no-store' })
+            .then(res => {
+                if (!res.ok) {
+                    // Sessão inexistente/expirada — limpa e fica no login.
+                    Auth.clearAuth();
+                    return;
+                }
+                if (sessionStorage.getItem(Auth.HOP_KEY)) {
+                    // Já tentamos ir para a página protegida e voltamos ao
+                    // login: backend e frontend discordam. Zera o estado local
+                    // em vez de tentar de novo.
+                    Auth.clearAuth();
+                    return;
+                }
+                sessionStorage.setItem(Auth.HOP_KEY, '1');
+                window.location.href = safeNext() || '/hub';
+            })
+            .catch(() => {
                 Auth.clearAuth();
-            }
-        }).catch(() => {
-            Auth.clearAuth();
-        });
+            });
         return;
     }
+    sessionStorage.removeItem(Auth.HOP_KEY);
 
     const form = document.getElementById('loginForm');
     const emailInput = document.getElementById('email');
@@ -82,8 +113,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Redirect after brief delay for feedback
             setTimeout(() => {
-                const next = new URLSearchParams(window.location.search).get('next');
-                window.location.href = next || '/hub';
+                sessionStorage.setItem(Auth.HOP_KEY, '1');
+                window.location.href = safeNext() || '/hub';
             }, 500);
 
         } catch (err) {

@@ -101,6 +101,11 @@ app.add_middleware(
 
 
 # ─── Security Headers Middleware ─────────────────────────────────────
+# Rotas cujo corpo depende do estado de sessão: nenhuma resposta pode ser
+# reaproveitada de cache (AUTH-LOOP-01). Assets em /static continuam cacheáveis.
+_NO_STORE_PATHS = {"/login", "/hub"}
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: StarletteRequest, call_next):
         response = await call_next(request)
@@ -108,6 +113,14 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        path = request.url.path
+        if (
+            path in _NO_STORE_PATHS
+            or path.startswith("/api/auth/")
+            # cobre o 302 de QUALQUER página protegida para /login
+            or response.headers.get("location", "").startswith("/login")
+        ):
+            response.headers["Cache-Control"] = "no-store"
         if ENVIRONMENT == "production":
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response

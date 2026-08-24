@@ -170,3 +170,6 @@ uploads/
 
 # Arquivos auxiliares de desenvolvimento (nao versionar)
 scratch/
+
+# graphify (grafo de auditoria, artefato local)
+graphify-out/

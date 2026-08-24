@@ -6,6 +6,11 @@
 const Auth = {
     TOKEN_KEY: 'crm_access_token',
     USER_KEY: 'crm_user',
+    // Guarda one-shot contra loop /login <-> /hub (AUTH-LOOP-01). Marcada
+    // antes de sair do login, apagada ao chegar autenticado em qualquer
+    // página protegida. sessionStorage: morre com a aba, nunca vira estado
+    // permanente capaz de bloquear um login válido.
+    HOP_KEY: 'crm_hub_hop',
 
     /**
      * Store auth data after login
@@ -43,6 +48,7 @@ const Auth = {
     clearAuth() {
         localStorage.removeItem(this.TOKEN_KEY);
         localStorage.removeItem(this.USER_KEY);
+        sessionStorage.removeItem(this.HOP_KEY);
     },
 
     /**
@@ -95,6 +101,8 @@ const Auth = {
             window.location.href = '/login';
             return false;
         }
+        // Chegamos autenticados a uma página protegida: a ida deu certo.
+        sessionStorage.removeItem(this.HOP_KEY);
         return true;
     }
 };

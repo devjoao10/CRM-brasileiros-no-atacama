@@ -2,11 +2,12 @@
 WP-UX-02 — Hub de Setores: render + gate de rota.
 
 - Render: hub.html estende base.html SEM sidebar, com os 3 cards de setor e logout.
-- Rota: /hub exige cookie (mesmo gate `_require_cookie` das demais páginas);
-  sem cookie -> 302 /login; com cookie -> 200.
+- Rota: /hub exige SESSÃO VÁLIDA (mesmo gate `require_page_session` das demais
+  páginas, que resolve o usuário pelo mesmo `_get_user_from_jwt` do
+  /api/auth/me — AUTH-LOOP-01). Sem cookie -> 302 /login; cookie inválido ->
+  302 /login; JWT válido -> 200.
   O teste de rota NÃO usa /api/auth/login (evita interferir no rate limit 5/min
-  compartilhado com test_rate_limit.py) — o gate de página só checa presença
-  do cookie, então um valor dummy prova o comportamento real.
+  compartilhado com test_rate_limit.py) — assina o JWT direto.
 
 Rodar:  python tests/test_hub.py   ou   python -m pytest tests/test_hub.py
 """
@@ -47,6 +48,7 @@ def _client():
         "SEED_INITIAL_ADMIN": "true",
         "ADMIN_INITIAL_EMAIL": "admin@local.test",
         "ADMIN_INITIAL_PASSWORD": "LocalSmoke123!",
+        "SECRET_KEY": "test-secret-key-hub",
     })
     pathlib.Path("scratch").mkdir(exist_ok=True)
     from fastapi.testclient import TestClient  # requer httpx
@@ -54,15 +56,25 @@ def _client():
     return TestClient(app)
 
 
-def test_hub_route_requires_cookie():
+def test_hub_route_requires_valid_session():
     with _client() as client:
+        from app.auth import create_access_token
+
         r = client.get("/hub", follow_redirects=False)
         assert r.status_code == 302, f"sem cookie deveria redirecionar: {r.status_code}"
         assert "/login" in r.headers.get("location", "")
 
+        # AUTH-LOOP-01: presença de cookie não é mais suficiente. Um valor
+        # dummy tem de ser recusado igual /api/auth/me o recusa.
         client.cookies.set("access_token", "Bearer dummy")
+        r = client.get("/hub", follow_redirects=False)
+        assert r.status_code == 302, f"cookie inválido deveria redirecionar: {r.status_code}"
+
+        client.cookies.clear()
+        token = create_access_token({"sub": "admin@local.test", "role": "admin"})
+        client.cookies.set("access_token", f"Bearer {token}")
         r = client.get("/hub")
-        assert r.status_code == 200, f"com cookie deveria servir o hub: {r.status_code}"
+        assert r.status_code == 200, f"sessão válida deveria servir o hub: {r.status_code}"
         assert "Hub de Setores" in r.text
 
 
@@ -70,8 +82,8 @@ if __name__ == "__main__":
     test_hub_renders_without_sidebar()
     print("OK test_hub_renders_without_sidebar")
     try:
-        test_hub_route_requires_cookie()
-        print("OK test_hub_route_requires_cookie")
+        test_hub_route_requires_valid_session()
+        print("OK test_hub_route_requires_valid_session")
     except ImportError as e:
         print("SKIP rota (dependencia ausente p/ TestClient):", e)
         raise SystemExit(2)

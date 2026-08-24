@@ -1,9 +1,11 @@
 import hashlib
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status, Header, Request
+from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -12,6 +14,8 @@ from sqlalchemy.orm import Session
 from app.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
 from app.database import get_db
 from app.models.user import User
+
+logger = logging.getLogger(__name__)
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
@@ -201,3 +205,46 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
             detail="Acesso restrito a administradores"
         )
     return current_user
+
+
+# ─── Sessão das páginas HTML (AUTH-LOOP-01) ──────────────────────────
+# Antes, cada página protegida só checava a PRESENÇA do cookie enquanto
+# /api/auth/me validava o JWT de verdade. Duas fontes de verdade divergentes
+# permitiam que uma sessão fosse "válida" para /api/auth/me e "inválida" para
+# /hub — o que gerava o loop /login <-> /hub. As duas rotas passam a resolver
+# o usuário com o MESMO `_get_user_from_jwt` usado por `get_current_user`.
+
+
+def require_page_session(request: Request, db: Session) -> Optional[User]:
+    """Resolve o usuário da sessão de cookie das páginas HTML.
+
+    Usa o mesmo resolver do `get_current_user` (`_get_user_from_jwt`), então
+    /hub e /api/auth/me concordam sempre: assinatura, `exp`, existência do
+    usuário e `is_active`. Retorna None quando não há sessão utilizável.
+    """
+    raw = request.cookies.get("access_token")
+    if not raw:
+        return None
+    token = raw[7:] if raw.startswith("Bearer ") else raw
+    return _get_user_from_jwt(token, db)
+
+
+def page_login_redirect(request: Request, next_url: Optional[str] = None) -> RedirectResponse:
+    """302 para /login removendo a credencial inválida (recuperação automática).
+
+    Sem isso um cookie expirado/corrompido ficava no navegador para sempre e o
+    estado inconsistente nunca se resolvia sozinho.
+    """
+    response = RedirectResponse(
+        url=f"/login?next={next_url}" if next_url else "/login",
+        status_code=302,
+    )
+    # ponytail: `decode_token` engole ExpiredSignatureError junto com as demais
+    # JWTError, então expirado e adulterado logam o mesmo "invalid_session".
+    # Separar exigiria mexer em decode_token (4 callers).
+    had_cookie = bool(request.cookies.get("access_token"))
+    if had_cookie:
+        response.delete_cookie("access_token", path="/")
+    logger.info("AUTH_REDIRECT path=%s reason=%s", request.url.path,
+                "invalid_session" if had_cookie else "missing_session")
+    return response
