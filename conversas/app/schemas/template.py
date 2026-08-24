@@ -103,6 +103,20 @@ class TemplateSendRequest(BaseModel):
     variables: Optional[dict] = Field(None, description='{"header": ["João"], "body": ["12345"]}')
 
 
+class TemplateParamMapUpdate(BaseModel):
+    """
+    CONV-TPLMAP-01 — mapeamento {{n}} -> @VARIAVEL de um template.
+
+    Chave (name, language), como toda identidade de template no sistema.
+    `mappings` e o conjunto COMPLETO: posicao ausente e posicao sem mapeamento
+    (o operador escolheu preenchimento manual). Chave e o numero de `{{n}}`
+    como string, porque JSON nao tem chave inteira.
+    """
+    name: str = Field(..., min_length=1, max_length=512)
+    language: str = Field(..., min_length=2, max_length=10)
+    mappings: dict = Field(default_factory=dict, description='{"1": "@PRIMEIRONOMECLIENTE"}')
+
+
 class ServiceAvailabilityUpdate(BaseModel):
     """
     CONV-CURATION-01 — libera/remove um template do atendimento.

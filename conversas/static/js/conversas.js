@@ -1082,6 +1082,29 @@
         preview.className = 'tpl-body';
         preview.style.cssText = 'background:var(--dark-100); border-radius:6px; padding:8px; margin:8px 0;';
 
+        // CONV-TPLMAP-01: template cujo BODY tem @TOKEN como TEXTO ESTATICO
+        // (body_params=0). A Meta manda a arroba literal ao cliente e nao ha
+        // {{n}} onde encaixar mapeamento. Avisa, nao bloqueia, nao altera nada.
+        if (Array.isArray(t.static_tokens) && t.static_tokens.length) {
+            const warn = document.createElement('div');
+            warn.className = 'tpl-static-warn';
+            warn.style.cssText = 'margin:8px 10px; padding:8px; border-radius:6px; background:var(--dark-100); border-left:3px solid #d98324; font-size:11px; line-height:1.4;';
+            warn.textContent =
+                'Este template contem variaveis internas como texto estatico (' +
+                t.static_tokens.join(', ') + '). A Meta nao substitui esses valores. ' +
+                'Recrie o template usando {{1}}, {{2}}, etc.';
+            list.appendChild(warn);
+        }
+
+        // Posicoes com variavel mapeada sao preenchidas pelo BACKEND: o
+        // atendente nem ve o campo. As demais continuam manuais, exatamente
+        // como antes — template sem mapeamento nao muda em nada.
+        const paramMap = t.param_map || {};
+        const freePositions = [];
+        for (let i = 1; i <= t.body_params; i++) {
+            if (!paramMap[String(i)]) freePositions.push(i);
+        }
+
         const inputs = [];
         const form = document.createElement('div');
         form.style.padding = '0 10px';
@@ -1089,6 +1112,15 @@
             const label = document.createElement('label');
             label.style.cssText = 'font-size:11px; color:var(--dark-500); display:block; margin-top:6px;';
             label.textContent = '{{' + i + '}}';
+            if (paramMap[String(i)]) {
+                const fixed = document.createElement('div');
+                fixed.className = 'tpl-param-mapped';
+                fixed.style.cssText = 'font-size:11px; color:var(--dark-600); padding:4px 0;';
+                fixed.textContent = paramMap[String(i)] + ' (automatico)';
+                label.appendChild(fixed);
+                form.appendChild(label);
+                continue;
+            }
             const inp = document.createElement('input');
             inp.type = 'text';
             inp.className = 'tpl-param-input';
@@ -1098,7 +1130,19 @@
             inputs.push(inp);
         }
 
+        /** Valores das posicoes LIVRES, na ordem — e o que o backend espera. */
         function values() { return inputs.map(i => i.value); }
+
+        /** Array posicional completo (mapeadas + livres) so para a PREVIA. */
+        function previewValues() {
+            const free = values();
+            const out = [];
+            for (let i = 1; i <= t.body_params; i++) {
+                const mapped = paramMap[String(i)];
+                out.push(mapped ? mapped : (free[freePositions.indexOf(i)] || ''));
+            }
+            return out;
+        }
 
         function paint(vals) {
             preview.textContent = t.body_text.replace(/\{\{(\d+)\}\}/g, (m, n) => {
@@ -1111,11 +1155,14 @@
         // que usa o mesmo resolvedor do envio. Enquanto a resposta nao chega,
         // mostra o texto cru; se o backend falhar, a previa fica crua e o envio
         // segue sendo a autoridade (ele bloqueia o que nao resolver).
+        // CONV-TPLMAP-01: a previa usa o array POSICIONAL completo (mapeadas +
+        // livres) para que {{n}} automatico apareca resolvido; o envio continua
+        // mandando so as livres, que e o contrato do backend.
         let previewSeq = 0;
         async function updatePreview() {
-            const vals = values();
+            const vals = previewValues();
             paint(vals);
-            send.disabled = tplSending || vals.some(v => !v.trim());
+            send.disabled = tplSending || values().some(v => !v.trim());
             if (!activeConversation || !vals.some(v => v.includes('@'))) return;
             const seq = ++previewSeq;
             try {

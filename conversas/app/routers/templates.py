@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.auth import get_current_user, require_admin, User
+from app.models.message_variable import MessageVariable
 from app.models.template import MessageTemplate
 from app.schemas.template import (
     TemplateCreate,
@@ -19,6 +20,7 @@ from app.schemas.template import (
     TemplateResponse,
     TemplateListResponse,
     TemplateSendRequest,
+    TemplateParamMapUpdate,
     ServiceAvailabilityUpdate,
 )
 from app.services import whatsapp
@@ -151,8 +153,19 @@ async def list_service_availability(
         raise HTTPException(status_code=503, detail=result.get("error", "Nao foi possivel carregar os templates."))
 
     allowed = meta_templates.authorized_keys(db)
+    # CONV-TPLMAP-01: esta e a tela onde o admin ve TODOS os templates, entao e
+    # tambem onde o mapeamento persistido de um template feito no Business
+    # Manager pode ser conferido e ajustado — sem mexer no BODY aprovado.
+    maps = meta_templates.param_maps(db)
     items = [
-        {**t, "available": (t["name"], t["language"]) in allowed}
+        {
+            **t,
+            "available": (t["name"], t["language"]) in allowed,
+            "param_map": {
+                str(p): tok
+                for p, tok in sorted(maps.get((t["name"], t["language"]), {}).items())
+            },
+        }
         for t in result["templates"]
     ]
     return {"templates": items, "total": len(items), "available": sum(1 for i in items if i["available"])}
@@ -177,6 +190,121 @@ async def update_service_availability(
         f"{'liberado para' if data.available else 'removido do'} atendimento por {current_user.email}"
     )
     return {"name": data.name, "language": data.language, "available": data.available}
+
+
+# ─── CONV-TPLMAP-01: mapeamento {{n}} -> @VARIAVEL ────────────────────
+
+async def _body_params_of(db: Session, name: str, language: str) -> Optional[int]:
+    """
+    Aridade do BODY de (name, language), das DUAS fontes que o backend possui.
+
+    O template local vem PRIMEIRO porque no modal "Novo Template" ele ainda esta
+    PENDING e nem existe no catalogo aprovado da Meta — validar so contra a Meta
+    tornaria impossivel mapear na criacao, que e exatamente quando o operador
+    esta olhando para os `{{n}}` que acabou de escrever.
+
+    Templates feitos no Business Manager nao tem linha local: para esses a
+    fonte e o catalogo APROVADO (nao o do atendimento — autorizacao e outra
+    decisao, e mapear antes de autorizar tem que ser possivel).
+
+    None = nao conhecemos esse template em fonte nenhuma.
+    """
+    local = db.query(MessageTemplate).filter(
+        MessageTemplate.name == name, MessageTemplate.language == language
+    ).first()
+    if local is not None:
+        return meta_templates.count_body_params(local.body_text)
+
+    catalog = await meta_templates.list_approved_templates(db)
+    if catalog.get("ok"):
+        for t in catalog["templates"]:
+            if t["name"] == name and t["language"] == language:
+                return t["body_params"]
+    return None
+
+
+@router.get("/param-map")
+async def get_param_map(
+    name: str = Query(..., min_length=1),
+    language: str = Query(..., min_length=2),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Mapeamento persistido de um template. Leitura para qualquer autenticado —
+    o composer precisa saber quais posicoes NAO pedir ao atendente.
+
+    Declarada ANTES de `/{template_id}`: "param-map" nao e int e cairia no
+    conversor de path da outra rota (mesmo motivo de `/meta/approved`).
+    """
+    mapping = meta_templates.param_maps(db).get((name, language), {})
+    return {"name": name, "language": language, "mappings": {str(k): v for k, v in sorted(mapping.items())}}
+
+
+@router.put("/param-map")
+async def update_param_map(
+    data: TemplateParamMapUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """
+    Define o mapeamento COMPLETO de (name, language). Somente administradores —
+    e configuracao de envio, mesmo nivel da curadoria.
+
+    Valida, nesta ordem:
+      1. template conhecido (local ou catalogo Meta)  -> senao 404
+      2. posicao inteira dentro de 1..N do BODY REAL  -> senao 422
+      3. token de variavel EXISTENTE e ATIVA          -> senao 422
+
+    Sobre a regra de sequencia: `count_body_params` devolve o MAIOR indice e a
+    Meta recebe o array completo ate ele, entao buracos ({{1}} e {{3}} sem
+    {{2}}) sao tolerados pelo envio. Validar contiguidade aqui inventaria uma
+    regra mais estrita que a do proprio envio — so a FAIXA e validada.
+
+    NAO toca a Meta: mapeamento e local, o BODY aprovado continua exatamente
+    como esta. Por isso editar mapeamento nao exige recriar o template.
+    """
+    expected = await _body_params_of(db, data.name, data.language)
+    if expected is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Template '{data.name}' ({data.language}) nao encontrado.",
+        )
+
+    cleaned: dict = {}
+    for raw_position, raw_token in (data.mappings or {}).items():
+        try:
+            position = int(raw_position)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail=f"Posicao invalida: {raw_position!r}.")
+        if not 1 <= position <= expected:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Posicao {{{{{position}}}}} nao existe neste template "
+                    f"(o corpo usa {expected} parametro(s))."
+                    if expected else
+                    f"Este template nao possui parametros {{{{n}}}} para mapear."
+                ),
+            )
+        token = variables_service.normalize_token(raw_token)
+        variable = db.query(MessageVariable).filter(MessageVariable.token == token).first()
+        if variable is None:
+            raise HTTPException(status_code=422, detail=f"{token} nao e uma variavel cadastrada.")
+        if not variable.is_active:
+            raise HTTPException(status_code=422, detail=f"A variavel {token} esta desativada.")
+        cleaned[position] = token
+
+    meta_templates.set_param_map(db, data.name, data.language, cleaned)
+    logger.info(
+        f"Mapeamento de '{data.name}' ({data.language}) definido por {current_user.email}: "
+        f"{ {p: t for p, t in sorted(cleaned.items())} }"
+    )
+    return {
+        "name": data.name,
+        "language": data.language,
+        "mappings": {str(k): v for k, v in sorted(cleaned.items())},
+    }
 
 
 @router.get("/{template_id}", response_model=TemplateResponse)

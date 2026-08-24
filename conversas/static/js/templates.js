@@ -142,6 +142,7 @@
         // Body char counter
         document.getElementById('tplBody').addEventListener('input', function () {
             document.getElementById('bodyCharCount').textContent = this.value.length;
+            renderParamMapRows();   // CONV-TPLMAP-01: {{n}} adicionado/removido
         });
 
         // Header type toggle
@@ -231,6 +232,110 @@
         }).join('');
     }
 
+    // ─── CONV-TPLMAP-01: {{n}} -> @VARIAVEL ────────────────────────────
+    // Tres conceitos distintos convivem no modal e nao podem se misturar:
+    //   {{1}}      -> parametro posicional da Meta
+    //   @VARIAVEL  -> variavel interna do Conversas
+    //   "Joao"     -> exemplo que a Meta exige para APROVAR
+    // Esta secao liga o 1o ao 2o. O 3o continua no campo de exemplos e nunca
+    // vira valor de envio.
+    //
+    // O catalogo vem de /api/variables (fonte de verdade do sistema de
+    // variaveis) — NENHUM token escrito neste arquivo, nem em comentario: o
+    // teste do pacote falha se algum aparecer, para que ninguem transforme
+    // "exemplo no comentario" em "lista fixa no codigo". Backend revalida tudo.
+
+    let variableTokens = [];        // tokens vindos do backend
+    let paramMapDraft = {};         // {'1': '@TOKEN'} — selecao atual do modal
+
+    /** Posicoes {{n}} do corpo, unicas e em ordem numerica. */
+    function bodyPositions(text) {
+        const found = new Set();
+        (text || '').replace(/\{\{(\d+)\}\}/g, (m, n) => { found.add(Number(n)); return m; });
+        return [...found].filter(n => n >= 1).sort((a, b) => a - b);
+    }
+
+    async function loadVariableTokens() {
+        if (variableTokens.length) return;
+        const resp = await Auth.apiRequest('/api/variables');
+        if (!resp || !resp.ok) return;             // sem catalogo: so manual
+        const data = await resp.json();
+        variableTokens = (data.variables || []).map(v => v.token);
+    }
+
+    function renderParamMapRows() {
+        const group = document.getElementById('tplParamMapGroup');
+        const rows = document.getElementById('tplParamMapRows');
+        const positions = bodyPositions(document.getElementById('tplBody').value);
+
+        rows.textContent = '';
+        group.style.display = positions.length ? '' : 'none';
+
+        positions.forEach(pos => {
+            const row = document.createElement('div');
+            row.className = 'form-row';
+            row.style.cssText = 'align-items:center; gap:8px; margin-top:6px;';
+
+            const label = document.createElement('code');
+            label.textContent = '{{' + pos + '}}';
+            label.style.cssText = 'min-width:52px; font-size:12px;';
+
+            const select = document.createElement('select');
+            select.dataset.position = String(pos);
+            const none = document.createElement('option');
+            none.value = '';
+            none.textContent = 'Preencher na hora do envio';
+            select.appendChild(none);
+            variableTokens.forEach(tok => {
+                const opt = document.createElement('option');
+                opt.value = tok;
+                opt.textContent = tok;       // textContent: token nunca vira HTML
+                select.appendChild(opt);
+            });
+            select.value = paramMapDraft[pos] || '';
+            select.addEventListener('change', () => {
+                if (select.value) paramMapDraft[pos] = select.value;
+                else delete paramMapDraft[pos];
+            });
+
+            row.appendChild(label);
+            row.appendChild(select);
+            rows.appendChild(row);
+        });
+
+        // Posicao que sumiu do corpo nao pode continuar no rascunho, senao o
+        // backend recusaria o PUT inteiro por "posicao nao existe".
+        Object.keys(paramMapDraft).forEach(p => {
+            if (!positions.includes(Number(p))) delete paramMapDraft[p];
+        });
+    }
+
+    async function loadParamMap(name, language) {
+        paramMapDraft = {};
+        if (!name || !language) return;
+        const url = `/api/templates/param-map?name=${encodeURIComponent(name)}&language=${encodeURIComponent(language)}`;
+        const resp = await Auth.apiRequest(url);
+        if (!resp || !resp.ok) return;
+        const data = await resp.json();
+        paramMapDraft = { ...(data.mappings || {}) };
+    }
+
+    /**
+     * Salva o mapeamento LOCAL. Nao toca a Meta: o BODY aprovado continua como
+     * esta, e por isso trocar de variavel nao exige recriar o template.
+     * Falha aqui nao invalida o template ja salvo — avisa e segue.
+     */
+    async function saveParamMap(name, language) {
+        const resp = await Auth.apiRequest('/api/templates/param-map', {
+            method: 'PUT',
+            body: JSON.stringify({ name, language, mappings: paramMapDraft }),
+        });
+        if (resp && resp.ok) return true;
+        const err = resp ? await resp.json().catch(() => null) : null;
+        showToast(err?.detail || 'Template salvo, mas o mapeamento de variaveis falhou.');
+        return false;
+    }
+
     function openModal(template = null) {
         editingId = template ? template.id : null;
         document.getElementById('modalTitle').textContent = template ? 'Editar Template' : 'Novo Template';
@@ -256,6 +361,14 @@
             (template && template.header_type === 'TEXT') ? 'block' : (template ? 'none' : 'block');
 
         document.getElementById('modalOverlay').style.display = 'flex';
+
+        // CONV-TPLMAP-01: catalogo + mapeamento persistido. Assincrono de
+        // proposito — o modal abre na hora e a secao se popula em seguida.
+        paramMapDraft = {};
+        renderParamMapRows();
+        loadVariableTokens()
+            .then(() => template ? loadParamMap(template.name, template.language) : null)
+            .then(renderParamMapRows);
     }
 
     function closeModal() {
@@ -297,6 +410,10 @@
 
         if (resp && resp.ok) {
             const result = await resp.json();
+            // CONV-TPLMAP-01: mapeamento e persistido DEPOIS do template, pela
+            // chave (name, language) que o backend acabou de confirmar — nunca
+            // pelos campos do formulario, que o backend pode ter normalizado.
+            await saveParamMap(result.name, result.language);
             const msg = editingId ? 'Template atualizado' : 'Template criado';
             if (result.meta_template_id) {
                 showToast(`${msg} e submetido ao Meta`);
