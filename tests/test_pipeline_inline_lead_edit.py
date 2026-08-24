@@ -422,11 +422,20 @@ def test_pipeline_nao_ganhou_endpoint_novo():
 
 
 def test_nenhum_py_de_aplicacao_alterado():
-    r = subprocess.run(["git", "diff", "--name-only", "origin/main", "--", "app/"],
+    """Este WP e frontend-only: nao pode mexer no backend de pipeline/leads.
+
+    O escopo original era `app/` inteiro, o que congelava o backend do projeto
+    todo e reprovava qualquer trabalho nao relacionado (ex.: AUTH-LOOP-01, que
+    altera app/auth.py e os routers de paginas). Passa a guardar exatamente a
+    superficie que este WP toca.
+    """
+    alvos = ["app/routers/pipeline.py", "app/routers/leads.py",
+             "app/schemas/lead.py", "app/models/lead.py"]
+    r = subprocess.run(["git", "diff", "--name-only", "origin/main", "--", *alvos],
                        capture_output=True, text=True, encoding="utf-8")
     if r.returncode != 0:
         return
-    assert not r.stdout.strip(), f"backend alterado: {r.stdout.strip()}"
+    assert not r.stdout.strip(), f"backend de pipeline/leads alterado: {r.stdout.strip()}"
 
 
 # ─────────────────────────────────────────────────────────────────────────
