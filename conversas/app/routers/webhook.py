@@ -10,8 +10,10 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 from datetime import datetime, timezone as tz
 
+import httpx
 from fastapi import APIRouter, Request, HTTPException, Query, Depends
 from sqlalchemy.orm import Session
 
@@ -27,6 +29,25 @@ from app.services.outbound import record_outbound_message
 from app.models.media_asset import MediaAsset
 
 logger = logging.getLogger(__name__)
+
+# CONV-AGENT-01 — a Bia (WF-10) e um agente LLM com tools: 1m27s e 2m36s sao
+# execucoes NORMAIS, nao travamentos. Com o teto anterior de 60s o Conversas
+# desistia da conexao, o n8n concluia com sucesso depois e o cliente ficava
+# sem resposta nenhuma.
+#
+# Timeout SEPARADO por fase (httpx 0.28.1): o primeiro argumento posicional e o
+# default aplicado a read/write/pool; `connect` sobrescreve so a conexao.
+#   connect=10s -> n8n fora do ar falha rapido, sem segurar o webhook
+#   read=240s   -> o agente tem folga para raciocinar e chamar suas tools
+AGENT_TIMEOUT = httpx.Timeout(240.0, connect=10.0)
+
+# Resposta unica de degradacao. NAO e uma resposta da Bia: e o que o cliente
+# recebe quando nao foi possivel obter resposta alguma do agente. Texto
+# generico de proposito — erro tecnico nunca chega ao cliente.
+AGENT_FALLBACK_REPLY = (
+    "Tive uma instabilidade para processar sua mensagem agora. "
+    "Pode me enviar novamente em alguns instantes? 🙂"
+)
 
 
 def _is_signature_required() -> bool:
@@ -536,14 +557,75 @@ async def _debounce_then_forward(conversation_id: int):
         db.close()
 
 
+def _split_agent_reply(resposta: str) -> list:
+    """`|||` e quebras de paragrafo -> partes, para um ritmo natural no WhatsApp."""
+    partes = []
+    for raw in (resposta or "").split("|||"):
+        partes.extend(p.strip() for p in re.split(r"\n\s*\n", raw) if p.strip())
+    return partes
+
+
+async def _fetch_agent_parts(agent_url: str, payload: dict, conversation_id) -> list:
+    """
+    CONV-AGENT-01 — partes da resposta da Bia, ou `[]` quando NAO foi possivel
+    obter resposta utilizavel. Lista vazia e o unico sinal de degradacao: quem
+    chama nao precisa distinguir os modos de falha, so saber que nao ha resposta.
+
+    Cobre, sem levantar: timeout (leitura e conexao), conexao recusada e demais
+    erros de rede, HTTP != 200, corpo que nao e JSON, JSON sem `resposta` e
+    `resposta` vazia — todos deixavam o cliente sem resposta nenhuma.
+
+    NAO ha retry, deliberadamente. O n8n usa `responseMode: responseNode`: ao
+    abandonarmos a conexao a execucao CONTINUA no servidor dele, entao repetir
+    o POST criaria uma segunda execucao da Bia — respostas e acoes de tool
+    duplicadas para o mesmo cliente.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=AGENT_TIMEOUT) as client:
+            resp = await client.post(agent_url, json=payload)
+
+            if resp.status_code != 200:
+                logger.warning(
+                    f"Agente IA retornou status {resp.status_code} "
+                    f"(conversa {conversation_id}): {resp.text[:200]}"
+                )
+                return []
+
+            partes = _split_agent_reply(resp.json().get("resposta", ""))
+            if not partes:
+                logger.warning(
+                    f"Agente IA respondeu 200 sem texto utilizavel "
+                    f"(conversa {conversation_id})"
+                )
+            return partes
+    except httpx.TimeoutException:
+        logger.warning(
+            f"Timeout ({AGENT_TIMEOUT.read}s) ao chamar agente IA "
+            f"para conversa {conversation_id}"
+        )
+        return []
+    except Exception as e:
+        # Rede, DNS, conexao recusada, corpo nao-JSON: resumo seguro, sem o
+        # texto bruto da excecao (pode carregar URL/payload).
+        logger.error(
+            f"Erro ao encaminhar para agente IA (conversa {conversation_id}): "
+            f"{type(e).__name__}"
+        )
+        return []
+
+
 async def _forward_to_agent(conversation: Conversation, message_text: str, db: Session):
     """
     Forward the incoming message to the N8N AI Agent (WF-10 Bia).
     The agent processes the message and returns a response that gets sent
     back to the customer via WhatsApp.
-    """
-    import httpx
 
+    CONV-AGENT-01: obter a resposta e ENVIAR a resposta sao passos separados.
+    Se a Bia nao responder, `partes` vira uma unica mensagem generica de
+    degradacao — e o MESMO laco de envio/persistencia roda, entao o fallback
+    chega a Meta e ao historico exatamente como uma resposta normal chegaria.
+    Nao existe caminho em que o cliente escreve e nao recebe nada.
+    """
     # Build ALL messages as context for the agent (full conversation history)
     recent_msgs = db.query(Message).filter(
         Message.conversation_id == conversation.id,
@@ -565,54 +647,54 @@ async def _forward_to_agent(conversation: Conversation, message_text: str, db: S
 
     agent_url = f"{N8N_BASE_URL}/webhook/agent-bia"
 
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(agent_url, json=payload)
+    partes = await _fetch_agent_parts(agent_url, payload, conversation.id)
 
-            if resp.status_code == 200:
-                data = resp.json()
-                resposta = data.get("resposta", "")
+    # Degradado = a Bia nao respondeu. UMA mensagem generica, montada aqui e nao
+    # pedida ao n8n de novo: fallback nunca dispara uma segunda execucao da Bia.
+    degraded = not partes
+    if degraded:
+        partes = [AGENT_FALLBACK_REPLY]
 
-                if resposta:
-                    # Split by ||| first, then by double newlines for natural WhatsApp feel
-                    import re
-                    partes_raw = resposta.split("|||")
-                    partes = []
-                    for raw in partes_raw:
-                        # Also split on double newlines (paragraph breaks)
-                        sub = re.split(r'\n\s*\n', raw)
-                        partes.extend([p.strip() for p in sub if p.strip()])
+    # CONV-08b: cada parte e persistida com status fiel ao envio;
+    # preview/unread so mudam se ao menos uma parte foi aceita.
+    last_ok_part = None
+    for i, parte in enumerate(partes):
+        # Send each part as a separate WhatsApp message
+        wa_response = await whatsapp.send_text_message(conversation.whatsapp, parte, db)
 
-                    # CONV-08b: cada parte e persistida com status fiel ao envio;
-                    # preview/unread so mudam se ao menos uma parte foi aceita.
-                    last_ok_part = None
-                    for i, parte in enumerate(partes):
-                        # Send each part as a separate WhatsApp message
-                        wa_response = await whatsapp.send_text_message(conversation.whatsapp, parte, db)
+        # Small delay between messages for natural feel
+        if i < len(partes) - 1:
+            await asyncio.sleep(1.2)
 
-                        # Small delay between messages for natural feel
-                        if i < len(partes) - 1:
-                            import asyncio
-                            await asyncio.sleep(1.2)
+        # Save each part as outbound message (status real)
+        agent_msg = record_outbound_message(
+            db, conversation, parte, "text", wa_response,
+            update_preview=False, commit=False,
+        )
+        if agent_msg.status == "sent":
+            last_ok_part = parte
 
-                        # Save each part as outbound message (status real)
-                        agent_msg = record_outbound_message(
-                            db, conversation, parte, "text", wa_response,
-                            update_preview=False, commit=False,
-                        )
-                        if agent_msg.status == "sent":
-                            last_ok_part = parte
+    # Update conversation preview only with the last SENT part.
+    # NADA de estado operacional aqui: `is_bot_active`, `atendente_id` e
+    # `queued_at` seguem intactos — uma falha da Bia nao move a conversa de fila.
+    if last_ok_part is not None:
+        conversation.ultimo_msg = last_ok_part[:200]
+        conversation.unread_count = 0
+    db.commit()
 
-                    # Update conversation preview only with the last SENT part
-                    if last_ok_part is not None:
-                        conversation.ultimo_msg = last_ok_part[:200]
-                        conversation.unread_count = 0
-                    db.commit()
-
-                    logger.info(f"Resposta da Bia ({len(partes)} msgs) para {conversation.whatsapp}")
-            else:
-                logger.warning(f"Agente IA retornou status {resp.status_code}: {resp.text[:200]}")
-    except httpx.TimeoutException:
-        logger.warning(f"Timeout ao chamar agente IA para conversa {conversation.id}")
-    except Exception as e:
-        logger.error(f"Erro ao encaminhar para agente IA: {e}")
+    # O fallback tambem pode falhar no envio (Meta fora, credencial ruim). Ele ja
+    # fica persistido como 'failed' + last_error por record_outbound_message; o
+    # log em nivel ERROR marca o unico caso que exige intervencao humana — o
+    # cliente escreveu e nao recebeu nada.
+    if degraded and last_ok_part is None:
+        logger.error(
+            f"Fallback da Bia NAO foi entregue para {conversation.whatsapp} "
+            f"(conversa {conversation.id}) — cliente sem resposta"
+        )
+    elif degraded:
+        logger.warning(
+            f"Fallback da Bia enviado para {conversation.whatsapp} "
+            f"(conversa {conversation.id})"
+        )
+    else:
+        logger.info(f"Resposta da Bia ({len(partes)} msgs) para {conversation.whatsapp}")
