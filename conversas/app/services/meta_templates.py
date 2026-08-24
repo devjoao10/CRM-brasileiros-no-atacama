@@ -17,9 +17,10 @@ from typing import Optional
 import httpx
 from sqlalchemy.orm import Session
 
-from app.models.template import MessageTemplate, ServiceTemplate
+from app.models.template import MessageTemplate, ServiceTemplate, TemplateParamMap
 from app.models.api_config import ApiConfig
 from app.services import whatsapp
+from app.services import variables as variables_service
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +247,13 @@ def _describe_template(raw: dict) -> dict:
     elif buttons:
         unsupported = "botoes ainda nao suportados"
 
+    # CONV-TPLMAP-01 — template ANTIGO que escreveu `@PRIMEIRONOMECLIENTE` como
+    # TEXTO no BODY: body_params=0, entao a Meta manda a arroba literal ao
+    # cliente e nao ha `{{n}}` onde encaixar um mapeamento. So DETECTA (a UI
+    # avisa); corrigir exige recriar o template na Meta com {{1}}, {{2}}...,
+    # que e decisao humana — nada aqui altera template existente.
+    static_tokens = variables_service.find_tokens(body_text) if body_text else []
+
     return {
         "name": raw.get("name") or "",
         "language": raw.get("language") or "",
@@ -257,6 +265,7 @@ def _describe_template(raw: dict) -> dict:
         "body_params": count_body_params(body_text),
         "supported": unsupported is None,
         "unsupported_reason": unsupported,
+        "static_tokens": static_tokens,
     }
 
 
@@ -359,6 +368,47 @@ def set_service_availability(db: Session, name: str, language: str, available: b
     return available
 
 
+def param_maps(db: Session) -> dict:
+    """
+    CONV-TPLMAP-01 — mapeamentos {{n}} -> @TOKEN, indexados por (name, language).
+
+    Devolve `{(name, language): {posicao: token}}`. UMA query para o catalogo
+    inteiro, nunca uma por template — a tabela tem, no maximo, algumas dezenas
+    de linhas (uma por posicao mapeada), exatamente como `authorized_keys` aqui
+    do lado, que ja le a sua inteira a cada requisicao.
+
+    Lido do banco a CADA chamada, pelo mesmo motivo de `authorized_keys`: o
+    cache de 5 min e dos dados da META. Mapeamento e configuracao DAQUI e
+    precisa valer na hora — trocar {{1}} de variavel nao pode continuar
+    enviando a antiga por ate 5 minutos.
+    """
+    out: dict = {}
+    for row in db.query(TemplateParamMap).all():
+        out.setdefault((row.name, row.language), {})[row.position] = row.token
+    return out
+
+
+def set_param_map(db: Session, name: str, language: str, mapping: dict) -> None:
+    """
+    Substitui TODO o mapeamento de (name, language) — posicao ausente e posicao
+    sem mapeamento. Replace-all e idempotente e nao deixa orfao para tras: se
+    fosse merge, remover {{2}} do BODY exigiria uma chamada de exclusao propria
+    que alguem esqueceria de fazer.
+
+    NAO valida (posicao existente, token cadastrado): quem valida e o router,
+    que tem o catalogo da Meta em maos. Aqui e so escrita.
+    """
+    db.query(TemplateParamMap).filter(
+        TemplateParamMap.name == name,
+        TemplateParamMap.language == language,
+    ).delete(synchronize_session=False)
+    for position, token in sorted(mapping.items()):
+        db.add(TemplateParamMap(
+            name=name, language=language, position=int(position), token=token,
+        ))
+    db.commit()
+
+
 async def list_service_templates(db: Session) -> dict:
     """
     Catalogo do ATENDIMENTO: APPROVED na Meta **E** autorizado localmente.
@@ -374,9 +424,19 @@ async def list_service_templates(db: Session) -> dict:
     if not catalog.get("ok"):
         return catalog
     allowed = authorized_keys(db)
+    visible = [t for t in catalog["templates"] if (t["name"], t["language"]) in allowed]
+
+    # CONV-TPLMAP-01: o mapeamento entra AQUI e nao em `_describe_template`
+    # porque aquele resultado fica no cache de 5 min da Meta. Mapeamento e
+    # configuracao local e precisa valer imediatamente. Copia rasa: o dict
+    # cacheado nunca e mutado.
+    maps = param_maps(db)
     return {
         "ok": True,
-        "templates": [t for t in catalog["templates"] if (t["name"], t["language"]) in allowed],
+        "templates": [
+            {**t, "param_map": maps.get((t["name"], t["language"]), {})}
+            for t in visible
+        ],
     }
 
 

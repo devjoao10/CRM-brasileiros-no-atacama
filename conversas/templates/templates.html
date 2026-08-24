@@ -156,6 +156,14 @@
                         <textarea id="tplBody" rows="4" required placeholder="Ola {{1}}! Sua reserva #{{2}} esta confirmada." maxlength="1024"></textarea>
                         <small class="form-hint">Use {{1}}, {{2}}, etc. para variaveis. Maximo 1024 caracteres. <span id="bodyCharCount">0</span>/1024</small>
                     </div>
+                    <!-- CONV-TPLMAP-01: uma linha por {{n}} encontrado no corpo.
+                         Populado por JS a partir de /api/variables (catalogo
+                         real do sistema), nunca por lista fixa no arquivo. -->
+                    <div class="form-group" id="tplParamMapGroup" style="display:none;">
+                        <label>Variaveis do template</label>
+                        <div id="tplParamMapRows"></div>
+                        <small class="form-hint">De qual variavel do CRM sai o valor de cada parametro. Deixe em "Preencher na hora do envio" para digitar manualmente.</small>
+                    </div>
                     <div class="form-group">
                         <label for="tplFooter">Rodape</label>
                         <input type="text" id="tplFooter" placeholder="Opcional — ex: Brasileiros no Atacama" maxlength="60">

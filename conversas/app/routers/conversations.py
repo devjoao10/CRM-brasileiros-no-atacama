@@ -125,13 +125,40 @@ async def _build_template_send(
             detail=f"Este template possui componentes ainda nao suportados: {tpl['unsupported_reason']}.",
         )
 
-    values = [str(p) for p in (params or [])]
     expected = tpl["body_params"]
-    if len(values) != expected:
+
+    # CONV-TPLMAP-01: posicoes com mapeamento persistido sao preenchidas pelo
+    # BACKEND com o token da variavel interna; o operador so informa as demais,
+    # na ordem crescente das posicoes que sobraram.
+    #
+    # A posicao mapeada nao e apenas "vencida" pelo backend: ela e INATINGIVEL
+    # pela requisicao. `free` e o complemento de `mapping`, e os valores
+    # recebidos so sao distribuidos sobre `free` — nao existe indice do payload
+    # que caia numa posicao automatica. Um POST forjado com valores a mais nao
+    # sobrescreve nada: erra a aridade e para no 422 abaixo.
+    #
+    # Compatibilidade: sem mapeamento nenhum, `free` = 1..N e a aridade exigida
+    # e exatamente `expected`, identica ao comportamento anterior. Nenhum
+    # template legado vira automatico por inferencia — so por mapeamento
+    # explicitamente cadastrado.
+    mapping = {int(k): v for k, v in (tpl.get("param_map") or {}).items()}
+    free = [i for i in range(1, expected + 1) if i not in mapping]
+
+    supplied = [str(p) for p in (params or [])]
+    if len(supplied) != len(free):
+        faltam = f"{len(free)} parametro(s)" if free else "nenhum parametro"
+        automaticos = (
+            f" ({len(mapping)} preenchido(s) automaticamente por variavel)"
+            if mapping else ""
+        )
         raise HTTPException(
             status_code=422,
-            detail=f"Template '{name}' exige {expected} parametro(s); {len(values)} enviado(s).",
+            detail=f"Template '{name}' exige {faltam}{automaticos}; {len(supplied)} enviado(s).",
         )
+
+    # Chaves disjuntas por construcao (`free` e o complemento de `mapping`).
+    by_position = {**mapping, **dict(zip(free, supplied))}
+    values = [by_position[i] for i in range(1, expected + 1)]
 
     # CONV-VAR-02: um UNICO VariableContext para a lista inteira — o lead do CRM
     # e lido uma vez por envio, nao uma vez por parametro. A resolucao e por

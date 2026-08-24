@@ -20,6 +20,7 @@ from app.models.auto_reply import AutoReply
 from app.models.conversation import Conversation
 from app.models.message_variable import MessageVariable
 from app.models.quick_reply import QuickReply
+from app.models.template import TemplateParamMap
 from app.schemas.message_variable import (
     CatalogResponse,
     MessageVariableCreate,
@@ -236,6 +237,12 @@ def _count_references(db: Session, token: str) -> dict:
     escapada (`@@TOKEN`) não contam como referência. As duas tabelas são
     pequenas (dezenas de linhas), então a checagem é feita em memória — sem
     `LIKE`, sem falso positivo por curinga.
+
+    CONV-TPLMAP-01: mapeamento de template é a TERCEIRA forma de usar um token.
+    Ali ele não está dentro de um texto — é o valor inteiro da coluna, então a
+    comparação é exata, sem varredura. Sem contar esta tabela, excluir a
+    variável deixaria o mapeamento pendurado e todo envio daquele template
+    passaria a falhar como "não é uma variável cadastrada".
     """
     quick = sum(
         1 for row in db.query(QuickReply).all()
@@ -245,7 +252,13 @@ def _count_references(db: Session, token: str) -> dict:
         1 for row in db.query(AutoReply).all()
         if variables_service.count_token_references(row.message, token)
     )
-    return {"quick_replies": quick, "auto_replies": auto, "total": quick + auto}
+    tpl = db.query(TemplateParamMap).filter(TemplateParamMap.token == token).count()
+    return {
+        "quick_replies": quick,
+        "auto_replies": auto,
+        "template_params": tpl,
+        "total": quick + auto + tpl,
+    }
 
 
 @router.delete("/{variable_id}")
