@@ -590,16 +590,26 @@
     // Esqueleto: colunas + cabecalho + loading proprio de cada uma.
     function renderSkeleton() {
         document.getElementById('kanbanBoard').innerHTML = boardMeta.stages.map(stage => `
-            <div class="kanban-column" data-stage="${stage.id}">
+            <!-- AUDIT-2026-08-W2B-orq: stage.id e STRING LIVRE vinda do cliente
+                 (app/schemas/pipeline.py StageSchema.id, sem pattern), guardada em
+                 funnels.etapas. Aqui ela era interpolada CRUA em seis atributos e
+                 dentro de tres literais JS de handler inline. Uma aspa dupla fechava
+                 o atributo; uma aspa simples fechava a string do handler. Agora todo
+                 atributo passa por esc() e os handlers leem this.dataset.stage, que
+                 o parser ja devolve decodificado. As assinaturas de onStageSearch /
+                 onStagePeriodo / onDrop nao mudaram: so o caminho do dado. -->
+            <div class="kanban-column" data-stage="${esc(stage.id)}">
                 <div class="column-header">
                     <span class="column-title">${esc(stage.nome)}</span>
-                    <span class="column-count" id="cnt-${stage.id}">${stage.total}</span>
+                    <span class="column-count" id="cnt-${esc(stage.id)}">${stage.total}</span>
                 </div>
                 <div class="column-filter" style="display:flex;gap:4px;padding:0 8px 6px">
-                    <input id="q-${stage.id}" class="form-input" style="font-size:12px;padding:4px 6px"
-                           placeholder="nome ou telefone" oninput="onStageSearch('${stage.id}', this.value)">
-                    <select id="per-${stage.id}" class="form-input" style="font-size:12px;padding:4px;width:88px"
-                            onchange="onStagePeriodo('${stage.id}', this.value)">
+                    <input id="q-${esc(stage.id)}" class="form-input" style="font-size:12px;padding:4px 6px"
+                           data-stage="${esc(stage.id)}"
+                           placeholder="nome ou telefone" oninput="onStageSearch(this.dataset.stage, this.value)">
+                    <select id="per-${esc(stage.id)}" class="form-input" style="font-size:12px;padding:4px;width:88px"
+                            data-stage="${esc(stage.id)}"
+                            onchange="onStagePeriodo(this.dataset.stage, this.value)">
                         <option value="">Todos</option>
                         <option value="hoje">Hoje</option>
                         <option value="3d">3 dias</option>
@@ -607,8 +617,8 @@
                         <option value="30d">30 dias</option>
                     </select>
                 </div>
-                <div class="column-body" data-stage="${stage.id}" id="body-${stage.id}"
-                     ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event, '${stage.id}')">
+                <div class="column-body" data-stage="${esc(stage.id)}" id="body-${esc(stage.id)}"
+                     ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event, this.dataset.stage)">
                     <div class="empty-column">Carregando...</div>
                 </div>
             </div>`).join('');
@@ -1229,7 +1239,7 @@
                     <button onclick="editFunnel(${f.id})" style="background:none;border:none;cursor:pointer;padding:var(--space-1);color:var(--color-text-3);">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                     </button>
-                    <button onclick="deleteFunnel(${f.id}, '${esc(f.nome)}')" style="background:none;border:none;cursor:pointer;padding:var(--space-1);color:var(--color-error);">
+                    <button data-funnel-id="${f.id}" data-nome="${esc(f.nome)}" onclick="deleteFunnel(this)" style="background:none;border:none;cursor:pointer;padding:var(--space-1);color:var(--color-error);">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
                     </button>
                 </div>
@@ -1353,7 +1363,11 @@
         loadFunnels();
     }
 
-    async function deleteFunnel(id, nome) {
+    // AUDIT-2026-08-W2B-orq: o nome do funil e livre e vinha dentro de um
+    // literal JS no onclick, onde esc() nao protege. Agora vem por data-nome.
+    async function deleteFunnel(btn) {
+        const id = Number(btn.dataset.funnelId);
+        const nome = btn.dataset.nome || '';
         if (!confirm(`Excluir o funil "${nome}"? Todos os leads serão removidos dele.`)) return;
         const resp = await Auth.apiRequest(`/api/pipeline/funnels/${id}`, { method: 'DELETE' });
         if (resp && resp.ok) {

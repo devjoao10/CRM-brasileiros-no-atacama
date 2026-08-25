@@ -5,10 +5,29 @@
 
 {% block extra_css %}
     <style>
-        .content-area {
+        /* AUDIT-2026-08-W2C (F12): a pagina sequestrava a classe GLOBAL
+           .content-area (definida em static/css/layout.css:176 e usada por todas
+           as paginas) para virar um grid de duas colunas fixas. Agora a regra
+           mora numa classe propria — o layout global volta a ser do layout. */
+        .pending-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: var(--sp-6);
+        }
+        /* F12: nao havia NENHUMA media query neste arquivo, e o bloco
+           @media (max-width: 640px) do layout.css so mexe em padding — nunca
+           reseta colunas. Num telefone de 375px cada coluna ficava com ~160px
+           menos 40px de padding, comprimindo titulos, descricoes e o botao
+           "Marcar lida" ate a inutilidade. E esta e a pagina de destino de
+           "Cards Operacionais" na sidebar. */
+        @media (max-width: 900px) {
+            .pending-grid {
+                grid-template-columns: 1fr;
+            }
+            .pending-card-box {
+                /* empilhadas, cada caixa nao pode mais reservar a tela inteira */
+                max-height: none;
+            }
         }
         .pending-card-box {
             background: var(--color-surface);
@@ -66,7 +85,11 @@
 {% endblock %}
 
 {% block content %}
-            <div class="content-area">
+    {# AUDIT-2026-08-W2C (F13): removido o <div class="content-area"> interno.
+       O base.html ja envolve o bloco de conteudo numa .content-area; aqui o
+       wrapper duplicado dobrava o padding global E aninhava um grid dentro de
+       outro. Trocado pela classe propria .pending-grid (F12). #}
+    <div class="pending-grid">
                 <!-- Assigned Cards Box -->
                 <div class="pending-card-box">
                     <div class="pending-title">

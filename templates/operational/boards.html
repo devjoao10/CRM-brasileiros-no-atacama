@@ -101,23 +101,25 @@
 {% endblock %}
 
 {% block content %}
-            <div class="content-area">
-                <div style="display: flex; justify-content: flex-end; margin-bottom: var(--sp-4);">
-                    <button class="btn btn-primary" id="newBoardBtn" style="display: none;">+ Novo Quadro</button>
-                </div>
-                <div id="boardsList" class="board-grid">
-                    <!-- Loaded dynamically -->
-                    <div style="text-align: center; grid-column: 1/-1; padding: var(--sp-12); color: var(--color-text-3);">
-                        Carregando seus quadros operacionais...
-                    </div>
-                </div>
-                
-                <div id="emptyState" class="empty-state" style="display: none;">
-                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-4)" stroke-width="2" style="margin: 0 auto var(--sp-4);"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-                    <h3 style="font-size: var(--font-size-lg); font-weight: var(--fw-semibold); color: var(--color-text); margin-bottom: var(--sp-2);">Nenhum Quadro Encontrado</h3>
-                    <p style="font-size: var(--font-size-sm); color: var(--color-text-3); margin-bottom: var(--sp-6);">Crie um novo quadro operacional para gerenciar o pós-vendas da agência.</p>
-                </div>
-            </div>
+    {# AUDIT-2026-08-W2C (F13): removido o <div class="content-area"> interno.
+       O base.html ja envolve o bloco de conteudo numa .content-area; o wrapper
+       duplicado aplicava a regra global de padding DUAS vezes (96px em vez de
+       48px no desktop, 32px em vez de 16px no mobile). #}
+    <div style="display: flex; justify-content: flex-end; margin-bottom: var(--sp-4);">
+        <button class="btn btn-primary" id="newBoardBtn" style="display: none;">+ Novo Quadro</button>
+    </div>
+    <div id="boardsList" class="board-grid">
+        <!-- Loaded dynamically -->
+        <div style="text-align: center; grid-column: 1/-1; padding: var(--sp-12); color: var(--color-text-3);">
+            Carregando seus quadros operacionais...
+        </div>
+    </div>
+
+    <div id="emptyState" class="empty-state" style="display: none;">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-4)" stroke-width="2" style="margin: 0 auto var(--sp-4);"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+        <h3 style="font-size: var(--font-size-lg); font-weight: var(--fw-semibold); color: var(--color-text); margin-bottom: var(--sp-2);">Nenhum Quadro Encontrado</h3>
+        <p style="font-size: var(--font-size-sm); color: var(--color-text-3); margin-bottom: var(--sp-6);">Crie um novo quadro operacional para gerenciar o pós-vendas da agência.</p>
+    </div>
 
     <!-- Create Board Modal -->
     <div class="modal" id="createBoardModal">
@@ -214,26 +216,48 @@
         }
 
         // Handle Create Board
+        /* AUDIT-2026-08-W2C (F11): dois problemas no mesmo handler.
+           1) Sem guarda no submit e sem chave de idempotencia no servidor, um
+              duplo-clique criava DOIS quadros.
+           2) O `else` acusava sempre falta de permissao — inclusive num 500, num
+              422 e no caminho `response === null` (401 ja tratado pelo
+              Auth.apiRequest). Um erro real do servidor era diagnosticado como
+              problema de permissao e mandava o usuario para o suporte errado.
+           Agora a mensagem sai do `response.status`. */
         document.getElementById("createBoardForm").onsubmit = async (e) => {
+            const form = e.currentTarget;
+            const submitBtn = form.querySelector('button[type="submit"]');
             e.preventDefault();
             let name = document.getElementById("boardName").value;
             let description = document.getElementById("boardDesc").value;
-            
+
+            if (submitBtn) submitBtn.disabled = true;
             try {
                 let response = await Auth.apiRequest("/api/operational/boards", {
                     method: "POST",
                     body: JSON.stringify({ name, description })
                 });
-                
-                if (response && response.ok) {
+
+                // null = 401 ja tratado (sessao limpa + redirect para /login):
+                // nao ha nada a avisar, a pagina esta saindo.
+                if (!response) return;
+
+                if (response.ok) {
                     modal.classList.remove("show");
-                    document.getElementById("createBoardForm").reset();
+                    form.reset();
                     fetchBoards();
-                } else {
+                } else if (response.status === 403) {
                     alert("Apenas administradores podem criar novos quadros operacionais!");
+                } else if (response.status === 422) {
+                    alert("Dados inválidos. Verifique o nome do quadro e tente de novo.");
+                } else {
+                    alert(`Erro do servidor ao criar o quadro (HTTP ${response.status}). Tente de novo; se persistir, avise o suporte.`);
                 }
-            } catch (e) {
-                alert("Erro inesperado.");
+            } catch (err) {
+                console.error("createBoard: falha de rede", err);
+                alert("Falha de rede ao criar o quadro. Verifique sua conexão.");
+            } finally {
+                if (submitBtn) submitBtn.disabled = false;
             }
         };
 

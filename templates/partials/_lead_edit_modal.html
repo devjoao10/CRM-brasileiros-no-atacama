@@ -332,6 +332,26 @@
         return stored; // retorna original se não reconhecer
     }
 
+    // AUDIT-2026-08-W2B (F10): o input de WhatsApp deste partial chama
+    // formatWhatsappInput a cada tecla, mas a funcao so existia em leads.html.
+    // Editar o telefone pelo drawer do Pipeline lancava ReferenceError em TODA
+    // digitacao. O helper mora agora ao lado de normalizeWhatsapp/displayWhatsapp,
+    // no mesmo arquivo do input que o usa — quem incluir o partial leva o
+    // conjunto completo, sem depender do que a pagina hospedeira definiu.
+    function formatWhatsappInput(input) {
+        let v = input.value.replace(/\D/g, '');
+        // Limita a 11 dígitos (DDD + 9 dígitos)
+        v = v.slice(0, 11);
+        if (v.length > 6) {
+            v = v.replace(/(\d{2})(\d{5})(\d{0,4})/, '($1) $2-$3');
+        } else if (v.length > 2) {
+            v = v.replace(/(\d{2})(\d{0,5})/, '($1) $2');
+        } else {
+            v = v.replace(/(\d{0,2})/, '($1');
+        }
+        input.value = v;
+    }
+
     function setDestinosSelection(values) {
         document.querySelectorAll('#destinosDropdown .multi-select-option').forEach(el => {
             el.classList.toggle('selected', values.includes(el.dataset.value));
@@ -491,6 +511,10 @@
 
         const destColors = { 'Atacama': '#e85d04', 'Uyuni': '#7b2cbf', 'Santiago': '#2b6cb0' };
 
+        // AUDIT-2026-08-W2B (F5): datas_destinos e JSON livre (Optional[dict]) que
+        // a automacao n8n/WhatsApp escreve — nao ha validador de formato de data no
+        // schema. Sem esc() um valor com aspas fecha o atributo value="" e injeta
+        // HTML no editor COMPARTILHADO, alcancavel por /leads e pelo Pipeline.
         inputsDiv.innerHTML = destinos.map(dest => {
             const saved = _currentDatasDestinos[dest] || {};
             const color = destColors[dest] || '#6c757d';
@@ -500,13 +524,13 @@
                     <div style="display:flex;gap:12px;margin-top:6px;">
                         <div style="flex:1;">
                             <label style="font-size:0.8em;color:#64748b;">Chegada</label>
-                            <input type="date" class="form-input dest-chegada" value="${saved.chegada || ''}"
+                            <input type="date" class="form-input dest-chegada" value="${esc(saved.chegada || '')}"
                                 ${chegadaGeral ? `min="${chegadaGeral}"` : ''} ${partidaGeral ? `max="${partidaGeral}"` : ''}
                                 onchange="validateDatasDestinos()">
                         </div>
                         <div style="flex:1;">
                             <label style="font-size:0.8em;color:#64748b;">Partida</label>
-                            <input type="date" class="form-input dest-partida" value="${saved.partida || ''}"
+                            <input type="date" class="form-input dest-partida" value="${esc(saved.partida || '')}"
                                 ${chegadaGeral ? `min="${chegadaGeral}"` : ''} ${partidaGeral ? `max="${partidaGeral}"` : ''}
                                 onchange="validateDatasDestinos()">
                         </div>
@@ -589,16 +613,22 @@
             container.innerHTML = '<span style="font-size:var(--font-size-xs);color:var(--color-dark-400)">Nenhuma tag criada. <a href="/tags" style="color:var(--color-primary)">Criar tags</a></span>';
             return;
         }
+        // AUDIT-2026-08-W2B (F9): tag.cor e Field(None, max_length=7) SEM validador
+        // de hexadecimal — 7 caracteres bastam para `',x()//` fechar a string JS de
+        // um onclick inline. esc() nao salvaria esse contexto (o parser HTML decodifica
+        // &#39; antes do JS compilar), entao a cor viaja por data-cor e o handler a le
+        // do dataset. No atributo style, que e contexto HTML, esc() e suficiente.
         container.innerHTML = allTags.map(t => {
             const checked = selectedIds.includes(t.id);
-            return `<label class="tag-checkbox-item ${checked ? 'checked' : ''}" style="${checked ? 'background:'+t.cor+';' : ''}" onclick="toggleTagCheck(this, '${t.cor}')">
+            return `<label class="tag-checkbox-item ${checked ? 'checked' : ''}" style="${checked ? 'background:'+esc(t.cor)+';' : ''}" data-cor="${esc(t.cor)}" onclick="toggleTagCheck(this)">
                 <input type="checkbox" value="${t.id}" ${checked ? 'checked' : ''}>
                 ${esc(t.nome)}
             </label>`;
         }).join('');
     }
 
-    function toggleTagCheck(label, cor) {
+    function toggleTagCheck(label) {
+        const cor = label.dataset.cor || '';
         const cb = label.querySelector('input');
         // Toggle will happen after this click, so check current state
         setTimeout(() => {
@@ -702,9 +732,33 @@
         // Save tags
         const savedData = await resp.json();
         const leadId = savedData.id || id;
-        const selectedTagIds = [];
-        document.querySelectorAll('#leadTagsContainer input:checked').forEach(cb => selectedTagIds.push(parseInt(cb.value)));
-        await Auth.apiRequest(`/api/tags/lead/${leadId}`, { method: 'PUT', body: JSON.stringify({ tag_ids: selectedTagIds }) });
+
+        // AUDIT-2026-08-W2B (F1/F2): PUT /api/tags/lead/{id} e SUBSTITUICAO TOTAL
+        // (app/routers/tags.py: `lead.tags = tags`). Com allTags vazio o container
+        // renderiza "Nenhuma tag criada", nada fica marcado, e o PUT sairia com
+        // tag_ids: [] — APAGANDO todas as tags do lead em silencio. Um vocabulario
+        // vazio NUNCA pode significar legitimamente "remover todas as tags deste
+        // lead": significa que a pagina hospedeira nao carregou /api/tags. Por isso
+        // pulamos o PUT em vez de mandar lista vazia. Esta guarda mora aqui, no
+        // editor compartilhado, para que o bug siga inalcancavel mesmo que uma
+        // terceira pagina esqueca de chamar loadAllTags() amanha.
+        if (allTags.length > 0) {
+            const selectedTagIds = [];
+            document.querySelectorAll('#leadTagsContainer input:checked').forEach(cb => selectedTagIds.push(parseInt(cb.value)));
+            const tagsResp = await Auth.apiRequest(`/api/tags/lead/${leadId}`,
+                { method: 'PUT', body: JSON.stringify({ tag_ids: selectedTagIds }) });
+            // AUDIT-2026-08-W2B (F11): a resposta era descartada. Um 404 (tag apagada
+            // por outro operador entre o render e o save) perdia a alteracao de tags
+            // enquanto o modal fechava anunciando sucesso. Agora o operador ve o erro;
+            // o lead em si ja foi salvo, entao o modal fica aberto para nova tentativa.
+            if (!tagsResp || !tagsResp.ok) {
+                console.error('PUT /api/tags/lead falhou', tagsResp && tagsResp.status);
+                showLeadAlert('Lead salvo, mas as tags não foram atualizadas'
+                    + (tagsResp ? ` (erro ${tagsResp.status})` : '') + '. Tente de novo.');
+                if (onLeadSaved) await onLeadSaved(savedData, id);   // o resto do lead FOI salvo
+                return;
+            }
+        }
 
         closeLeadModal();
         // Unico ponto que a pagina hospedeira decide. Leads atualiza linha e

@@ -9,7 +9,20 @@ from app.schemas.tag import TagResponse
 # ─── Funnel Stages ───────────────────────────────
 
 class StageSchema(BaseModel):
-    id: str = Field(..., description="ID único da etapa (ex: 'novo', 'contato', 'negociacao')")
+    # AUDIT-2026-08-W2B-orq: este campo NAO era validado. Ele e escolhido pelo
+    # cliente, guardado em funnels.etapas (JSON) e depois interpolado em atributo
+    # HTML e em handler inline no board do Pipeline. Escapar no template e a
+    # defesa correta e ja foi feita; validar aqui e o que impede a proxima tela
+    # de reabrir o buraco. O slug cobre todo id que o repositorio usa hoje
+    # ('novo', 'contato', 'negociacao', 'e1', 'm1'...) e o limite de 64 respeita
+    # funnel_entries.etapa_id, que e String(100).
+    id: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_-]+$",
+        description="ID unico da etapa, em slug (ex: 'novo', 'contato', 'negociacao')",
+    )
     nome: str = Field(..., description="Nome exibido da etapa (ex: 'Novo Lead')")
     dias_limite: int = Field(7, ge=1, description="Dias máximos antes de considerar o lead estagnado nesta etapa")
 

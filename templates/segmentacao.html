@@ -306,7 +306,11 @@ function renderDestinoChips() {
     if (!allDestinos.length) { container.textContent = 'Nenhum destino encontrado'; return; }
     container.innerHTML = allDestinos.map(d => {
         const sel = selDestinos.includes(d);
-        return `<span class="fb-tag-chip${sel?' sel':''}" onclick="toggleDestino('${d}')">${esc(d)}</span>`;
+        // AUDIT-2026-08-W2B-orq: allDestinos vem de GET /api/leads/destinos, que
+        // agrega o campo `destinos` de TODO lead — JSON livre escrito pelo webhook
+        // do WhatsApp e pelo n8n. O texto do chip ja passava por esc(); o valor
+        // dentro do literal do onclick, no mesmo elemento, nao passava por nada.
+        return `<span class="fb-tag-chip${sel?' sel':''}" data-destino="${esc(d)}" onclick="toggleDestino(this.dataset.destino)">${esc(d)}</span>`;
     }).join('');
 }
 
@@ -389,7 +393,7 @@ async function loadSegments() {
                     <button title="Editar" onclick="editSegment(${s.id})" style="color:var(--color-text-3)">
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                     </button>
-                    <button title="Excluir" onclick="deleteSegment(${s.id},'${esc(s.nome)}')" style="color:var(--color-error)">
+                    <button title="Excluir" data-segment-id="${s.id}" data-nome="${esc(s.nome)}" onclick="deleteSegment(this)" style="color:var(--color-error)">
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
                     </button>
                 </div>
@@ -515,7 +519,12 @@ async function saveSegment() {
     loadSegments();
 }
 
-async function deleteSegment(id, nome) {
+// AUDIT-2026-08-W2B-orq: o nome da lista vinha dentro de um literal JS no
+// onclick, onde esc() nao protege (o parser decodifica &#39; antes do JS
+// compilar). Agora vem por data-nome, que e contexto de atributo de verdade.
+async function deleteSegment(btn) {
+    const id = Number(btn.dataset.segmentId);
+    const nome = btn.dataset.nome || '';
     if (!confirm(`Excluir a lista "${nome}"?`)) return;
     const r = await Auth.apiRequest(`/api/segments/${id}`, { method: 'DELETE' });
     if (r && r.ok) loadSegments();

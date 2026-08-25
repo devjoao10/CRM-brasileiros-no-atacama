@@ -11,8 +11,16 @@ name: Tests
 # sequencia, o CRM seria testado com as versoes do Conversas.
 #
 # A selecao usa `CONVERSAS_DIR`, string presente APENAS nos testes que inserem
-# conversas/ no sys.path. Separa os 34 arquivos sem ambiguidade e sem lista
-# hardcoded: um teste novo cai sozinho no job certo.
+# conversas/ no sys.path. Sem lista hardcoded: um teste novo cai sozinho no job
+# certo — DESDE QUE use o literal.
+#
+# AUDIT-2026-08-W0 — o "sem ambiguidade" nao era verdade. `test_conversas_security.py`
+# le conversas/static/js/conversas.js montando o caminho a mao, sem nunca escrever
+# CONVERSAS_DIR, e por isso rodava no job do CRM (Python 3.11 + requirements.txt).
+# Passava por acidente, porque nao importa nada de `app`. O arquivo recebeu o
+# binding; se um teste do Conversas voltar a cair aqui, e por este mesmo motivo.
+# A contagem que estava neste comentario ("34 arquivos") ja estava obsoleta —
+# numero em comentario envelhece, entao nao ha mais numero nenhum.
 
 on:
   pull_request:
@@ -24,6 +32,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # AUDIT-2026-08-W0 — o job conversas ja pedia historico completo; este
+          # nao, e a assimetria era silenciosa: um teste do CRM que consulte o
+          # historico (`git log`, diff contra main) nao FALHA no clone raso —
+          # ele vira SKIP e reporta verde. Os dois jobs agora enxergam o mesmo
+          # repositorio.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -47,8 +62,12 @@ jobs:
           ENVIRONMENT: development
         run: |
           python --version
-          files=$(grep -L CONVERSAS_DIR tests/test_*.py)
+          # `|| true`: `run:` roda com `bash -e`, e `grep -L` sai 1 quando nao
+          # casa nada. Sem isto o step abortava ANTES do guard abaixo, com o
+          # log generico do bash em vez da mensagem que explica a causa.
+          files=$(grep -L CONVERSAS_DIR tests/test_*.py || true)
           [ -n "$files" ] || { echo "::error::selecao vazia — o discriminador CONVERSAS_DIR mudou?"; exit 1; }
+          echo "arquivos selecionados: $(echo "$files" | wc -l)"
           fail=0
           for t in $files; do
             echo "── $t"
@@ -80,8 +99,10 @@ jobs:
           ENVIRONMENT: development
         run: |
           python --version
-          files=$(grep -l CONVERSAS_DIR tests/test_*.py)
+          # Ver o comentario equivalente no job crm.
+          files=$(grep -l CONVERSAS_DIR tests/test_*.py || true)
           [ -n "$files" ] || { echo "::error::selecao vazia — o discriminador CONVERSAS_DIR mudou?"; exit 1; }
+          echo "arquivos selecionados: $(echo "$files" | wc -l)"
           fail=0
           for t in $files; do
             echo "── $t"
