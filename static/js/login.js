@@ -33,6 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!res.ok) {
                     // Sessão inexistente/expirada — limpa e fica no login.
                     Auth.clearAuth();
+                    wireLoginForm();
                     return;
                 }
                 if (sessionStorage.getItem(Auth.HOP_KEY)) {
@@ -40,6 +41,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     // login: backend e frontend discordam. Zera o estado local
                     // em vez de tentar de novo.
                     Auth.clearAuth();
+                    wireLoginForm();
                     return;
                 }
                 sessionStorage.setItem(Auth.HOP_KEY, '1');
@@ -47,11 +49,27 @@ document.addEventListener('DOMContentLoaded', () => {
             })
             .catch(() => {
                 Auth.clearAuth();
+                wireLoginForm();
             });
         return;
     }
     sessionStorage.removeItem(Auth.HOP_KEY);
+    wireLoginForm();
+});
 
+/**
+ * Liga o formulário de login (AUDIT-2026-08-W1A).
+ *
+ * Antes isto morava no corpo do DOMContentLoaded, DEPOIS do `return` do bloco
+ * acima. Os três desfechos de falha daquele bloco (sessão inválida, guarda de
+ * hop já marcada, erro de rede) chamavam `clearAuth()` e caíam no `return`,
+ * deixando o usuário diante de um formulário SEM listener de submit. Apertar
+ * Enter disparava então o submit padrão do navegador — e como o <form> não
+ * tinha `action`/`method`, isso virava `GET /login?email=...&password=...`:
+ * a senha em claro na barra de endereços, no histórico e no log de acesso.
+ * Agora a ligação acontece em TODOS os caminhos que deixam o usuário no login.
+ */
+function wireLoginForm() {
     const form = document.getElementById('loginForm');
     const emailInput = document.getElementById('email');
     const passwordInput = document.getElementById('password');
@@ -61,6 +79,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const alertBox = document.getElementById('loginAlert');
     const alertMessage = document.getElementById('alertMessage');
     const togglePassword = document.getElementById('togglePassword');
+
+    // Formulário ausente (render parcial / DOM stubado): nada a ligar.
+    if (!form) return;
 
     // Toggle password visibility
     if (togglePassword) {
@@ -143,4 +164,4 @@ document.addEventListener('DOMContentLoaded', () => {
     function hideAlert() {
         alertBox.classList.add('hidden');
     }
-});
+}

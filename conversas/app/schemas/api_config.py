@@ -18,12 +18,18 @@ class ApiConfigUpdate(BaseModel):
 
 
 class ApiConfigResponse(BaseModel):
-    """Response with API config (token is masked for security)."""
+    """Response with API config (secrets are masked as booleans)."""
     id: int
     has_access_token: bool
     meta_phone_number_id: Optional[str] = None
     meta_waba_id: Optional[str] = None
-    meta_verify_token: Optional[str] = None
+    # AUDIT-2026-08-W1B — F7: `meta_verify_token` saia em CLARO nesta resposta.
+    # Ele e o segredo compartilhado do handshake de verificacao do webhook da Meta:
+    # quem o conhece consegue completar o GET /webhook e sequestrar a assinatura do
+    # canal. Recebe o mesmo tratamento que `meta_access_token` sempre teve — vira um
+    # booleano de presenca. O valor continua gravavel via PUT (write-only), como
+    # senha: define-se um novo, nunca se le o atual.
+    has_verify_token: bool
     meta_api_version: str
     webhook_url: Optional[str] = None
     is_connected: bool
@@ -31,13 +37,13 @@ class ApiConfigResponse(BaseModel):
 
     @classmethod
     def from_model(cls, config):
-        """Convert model to response, masking the access token."""
+        """Convert model to response, masking the access and verify tokens."""
         return cls(
             id=config.id,
             has_access_token=bool(config.meta_access_token),
             meta_phone_number_id=config.meta_phone_number_id,
             meta_waba_id=config.meta_waba_id,
-            meta_verify_token=config.meta_verify_token,
+            has_verify_token=bool(config.meta_verify_token),
             meta_api_version=config.meta_api_version or "v21.0",
             webhook_url=config.webhook_url,
             is_connected=config.is_connected,

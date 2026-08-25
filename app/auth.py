@@ -32,8 +32,20 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """Create a JWT access token."""
+    """Create a JWT access token.
+
+    AUDIT-2026-08-W1A: carimba `typ: "access"`. Só um token com esse claim vale
+    como sessão (ver `_get_user_from_jwt`). Antes, QUALQUER token assinado por
+    esta função era uma sessão completa de 8h do CRM — inclusive o token de
+    verificação de e-mail que `app/routers/users.py` entrega na QUERY STRING de
+    um link (e que portanto vaza para histórico, Referer e log de acesso).
+    O carimbo é pulado quando o caller já declarou o propósito do token — `typ`
+    novo ou `type` legado (`type: "verify_email"`) —, para que esses tokens
+    continuem SEM `typ` e sigam recusados como sessão.
+    """
     to_encode = data.copy()
+    if "typ" not in to_encode and "type" not in to_encode:
+        to_encode["typ"] = "access"
     expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
@@ -65,6 +77,13 @@ def _get_user_from_jwt(token: str, db: Session) -> Optional[User]:
     """Extract user from JWT token."""
     payload = decode_token(token)
     if payload is None:
+        return None
+    # AUDIT-2026-08-W1A: só token de sessão abre sessão. `typ` ausente ou
+    # diferente de "access" é recusado — cobre o token `type: "verify_email"`
+    # (que não tem `typ`) e qualquer outro propósito criado no futuro.
+    # Sessões emitidas ANTES deste deploy também não têm `typ`: exigem um novo
+    # login, uma única vez.
+    if payload.get("typ") != "access":
         return None
     email: str = payload.get("sub")
     if email is None:
@@ -176,14 +195,19 @@ async def get_current_user(
             return user
         raise credentials_exception
 
-    # 2. Try JWT from Authorization header
+    # 2/3. JWT do header Authorization e JWT do cookie — nesta ordem, mas SEM
+    #      curto-circuito entre eles (AUDIT-2026-08-W1A). O `auth.js` anexa o
+    #      token do localStorage a TODA request; antes, um único valor obsoleto
+    #      ali levantava 401 em toda a API mesmo com o cookie `access_token`
+    #      perfeitamente válido, e o front derrubava a sessão no meio do uso.
+    #      Diferente da API Key e das headers da IA interna (credenciais
+    #      explícitas e sem ambiguidade), o header Bearer aqui é "melhor
+    #      esforço": só levantamos 401 depois de tentar TODOS os mecanismos.
     if token:
         user = _get_user_from_jwt(token, db)
         if user:
             return user
-        raise credentials_exception
 
-    # 3. Try JWT from cookie (frontend)
     cookie_token = request.cookies.get("access_token")
     if cookie_token:
         # Remove "Bearer " prefix if present
@@ -192,7 +216,6 @@ async def get_current_user(
         user = _get_user_from_jwt(cookie_token, db)
         if user:
             return user
-        raise credentials_exception
 
     raise credentials_exception
 

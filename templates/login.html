@@ -65,7 +65,16 @@
                 </div>
 
                 <!-- Form -->
-                <form id="loginForm" novalidate>
+                <!-- AUDIT-2026-08-W1A: o submit padrao do navegador nunca pode
+                     vazar a senha. Sem `action`/`method`, apertar Enter com o
+                     JS fora do ar fazia `GET /login?email=...&password=...` —
+                     senha em claro na URL, no historico e no log de acesso.
+                     Tres camadas agora: `method="post"` (nunca query string),
+                     `onsubmit="return false"` (o submit nativo nao acontece; o
+                     envio real e o listener de login.js, que faz preventDefault
+                     e chama /api/auth/login por fetch) e o input de senha SEM
+                     `name`, logo nao serializavel em nenhum submit. -->
+                <form id="loginForm" method="post" onsubmit="return false;" novalidate>
                     <div class="field-group">
                         <label for="email">E-mail</label>
                         <input
@@ -84,7 +93,6 @@
                             <input
                                 type="password"
                                 id="password"
-                                name="password"
                                 placeholder="••••••••"
                                 autocomplete="current-password"
                                 required

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
-import os
 from sqlalchemy.orm import Session
 
+from app.config import ENVIRONMENT, ACCESS_TOKEN_EXPIRE_MINUTES
 from app.database import get_db
 from app.models.user import User
 from app.schemas.user import LoginRequest, TokenResponse, ApiKeyResponse, UserResponse
@@ -47,13 +47,20 @@ async def login(request: Request, data: LoginRequest, response: Response, db: Se
     access_token = create_access_token(data={"sub": user.email, "role": user.role})
 
     # Set cookie for frontend
-    is_production = os.getenv("ENVIRONMENT", "development") == "production"
+    # AUDIT-2026-08-W1A: a flag Secure agora FALHA FECHADO. Antes, o teste era
+    # `os.getenv("ENVIRONMENT") == "production"` lido direto do ambiente: um
+    # valor tipográfico como "prod" ou "Production" fazia o cookie de sessão
+    # sair SEM Secure em produção, trafegando em claro. Só "development" (o
+    # valor canônico de dev, vindo de app.config) libera o cookie sem Secure.
+    # O max_age passa a derivar de ACCESS_TOKEN_EXPIRE_MINUTES: com 28800
+    # cravado, mudar o tempo de vida do JWT deixava cookie e token divergentes.
+    secure = ENVIRONMENT != "development"
     response.set_cookie(
         key="access_token",
         value=f"Bearer {access_token}",
         httponly=True,
-        secure=is_production,  # HTTPS only em produção
-        max_age=28800,  # 8 hours
+        secure=secure,  # HTTPS only fora de dev
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         samesite="lax",
         path="/",  # Garante que o cookie é enviado em todas as rotas
     )
@@ -100,7 +107,15 @@ async def revoke_api_key(
 
 
 @router.post("/logout", summary="Logout")
-async def logout(response: Response):
-    """Remove o cookie de autenticação (frontend)."""
+async def logout(response: Response, current_user: User = Depends(get_current_user)):
+    """Remove o cookie de autenticação (frontend).
+
+    AUDIT-2026-08-W1A: exige sessão válida. Sem a dependência, a rota era um
+    endpoint anônimo — qualquer origem conseguia disparar o Set-Cookie de
+    remoção e o logout não era atribuível a ninguém no log.
+    NOTA: isto NÃO revoga o JWT — quem já tem o token continua podendo usá-lo
+    até o `exp`. Revogação de verdade precisa de coluna nova no banco
+    (ex.: `tokens_valid_after`) e está FORA DO ESCOPO desta wave.
+    """
     response.delete_cookie("access_token", path="/")
     return {"message": "Logout realizado"}

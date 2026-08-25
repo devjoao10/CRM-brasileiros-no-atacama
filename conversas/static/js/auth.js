@@ -59,8 +59,31 @@ const Auth = {
         return response;
     },
 
+    // AUDIT-2026-08-W1B — F4: `clearAuth()` so apaga o localStorage. O cookie de
+    // sessao vive no servidor (HttpOnly, invisivel para este script), entao sem
+    // chamar /api/auth/logout o "sair" era cosmetico: a credencial continuava
+    // valida por 8h e qualquer aba/pessoa na mesma maquina voltava para dentro.
+    // So redireciona se o servidor CONFIRMOU o encerramento — mandar para /login
+    // com a sessao viva e mentir para o usuario dizendo que ele saiu.
     async logout() {
+        let encerrouNoServidor = false;
+        try {
+            const response = await fetch('/api/auth/logout', {
+                method: 'POST',
+                credentials: 'same-origin',
+            });
+            encerrouNoServidor = response.ok;
+        } catch (err) {
+            console.error('[auth] falha ao encerrar a sessao no servidor:', err);
+        }
+
         this.clearAuth();
+
+        if (!encerrouNoServidor) {
+            alert('Nao foi possivel encerrar a sessao no servidor. '
+                + 'Verifique a conexao e tente sair novamente.');
+            return;
+        }
         window.location.href = '/login';
     },
 

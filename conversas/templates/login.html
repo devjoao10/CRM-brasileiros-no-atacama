@@ -162,24 +162,25 @@
 
     <script src="/static/js/auth.js"></script>
     <script>
-        if (Auth.isAuthenticated()) {
-            fetch('/api/auth/verify', {
-                headers: { 'Authorization': `Bearer ${Auth.getToken()}` }
-            }).then(res => {
+        // AUDIT-2026-08-W1B — F3: as duas escritas de cookie de sessao sairam
+        // daqui. Cookie escrito por JS nunca pode ser HttpOnly nem Secure; quem
+        // emite a sessao agora e POST /api/auth/login, no servidor.
+        // Consequencia: este bloco NAO pode mais decidir pelo localStorage. Quem
+        // manda em "/" e o cookie HttpOnly, invisivel ao JS — se olhassemos o
+        // token do localStorage, um cookie ja morto mandaria o usuario para "/",
+        // "/" devolveria para /login, e o loop voltaria pela porta dos fundos.
+        // Entao perguntamos ao servidor pela sessao de COOKIE (sem header
+        // Authorization: assim `get_current_user` cai no ramo do cookie) e so
+        // redirecionamos quando ela realmente vale.
+        fetch('/api/auth/me/validate', { credentials: 'same-origin' })
+            .then(res => {
                 if (res.ok) {
-                    if (!document.cookie.includes('access_token')) {
-                        document.cookie = `access_token=Bearer ${Auth.getToken()}; path=/; max-age=28800; SameSite=Lax`;
-                    }
                     window.location.href = '/';
                 } else {
-                    Auth.clearAuth();
-                    document.cookie = 'access_token=; path=/; max-age=0';
+                    Auth.clearAuth();  // localStorage orfao: forca login limpo
                 }
-            }).catch(() => {
-                Auth.clearAuth();
-                document.cookie = 'access_token=; path=/; max-age=0';
-            });
-        }
+            })
+            .catch(() => Auth.clearAuth());
 
         document.getElementById('crmLink').href =
             typeof CRM_BASE_URL !== 'undefined' ? CRM_BASE_URL : '#';
@@ -209,8 +210,11 @@
                 }
 
                 const data = await response.json();
+                // AUDIT-2026-08-W1B — F3: o cookie ja veio no Set-Cookie desta
+                // resposta (HttpOnly + Secure em producao). O localStorage segue
+                // por ora porque `Auth.apiRequest` monta o header Authorization
+                // com ele — remove-lo e uma mudanca maior, fora deste escopo.
                 Auth.setAuth(data.access_token, data.user);
-                document.cookie = `access_token=Bearer ${data.access_token}; path=/; max-age=28800; SameSite=Lax`;
                 window.location.href = '/';
             } catch (err) {
                 errorEl.textContent = err.message || 'Erro ao fazer login';

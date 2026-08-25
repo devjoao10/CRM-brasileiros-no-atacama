@@ -1,8 +1,10 @@
 import hashlib
+import logging
 from enum import Enum
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status, Header, Request
+from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
@@ -29,6 +31,8 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+
+logger = logging.getLogger(__name__)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
@@ -159,3 +163,47 @@ async def require_admin(
             detail="Acesso restrito a administradores",
         )
     return current_user
+
+
+# ─── Sessao das paginas HTML (AUDIT-2026-08-W1B — F2) ─────────────────
+# O gate anterior (`pages.py::_require_cookie`) so olhava a PRESENCA do cookie:
+# qualquer valor — expirado, adulterado, de usuario ja desativado — renderizava o
+# shell do app. O JS entao chamava a API, tomava 401, redirecionava para /login,
+# e o login.html via o token velho no localStorage e devolvia para "/" — o loop
+# vivo que o CRM ja tinha diagnosticado como AUTH-LOOP-01 (app/auth.py:210-250).
+# A correcao e ter UMA fonte de verdade: paginas e API resolvem o usuario pelo
+# MESMO `_get_user_from_jwt` (assinatura, `exp`, existencia e `is_active`).
+
+
+def require_page_session(request: Request, db: Session) -> Optional[User]:
+    """Resolve o usuario da sessao de cookie das paginas HTML.
+
+    Devolve None quando nao ha sessao utilizavel — o chamador responde com
+    `page_login_redirect`. Aceita o cookie com ou sem o prefixo "Bearer ",
+    exatamente como o passo 3 de `get_current_user`.
+    """
+    raw = request.cookies.get("access_token")
+    if not raw:
+        return None
+    token = raw[7:] if raw.startswith("Bearer ") else raw
+    return _get_user_from_jwt(token, db)
+
+
+def page_login_redirect(request: Request) -> RedirectResponse:
+    """302 para /login APAGANDO a credencial invalida (recuperacao automatica).
+
+    Sem o delete, um cookie expirado/corrompido sobrevive as 8h inteiras no
+    navegador e o estado inconsistente nunca se resolve sozinho.
+    """
+    response = RedirectResponse(url="/login", status_code=302)
+    # ponytail: `decode_token` engole ExpiredSignatureError junto das demais
+    # JWTError, entao expirado e adulterado logam o mesmo "invalid_session".
+    had_cookie = bool(request.cookies.get("access_token"))
+    if had_cookie:
+        response.delete_cookie("access_token", path="/")
+    logger.info(
+        "AUTH_REDIRECT path=%s reason=%s",
+        request.url.path,
+        "invalid_session" if had_cookie else "missing_session",
+    )
+    return response
