@@ -280,6 +280,40 @@ cobre os **bytes** e não o JSON.
 
 ---
 
+## 6b. Impacto estrutural
+
+O baseline do Graphify (3.182 nós / 7.148 arestas) **não pôde ser refeito**: o
+ambiente Python do graphify não está disponível nesta sessão, e reinstalá-lo
+trocaria uma medida por outra sem ganho. No lugar, o risco que aquele grafo
+existia para vigiar foi medido diretamente por AST, comparando o merge-base com
+`HEAD` (`docs/audit/impacto_estrutural.txt`, reproduzível):
+
+| | Antes | Depois |
+|---|---:|---:|
+| Módulos internos | 129 | 130 (`+1` — a migration `m011`) |
+| Arestas de import interno | 343 | 349 (**+6**) |
+| Arestas removidas | — | **0** |
+| Violações de fronteira entre os dois serviços | 0 | **0** |
+
+As seis arestas novas são todas explicáveis e desejáveis:
+
+- `app.routers.ai → app.limiter` — havia **dois** limitadores e o do router não
+  compartilhava contagem com o resto do app.
+- `app.routers.auth → app.config` — parou de ler env cru (era o que fazia
+  `ENVIRONMENT="Production"` emitir cookie sem `Secure`).
+- `app.routers.tasks → app.models.lead` — `lead_id` inexistente batia na FK e
+  virava 500 com transação abortada.
+- `app.schemas.user → app.models.user` — o enum passou a vir do dono.
+- `conversas.app.routers.pages → conversas.app.{auth,database}` — o portão de
+  página passou a **validar** o token, não só constatar que o cookie existe.
+
+Nenhum módulo de alto blast radius cresceu mais que `+1` de in-degree
+(`app.database` 41, `+0`; `app.auth` 22, `+0`). Não houve deriva arquitetural, e
+**os dois serviços continuam sem se importar** — a fronteira que a auditoria
+mapeou segue de pé.
+
+---
+
 ## 7. Limitações — o que esta entrega NÃO prova
 
 - **Nenhum acesso ao banco de produção.** Todo enunciado sobre o schema real vem
@@ -301,6 +335,8 @@ cobre os **bytes** e não o JSON.
   mudou sem teste desta auditoria apontando para o arquivo.
 - **A instância n8n viva não foi vista.** Os workflows foram auditados pelos JSON
   versionados e pelo export de 2026-07-08.
+- **O grafo do Graphify não foi refeito** (§6b). A comparação estrutural existe,
+  mas é uma medida minha por AST, não a mesma métrica do baseline.
 
 ---
 

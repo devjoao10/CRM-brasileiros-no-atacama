@@ -79,9 +79,18 @@ def _verify_password(plain: str, hashed: str) -> bool:
 
 
 def _create_token(email: str) -> str:
-    """Create a JWT token."""
+    """Cria o JWT de sessao do Conversas.
+
+    AUDIT-2026-08-orq: carimba `typ: "access"` igual ao CRM
+    (app/auth.py::create_access_token). Os dois servicos assinam com a MESMA
+    SECRET_KEY, entao o claim so vale se as DUAS pontas o exigirem — ver
+    `_get_user_from_jwt` em conversas/app/auth.py.
+    """
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    return jwt.encode({"sub": email, "exp": expire}, SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode(
+        {"sub": email, "typ": "access", "exp": expire},
+        SECRET_KEY, algorithm=ALGORITHM,
+    )
 
 
 import httpx

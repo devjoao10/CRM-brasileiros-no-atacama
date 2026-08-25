@@ -74,9 +74,19 @@ def check(cond, msg):
         failures.append(msg)
 
 
-def token_for(email, minutes=60):
+def token_for(email, minutes=60, **claims):
+    """Token de SESSAO, montado como o servico monta.
+
+    AUDIT-2026-08-orq: ganhou `typ: "access"` porque o Conversas passou a exigir
+    esse claim (conversas/app/auth.py::_get_user_from_jwt), como o CRM ja exigia.
+    O helper precisa produzir o que a aplicacao produz — senao o teste valida uma
+    forma de token que nao existe. `claims` permite montar de proposito um token
+    de OUTRO proposito, para os checks logo abaixo.
+    """
     exp = datetime.now(timezone.utc) + timedelta(minutes=minutes)
-    return jwt.encode({"sub": email, "exp": exp}, SECRET_KEY, algorithm=ALGORITHM)
+    corpo = {"sub": email, "typ": "access", "exp": exp}
+    corpo.update(claims)
+    return jwt.encode(corpo, SECRET_KEY, algorithm=ALGORITHM)
 
 
 def set_cookie(client, value):
@@ -340,6 +350,55 @@ check("*" not in main._allowed_origins,
 r_cors = client.get("/api/health", headers={"Origin": "https://site-malicioso.example"})
 check(r_cors.headers.get("access-control-allow-origin") is None,
       "Origin desconhecida NAO e ecoada em Access-Control-Allow-Origin")
+
+
+# ============ PROPOSITO DO TOKEN ============
+# AUDIT-2026-08-orq: os DOIS servicos assinam com a MESMA SECRET_KEY, e o CRM
+# emite um token de VERIFICACAO DE E-MAIL (app/routers/users.py) que viaja na
+# QUERY STRING de um link — logo, vaza para log de acesso, historico e Referer.
+# W1-A fez o CRM recusar qualquer token sem `typ: "access"`. O Conversas nao
+# checava proposito nenhum: assinatura valida + `sub` bastava. Enquanto isso
+# valeu, o link de verificacao de e-mail do CRM ERA uma sessao valida do
+# Conversas — o inbox de WhatsApp inteiro. Estes checks travam as duas pontas.
+print()
+print("AUDIT-2026-08-orq — so token de SESSAO abre sessao")
+
+_alvo = "/api/conversations"
+
+_r_ok = client.get(_alvo, headers={"Authorization": f"Bearer {token_for(ADMIN_EMAIL)}"})
+check(_r_ok.status_code == 200,
+      f"token de sessao (typ=access) continua entrando (veio {_r_ok.status_code})")
+
+# Sem `typ` — a forma exata que o Conversas emitia antes desta correcao.
+_sem_typ = jwt.encode(
+    {"sub": ADMIN_EMAIL, "exp": datetime.now(timezone.utc) + timedelta(minutes=60)},
+    SECRET_KEY, algorithm=ALGORITHM)
+_r1 = client.get(_alvo, headers={"Authorization": f"Bearer {_sem_typ}"})
+check(_r1.status_code == 401,
+      f"token SEM `typ` e recusado (veio {_r1.status_code})")
+
+# O token de verificacao de e-mail do CRM, na forma exata que ele tem.
+_verify = jwt.encode(
+    {"sub": ADMIN_EMAIL, "type": "verify_email",
+     "exp": datetime.now(timezone.utc) + timedelta(minutes=60)},
+    SECRET_KEY, algorithm=ALGORITHM)
+_r2 = client.get(_alvo, headers={"Authorization": f"Bearer {_verify}"})
+check(_r2.status_code == 401,
+      f"token de verificacao de e-mail do CRM NAO abre sessao aqui (veio {_r2.status_code})")
+
+# Qualquer outro proposito tambem nao.
+_r3 = client.get(_alvo, headers={"Authorization": f"Bearer {token_for(ADMIN_EMAIL, typ='refresh')}"})
+check(_r3.status_code == 401,
+      f"token com `typ` diferente de access e recusado (veio {_r3.status_code})")
+
+# E o que o proprio servico emite tem que passar — senao o login quebra.
+_emitido = auth_router._create_token(ADMIN_EMAIL)
+import jose.jwt as _jj
+check(_jj.get_unverified_claims(_emitido).get("typ") == "access",
+      "o token que o proprio Conversas emite carrega typ=access")
+_r4 = client.get(_alvo, headers={"Authorization": f"Bearer {_emitido}"})
+check(_r4.status_code == 200,
+      f"o token emitido pelo proprio servico entra (veio {_r4.status_code})")
 
 
 # --- Resultado ---

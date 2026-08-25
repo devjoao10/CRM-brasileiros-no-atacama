@@ -72,9 +72,26 @@ def hash_api_key(api_key: str) -> str:
 
 
 def _get_user_from_jwt(token: str, db: Session) -> Optional[User]:
-    """Extract user from JWT token."""
+    """Extrai o usuario de um JWT — SO se ele for um token de sessao.
+
+    AUDIT-2026-08-orq — este era o outro lado de um buraco que a wave do CRM
+    fechou pela metade. Os dois servicos validam com a MESMA SECRET_KEY, e
+    `app/routers/users.py` (CRM) emite um token de VERIFICACAO DE E-MAIL com essa
+    chave, entregue na QUERY STRING de um link — ou seja, vazado para log de
+    acesso, historico do navegador e `Referer`.
+
+    O CRM passou a exigir `typ == "access"` e recusar esse token. Aqui nao havia
+    checagem de proposito nenhuma: assinatura valida + `sub` presente bastava.
+    Consequencia pratica ate esta linha existir: o link de verificacao de e-mail
+    do CRM era uma sessao valida do Conversas, dando acesso ao inbox inteiro.
+
+    Recusa por AUSENCIA do claim, nao por valor conhecido: token sem proposito
+    declarado nao e sessao.
+    """
     payload = decode_token(token)
     if payload is None:
+        return None
+    if payload.get("typ") != "access":
         return None
     email: str = payload.get("sub")
     if email is None:
