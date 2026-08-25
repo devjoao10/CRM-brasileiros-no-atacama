@@ -14,6 +14,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.config import (
+    ENVIRONMENT,
     META_ACCESS_TOKEN,
     META_PHONE_NUMBER_ID,
     META_API_BASE,
@@ -79,6 +80,40 @@ def _error_result(status_code: Optional[int], summary: str) -> dict:
     return {"error": True, "status_code": status_code, "summary": summary[:300]}
 
 
+def _unconfigured_result(what: str, **simulated_extra) -> dict:
+    """
+    AUDIT-2026-08-W1D (F3/F4) — resposta unica para "credenciais Meta ausentes".
+
+    POR QUE: antes, TODO `send_*` devolvia `{"simulated": True}` quando faltava
+    token/phone_number_id. Em producao — token rotacionado, .env vazio, ApiConfig
+    desconectado — `outbound.classify_wa_response` lia isso como sucesso e o
+    `record_outbound_message` gravava 'sent'. Resultado: CADA resposta ao cliente
+    ficava marcada como entregue enquanto NADA saia do servidor, e o unico sinal
+    era uma linha de log em nivel INFO. Falha silenciosa de negocio.
+
+    Fora de development isto passa a ser uma FALHA REAL: a mensagem e persistida
+    como 'failed' com last_error, aparece para o operador e fica reenviavel.
+    Em development o modo simulado continua existindo (nao ha credencial em dev),
+    mas com marcador proprio — quem persiste grava status 'simulated', nunca 'sent'.
+
+    F4: `send_reaction` devolvia `None` cru aqui, quebrando o contrato que o
+    `outbound.py` documenta; agora usa exatamente o mesmo resultado.
+    """
+    if ENVIRONMENT != "development":
+        logger.error(
+            f"Meta Cloud API NAO configurada em ambiente '{ENVIRONMENT}': {what} "
+            f"NAO foi enviado. Verifique META_ACCESS_TOKEN/META_PHONE_NUMBER_ID."
+        )
+        return _error_result(
+            None,
+            "Meta Cloud API nao configurada (token/phone_number_id ausentes): "
+            "nenhuma mensagem foi transmitida",
+        )
+
+    logger.warning(f"Meta Cloud API não configurada (development). {what} simulado.")
+    return {"simulated": True, **simulated_extra}
+
+
 def _http_error_summary(e: httpx.HTTPStatusError) -> dict:
     """Extrai um resumo seguro de um erro HTTP da Meta (status + error.message/code)."""
     summary = f"HTTP {e.response.status_code}"
@@ -107,8 +142,7 @@ async def send_text_message(to: str, text: str, db: Optional[Session] = None) ->
     """
     token, phone_id, base = _get_credentials(db)
     if not token or not phone_id:
-        logger.warning("Meta Cloud API não configurada. Mensagem não enviada.")
-        return {"simulated": True, "to": to, "text": text}
+        return _unconfigured_result("Mensagem de texto", to=to, text=text)
 
     url = f"{base}/{phone_id}/messages"
     headers = {
@@ -209,8 +243,7 @@ async def upload_media(
     """
     token, phone_id, base = _get_credentials(db)
     if not token or not phone_id:
-        logger.warning("Meta Cloud API não configurada. upload_media simulado.")
-        return {"simulated": True, "id": None}
+        return _unconfigured_result("Upload de midia", id=None)
 
     url = f"{base}/{phone_id}/media"
     headers = {"Authorization": f"Bearer {token}"}
@@ -248,8 +281,7 @@ async def send_media_message(
     """
     token, phone_id, base = _get_credentials(db)
     if not token or not phone_id:
-        logger.warning("Meta Cloud API não configurada. Mídia não enviada.")
-        return {"simulated": True, "to": to, "media_type": media_type}
+        return _unconfigured_result("Midia", to=to, media_type=media_type)
 
     url = f"{base}/{phone_id}/messages"
     headers = {
@@ -330,8 +362,7 @@ async def send_template_message(
     """
     token, phone_id, base = _get_credentials(db)
     if not token or not phone_id:
-        logger.warning("Meta Cloud API não configurada. Template não enviado.")
-        return {"simulated": True, "to": to, "template": template_name}
+        return _unconfigured_result("Template", to=to, template=template_name)
 
     url = f"{base}/{phone_id}/messages"
     headers = {
@@ -378,7 +409,9 @@ async def send_reaction(
     """
     token, phone_id, base = _get_credentials(db)
     if not token or not phone_id:
-        return None
+        # AUDIT-2026-08-W1D (F4): era `return None` cru — o unico send_* que
+        # quebrava o contrato documentado em outbound.py.
+        return _unconfigured_result("Reacao", to=to, message_id=message_id)
 
     url = f"{base}/{phone_id}/messages"
     headers = {

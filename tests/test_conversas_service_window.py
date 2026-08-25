@@ -415,11 +415,18 @@ check(r.status_code == 200, "mesmo name em en_US e um template proprio e valido"
 print("\nR — inbound reabre a janela; reaction NAO (mutations C, M)")
 
 
-def inbound(numero, tipo, extra=None, msg_id=None):
+def inbound(numero, tipo, extra=None, msg_id=None, ts_offset_h=0):
+    # AUDIT-2026-08-W1D-orq: era "timestamp": "1" fixo — epoch 1, ou seja
+    # 1970-01-01. Servia enquanto o webhook lia o campo e o descartava; agora que
+    # a janela e ancorada no relogio da META (webhook.py:_customer_msg_at), "1"
+    # significa "mensagem de 1970", que corretamente NAO reabre uma janela de 24h.
+    # A Meta manda o epoch do momento do envio, entao a fixture manda o mesmo.
+    # `ts_offset_h` permite exercitar o passado de proposito (ver bloco R2).
+    ts = int((datetime.now(UTC) - timedelta(hours=ts_offset_h)).timestamp())
     body = {"entry": [{"changes": [{"value": {
         "contacts": [{"profile": {"name": "Cliente"}}],
         "messages": [dict({"from": numero, "id": msg_id or f"wamid.IN_{numero}_{tipo}_{_wamid_seq['n']}",
-                           "type": tipo, "timestamp": "1"}, **(extra or {}))],
+                           "type": tipo, "timestamp": str(ts)}, **(extra or {}))],
     }}]}]}
     _wamid_seq["n"] += 1
     return client.post("/webhook", json=body)
@@ -443,6 +450,31 @@ for i, (tipo, extra) in enumerate(TIPOS):
     check(get_conv(cid).service_window_open is False, f"[{tipo}] parte de janela FECHADA")
     inbound(numero, tipo, extra)
     check(get_conv(cid).service_window_open is True, f"[{tipo}] inbound REABRE a janela")
+
+# ---------------------------------------------------------------------------
+# R2 — a ancora e o relogio da META, nao o nosso (AUDIT-2026-08-W1D F6)
+#
+# Sem estes tres checks a correcao F6 nao tem cobertura: bastava alguem voltar a
+# ancorar em datetime.now() para o bloco R acima seguir verde.
+print("\nR2 — a janela segue o timestamp da Meta, e a ancora nao anda para tras")
+
+_n_velha = "5511922200001"
+_cid_velha = make_conv(_n_velha, ago_hours=30)
+check(get_conv(_cid_velha).service_window_open is False, "parte de janela FECHADA")
+# Mensagem cujo timestamp da META e de 30h atras: chegou agora (fila/reentrega),
+# mas para a Meta ela e velha. Ancorar em now() abriria a janela indevidamente e
+# o operador levaria 131047 na cara ao mandar texto livre.
+inbound(_n_velha, "text", {"text": {"body": "atrasada"}}, ts_offset_h=30)
+check(get_conv(_cid_velha).service_window_open is False,
+      "inbound com timestamp ANTIGO da Meta NAO reabre a janela")
+
+# E o contrario: nova abre, e a reentrega da antiga nao pode encolher.
+inbound(_n_velha, "text", {"text": {"body": "recente"}}, ts_offset_h=0)
+check(get_conv(_cid_velha).service_window_open is True,
+      "inbound com timestamp atual reabre a janela")
+inbound(_n_velha, "text", {"text": {"body": "reentrega antiga"}}, ts_offset_h=40)
+check(get_conv(_cid_velha).service_window_open is True,
+      "reentrega antiga NAO encolhe a janela aberta pela mensagem mais nova")
 
 numero_r = "5511922200000"
 cid_r = make_conv(numero_r, ago_hours=30)

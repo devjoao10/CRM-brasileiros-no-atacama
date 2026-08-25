@@ -7,7 +7,8 @@ falso-'sent' (persistir 'sent' sem a Meta ter aceitado o envio).
 
 Contrato de resposta das funcoes `whatsapp.send_*`:
   - dict com "messages"            -> aceito pela Meta (sucesso real)
-  - dict {"simulated": True, ...}  -> sem credenciais (dev; NAO houve envio real)
+  - dict {"simulated": True, ...}  -> sem credenciais, SO em development
+                                      (NAO houve envio real -> status 'simulated')
   - dict {"error": True, "summary": <seguro>, "status_code": ...} -> falha real
   - None                           -> tratado defensivamente como falha
 """
@@ -22,6 +23,11 @@ from app.models.conversation import Conversation, Message
 from app.models.media_asset import MediaAsset
 
 logger = logging.getLogger(__name__)
+
+# AUDIT-2026-08-W1D (F3): status de outbound que NAO sao falha. 'simulated' so
+# ocorre em development. Existe como constante para que quem precisa perguntar
+# "esta parte saiu?" nao reescreva a lista de strings e esqueca uma delas.
+NOT_FAILED_STATUSES = ("sent", "simulated")
 
 
 def _sanitize_filename(filename: Optional[str]) -> Optional[str]:
@@ -84,8 +90,11 @@ def record_outbound_message(
 
     - Sucesso real: status='sent' + whatsapp_msg_id; atualiza preview/unread
       conforme flags.
-    - Simulado (dev): status='sent' EXPLICITAMENTE logado como simulado
-      (sem wamid) — nunca confundir com sucesso de producao.
+    - Simulado (dev): status='simulated' (sem wamid). AUDIT-2026-08-W1D (F3):
+      antes era 'sent', indistinguivel de um envio real no banco, no inbox e em
+      qualquer relatorio. Um status PROPRIO e o unico jeito de a linha nunca
+      poder ser lida como entregue. Fora de development o caminho simulado nem
+      existe mais (whatsapp._unconfigured_result devolve erro).
     - Falha: status='failed' + last_error seguro; preview/unread NAO sao tocados.
 
     Sempre grava send_attempts=1 e last_attempt_at (base para retry).
@@ -100,7 +109,7 @@ def record_outbound_message(
         msg_type=msg_type,
         media_url=media_url,
         whatsapp_msg_id=r["wamid"],
-        status="sent" if r["ok"] else "failed",
+        status=("simulated" if r["simulated"] else "sent") if r["ok"] else "failed",
         last_error=r["error_summary"],
         send_attempts=1,
         last_attempt_at=now,
@@ -114,8 +123,9 @@ def record_outbound_message(
             conversation.unread_count = 0
         if r["simulated"]:
             logger.info(
-                f"Envio SIMULADO (Meta nao configurada) na conversa {conversation.id} "
-                f"(msg_type={msg_type}); mensagem persistida sem wamid."
+                f"Envio SIMULADO (development, Meta nao configurada) na conversa "
+                f"{conversation.id} (msg_type={msg_type}); persistida como "
+                f"status='simulated', sem wamid."
             )
     else:
         # Log seguro: last_error ja e um resumo sem token/payload sensivel.

@@ -15,17 +15,18 @@ from datetime import datetime, timezone as tz
 
 import httpx
 from fastapi import APIRouter, Request, HTTPException, Query, Depends
+from sqlalchemy import exc as sa_exc, or_
 from sqlalchemy.orm import Session
 
 from app.config import META_VERIFY_TOKEN, N8N_BASE_URL, N8N_AGENT_ENABLED, META_APP_SECRET, ENVIRONMENT
 from app.database import get_db, SessionLocal
-from app.models.conversation import Conversation, Message
+from app.models.conversation import Conversation, Message, service_window_open
 from app.models.auto_reply import AutoReply, BusinessHours
 from app.models.api_config import ApiConfig
 from app.services import whatsapp
 from app.services import crm as crm_service
 from app.services import variables as variables_service
-from app.services.outbound import record_outbound_message
+from app.services.outbound import record_outbound_message, NOT_FAILED_STATUSES
 from app.models.media_asset import MediaAsset
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,34 @@ AGENT_FALLBACK_REPLY = (
 )
 
 
+# AUDIT-2026-08-W1D (F1) — quais erros significam "Meta, tente de novo".
+#
+# Conservador DE PROPOSITO. Retry da Meta so ajuda quando a falha e do nosso
+# lado E transitoria: banco fora do ar, conexao derrubada, pool esgotado, disco.
+# Uma mensagem malformada vai falhar identicamente em toda reentrega — pedir
+# retry dela so gera tempestade de reentrega e, no limite, a Meta desabilita a
+# subscription do webhook. Por isso: erro de infra -> 503; qualquer outro -> 200.
+#
+# IntegrityError NAO entra aqui de proposito: e subclasse de DBAPIError mas
+# significa "estes dados violam uma constraint", nao "o banco caiu".
+_INFRA_ERRORS = (
+    sa_exc.OperationalError,
+    sa_exc.InterfaceError,
+    sa_exc.InternalError,
+    sa_exc.DisconnectionError,
+    sa_exc.TimeoutError,     # pool exausto
+    sa_exc.ResourceClosedError,
+    OSError,                 # cobre ConnectionError, socket, disco
+)
+
+# AUDIT-2026-08-W1D (F5) — precedencia de status de entrega da Meta.
+# A Meta NAO garante ordem de callback e reentrega os antigos, entao um
+# 'delivered' atrasado chegava DEPOIS do 'read' e regredia a mensagem.
+# 'failed' e TERMINAL: nunca pode ser apagado por um 'sent' velho, senao a
+# nao-entrega some da tela do operador.
+_STATUS_RANK = {"sent": 1, "delivered": 2, "read": 3}
+
+
 def _is_signature_required() -> bool:
     return ENVIRONMENT != "development" or bool(META_APP_SECRET)
 
@@ -67,7 +96,15 @@ def _verify_meta_signature(raw_body: bytes, signature_header: str) -> bool:
 
 # ─── Debounce system for batching rapid messages ─────────────
 AGENT_DEBOUNCE_SECONDS = 15  # Wait 15s after last message before sending to agent
+# AUDIT-2026-08-W1D (F8): teto de mensagens enviadas como historico ao n8n.
+# ponytail: corte fixo simples; se a Bia precisar de janela por tempo ou por
+# tokens, trocar por um sumarizador — mas nao antes de haver evidencia disso.
+AGENT_HISTORY_LIMIT = 30
 _debounce_tasks: dict[int, asyncio.Task] = {}  # conversation_id -> scheduled task
+# AUDIT-2026-08-W1D (F2): conversation_id -> inicio do lote pendente (ultimo
+# outbound ANTES da resposta automatica). Escrito por _remember_agent_cutoff,
+# lido por _schedule_agent_debounce, removido quando o lote e consumido.
+_debounce_cutoffs: dict = {}
 router = APIRouter(tags=["Webhook"])
 
 
@@ -127,25 +164,76 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)):
 
     logger.info("Webhook Meta recebido e validado")
 
+    # AUDIT-2026-08-W1D (F1) — ISOLAMENTO POR ITEM.
+    #
+    # Antes UM unico try/except envolvia os tres lacos e caia em `return 200`.
+    # Tres consequencias, todas confirmadas:
+    #   (a) uma mensagem venenosa abortava TODAS as irmas do mesmo lote — a Meta
+    #       agrupa varias mensagens por POST, entao perdia-se o lote inteiro;
+    #   (b) a Meta recebia 200 ("entreguei") e NUNCA reenviava — perda definitiva;
+    #   (c) banco fora do ar era indistinguivel de sucesso.
+    #
+    # Agora cada mensagem e cada status tem seu proprio try/except, com rollback
+    # da sessao (uma transacao suja envenenaria a proxima mensagem do lote) e o
+    # laco continua. So erro de INFRA marca o POST inteiro para reentrega.
+    infra_failure = False
+    processed = 0
+
     try:
-        for entry in body.get("entry", []):
-            for change in entry.get("changes", []):
-                value = change.get("value", {})
+        for entry in body.get("entry", []) or []:
+            for change in entry.get("changes", []) or []:
+                value = change.get("value", {}) or {}
 
-                # Process incoming messages
-                if "messages" in value:
-                    for msg in value["messages"]:
+                for msg in value.get("messages", []) or []:
+                    try:
                         await _process_incoming_message(msg, value, db)
+                        processed += 1
+                    except Exception as e:
+                        db.rollback()
+                        infra = isinstance(e, _INFRA_ERRORS)
+                        infra_failure = infra_failure or infra
+                        logger.error(
+                            f"Falha ao processar mensagem inbound "
+                            f"{msg.get('id') or '(sem id)'} "
+                            f"({'INFRA -> pedir reentrega' if infra else 'dados -> descartada'}): "
+                            f"{type(e).__name__}",
+                            exc_info=True,
+                        )
 
-                # Process status updates (delivered, read)
-                if "statuses" in value:
-                    for status_update in value["statuses"]:
+                for status_update in value.get("statuses", []) or []:
+                    try:
                         await _process_status_update(status_update, db)
-
+                        processed += 1
+                    except Exception as e:
+                        db.rollback()
+                        infra = isinstance(e, _INFRA_ERRORS)
+                        infra_failure = infra_failure or infra
+                        logger.error(
+                            f"Falha ao processar status "
+                            f"{status_update.get('id') or '(sem id)'} "
+                            f"({'INFRA -> pedir reentrega' if infra else 'dados -> descartado'}): "
+                            f"{type(e).__name__}",
+                            exc_info=True,
+                        )
     except Exception as e:
-        logger.error(f"Erro ao processar webhook: {e}", exc_info=True)
+        # Envelope malformado (entry/changes que nao sao o que dizem ser).
+        # Reentregar nao muda nada: o payload seria igualmente invalido. 200.
+        logger.error(
+            f"Envelope do webhook Meta invalido, lote descartado: {type(e).__name__}",
+            exc_info=True,
+        )
+        return {"status": "ok"}
 
-    # Always return 200 to Meta (otherwise they retry)
+    if infra_failure:
+        # 503 e o unico caso em que QUEREMOS o retry da Meta. O que ja foi
+        # consumido antes da falha e idempotente na reentrega (dedupe por
+        # whatsapp_msg_id), entao pedir reentrega nao duplica mensagem.
+        logger.error(
+            f"Webhook Meta com falha de infraestrutura ({processed} item(ns) consumido(s) "
+            f"antes): devolvendo 503 para forcar reentrega."
+        )
+        raise HTTPException(status_code=503, detail="Temporary processing failure, retry")
+
     return {"status": "ok"}
 
 
@@ -283,6 +371,38 @@ def _save_outbound_message(conversation: Conversation, content: str, db: Session
     )
 
 
+def _customer_msg_at(msg: dict) -> datetime:
+    """
+    AUDIT-2026-08-W1D (F6) — ancora da janela de 24h no relogio da META.
+
+    O `timestamp` (epoch em segundos) vinha sendo lido e jogado fora; a janela era
+    ancorada em `datetime.now()`, ou seja, na hora em que NOS recebemos. Numa
+    reentrega da Meta ou com fila acumulada a nossa janela fica mais tarde que a
+    dela: o sistema mostra "aberta", o operador manda texto livre e a Meta recusa
+    com 131047 na cara dele. A Meta e a dona do relogio — usamos o dela.
+
+    Ausente/ilegivel -> now() (nao ha nada melhor, e o comportamento antigo).
+    """
+    try:
+        return datetime.fromtimestamp(int(msg["timestamp"]), tz.utc)
+    except (KeyError, TypeError, ValueError, OSError, OverflowError):
+        return datetime.now(tz.utc)
+
+
+def _advance_customer_msg_at(conversation: Conversation, msg_at: datetime) -> datetime:
+    """
+    AUDIT-2026-08-W1D (F6): a ancora NUNCA anda para tras. Reentrega de uma
+    mensagem antiga nao pode encolher uma janela que uma mensagem mais nova ja
+    abriu. `max()` com normalizacao UTC (SQLite devolve naive, Postgres aware).
+    """
+    prev = conversation.last_customer_msg_at
+    if prev is None:
+        return msg_at
+    if prev.tzinfo is None:
+        prev = prev.replace(tzinfo=tz.utc)
+    return max(prev, msg_at)
+
+
 async def _process_incoming_message(msg: dict, value: dict, db: Session):
     """Process a single incoming WhatsApp message."""
     whatsapp_number = msg.get("from", "")
@@ -290,7 +410,8 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
     # mensagem sem id estouraria IntegrityError. NULL nao colide.
     msg_id = msg.get("id") or None
     msg_type = msg.get("type", "text")
-    timestamp = msg.get("timestamp", "")
+    # AUDIT-2026-08-W1D (F6): antes `timestamp` era lido e nunca mais usado.
+    msg_at = _customer_msg_at(msg)
 
     # Extract content based on message type
     content = ""
@@ -377,7 +498,7 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
             status="aberta",
             ultimo_msg=content[:200] if content else "",
             unread_count=1,
-            last_customer_msg_at=datetime.now(tz.utc) if opens_window else None,
+            last_customer_msg_at=msg_at if opens_window else None,
         )
         db.add(conversation)
         db.flush()
@@ -396,7 +517,7 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
             conversation.queued_at = None
         conversation.status = "aberta"
         if opens_window:
-            conversation.last_customer_msg_at = datetime.now(tz.utc)
+            conversation.last_customer_msg_at = _advance_customer_msg_at(conversation, msg_at)
         if sender_name and not conversation.nome:
             conversation.nome = sender_name
 
@@ -443,11 +564,28 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
         if linked:
             logger.info(f"Conversa auto-vinculada ao lead CRM #{conversation.lead_id}")
 
+    # AUDIT-2026-08-W1D (F7): `opens_window` ja dizia que reagir NAO reabre a
+    # janela, mas a resposta automatica e o encaminhamento a Bia rodavam assim
+    # mesmo e ninguem consultava a janela. Uma reacao a uma mensagem antiga
+    # disparava um envio de texto livre com recusa GARANTIDA (131047) da Meta.
+    if not opens_window and not service_window_open(conversation.last_customer_msg_at):
+        logger.info(
+            f"Janela de 24h fechada e {msg_type} nao reabre: auto-reply e agente "
+            f"pulados para conversa {conversation.id} (envio seria recusado pela Meta)"
+        )
+        return
+
+    # AUDIT-2026-08-W1D (F2): o corte do lote pendente TEM que ser fotografado
+    # aqui, ANTES de `_send_auto_reply_if_needed` commitar qualquer outbound.
+    forward_to_agent = N8N_AGENT_ENABLED and conversation.is_bot_active
+    if forward_to_agent:
+        _remember_agent_cutoff(conversation.id, db)
+
     # Send auto-reply if needed
     await _send_auto_reply_if_needed(conversation, is_new_conversation, db)
 
     # ─── N8N Agent: encaminhar para IA se bot ativo (com debounce) ───
-    if N8N_AGENT_ENABLED and conversation.is_bot_active:
+    if forward_to_agent:
         _schedule_agent_debounce(conversation.id)
 
 
@@ -460,28 +598,87 @@ async def _process_status_update(status_update: dict, db: Session):
         return
 
     message = db.query(Message).filter(Message.whatsapp_msg_id == msg_id).first()
-    if message:
-        message.status = new_status
-        db.commit()
-        logger.info(f"Status atualizado: {msg_id} -> {new_status}")
+    if not message:
+        # AUDIT-2026-08-W1D (F5): antes isto era um `return` mudo. Status para um
+        # wamid desconhecido significa que o Message nao foi persistido, que o
+        # wamid nao foi gravado, ou que a Meta esta falando de outro numero —
+        # todas hipoteses que so aparecem se alguem puder ver.
+        logger.warning(f"Status '{new_status}' para wamid desconhecido no banco: {msg_id}")
+        return
 
-        # If message failed, log the error details
-        if new_status == "failed":
-            errors = status_update.get("errors", [])
-            if errors:
-                error_detail = errors[0]
-                logger.error(
-                    f"Mensagem falhou: {msg_id} - "
-                    f"code={error_detail.get('code')}, "
-                    f"title={error_detail.get('title')}"
-                )
+    # AUDIT-2026-08-W1D (F5) — SO AVANCA, nunca regride.
+    current = message.status or ""
+    if current == "failed" and new_status != "failed":
+        logger.info(
+            f"Status '{new_status}' IGNORADO para {msg_id}: 'failed' e terminal "
+            f"(um 'sent' atrasado esconderia a nao-entrega do operador)"
+        )
+        return
+    if new_status != "failed" and _STATUS_RANK.get(new_status, 0) <= _STATUS_RANK.get(current, 0):
+        logger.info(
+            f"Status '{new_status}' IGNORADO para {msg_id}: nao avanca sobre "
+            f"'{current}' (a Meta nao garante ordem de callback)"
+        )
+        return
+
+    message.status = new_status
+    db.commit()
+    logger.info(f"Status atualizado: {msg_id} -> {new_status}")
+
+    # If message failed, log the error details
+    if new_status == "failed":
+        errors = status_update.get("errors", [])
+        if errors:
+            error_detail = errors[0]
+            logger.error(
+                f"Mensagem falhou: {msg_id} - "
+                f"code={error_detail.get('code')}, "
+                f"title={error_detail.get('title')}"
+            )
+
+
+def _remember_agent_cutoff(conversation_id: int, db: Session):
+    """
+    AUDIT-2026-08-W1D (F2) — CORTE DO LOTE PENDENTE, FOTOGRAFADO ANTES DA
+    RESPOSTA AUTOMATICA.
+
+    O bug: `_debounce_then_forward` deduzia o lote como "inbound mais novo que o
+    ULTIMO outbound". Mas `_send_auto_reply_if_needed` COMMITA um outbound logo
+    antes do agendamento, e esse outbound e sempre mais novo que a mensagem do
+    cliente — `pending_msgs` voltava VAZIO e a funcao retornava no guard. Como a
+    saudacao dispara em TODA conversa nova, a primeira mensagem de todo lead novo
+    nunca era processada pela Bia. A resposta de "aguardando" e deduplicada por
+    hora, entao em producao a falha parecia intermitente.
+
+    A correcao nao infere processamento a partir de timestamp de outbound —
+    resposta automatica NAO e processamento do agente. O corte e tirado antes de
+    qualquer envio automatico e guardado aqui. (Sem coluna nova: a migration
+    pertence a outra wave.)
+
+    `if not in`: se ja existe corte, ha um lote em curso e o corte dele e o mais
+    ANTIGO (foi tirado antes, no tempo) — sobrescrever faria o lote esquecer as
+    mensagens que ja estavam nele. A entrada e removida quando o lote e
+    consumido, em `_debounce_then_forward`.
+    """
+    if conversation_id in _debounce_cutoffs:
+        return
+    last_outbound = db.query(Message.created_at).filter(
+        Message.conversation_id == conversation_id,
+        Message.direction == "outbound",
+    ).order_by(Message.created_at.desc()).first()
+    # None = nenhum outbound ainda -> TODO o inbound e pendente (conversa nova).
+    _debounce_cutoffs[conversation_id] = last_outbound[0] if last_outbound else None
 
 
 def _schedule_agent_debounce(conversation_id: int):
     """
     Schedule (or reschedule) the agent forwarding with debounce.
-    Each new message resets the 5-second timer. When the timer expires,
+    Each new message resets the timer. When the timer expires,
     all accumulated messages are sent at once to the agent.
+
+    AUDIT-2026-08-W1D (F2): a assinatura fica de UM argumento de proposito — o
+    corte viaja por `_debounce_cutoffs` (ver `_remember_agent_cutoff`), que e
+    quem conhece a regra de preservar o corte mais antigo do lote.
     """
     # Cancel any existing scheduled task for this conversation
     existing_task = _debounce_tasks.get(conversation_id)
@@ -490,11 +687,13 @@ def _schedule_agent_debounce(conversation_id: int):
         logger.debug(f"Debounce resetado para conversa {conversation_id}")
 
     # Schedule a new task
-    task = asyncio.create_task(_debounce_then_forward(conversation_id))
+    task = asyncio.create_task(
+        _debounce_then_forward(conversation_id, _debounce_cutoffs.get(conversation_id))
+    )
     _debounce_tasks[conversation_id] = task
 
 
-async def _debounce_then_forward(conversation_id: int):
+async def _debounce_then_forward(conversation_id: int, cutoff=None):
     """
     Wait AGENT_DEBOUNCE_SECONDS, then forward all recent unprocessed
     messages to the AI agent as a single batch.
@@ -507,6 +706,7 @@ async def _debounce_then_forward(conversation_id: int):
 
     # Clean up the task reference
     _debounce_tasks.pop(conversation_id, None)
+    _debounce_cutoffs.pop(conversation_id, None)
 
     # Use a fresh DB session (we're in a background task)
     db = SessionLocal()
@@ -523,19 +723,18 @@ async def _debounce_then_forward(conversation_id: int):
             logger.info(f"Bot desativado para conversa {conversation_id}, ignorando")
             return
 
-        # Get the last inbound messages that haven't been replied to yet
-        # Find the last outbound message to know where to start
-        last_outbound = db.query(Message).filter(
-            Message.conversation_id == conversation_id,
-            Message.direction == "outbound",
-        ).order_by(Message.created_at.desc()).first()
-
+        # AUDIT-2026-08-W1D (F2) — o lote pendente vem do CORTE fotografado no
+        # webhook, nao do ultimo outbound consultado agora. Consultar agora
+        # incluiria a resposta automatica que acabou de ser commitada, que e
+        # sempre mais nova que a mensagem do cliente: o lote vinha vazio e a Bia
+        # nunca respondia. `cutoff is None` = conversa sem outbound nenhum no
+        # momento em que a mensagem chegou -> todo o inbound e pendente.
         query = db.query(Message).filter(
             Message.conversation_id == conversation_id,
             Message.direction == "inbound",
         )
-        if last_outbound:
-            query = query.filter(Message.created_at > last_outbound.created_at)
+        if cutoff is not None:
+            query = query.filter(Message.created_at > cutoff)
 
         pending_msgs = query.order_by(Message.created_at.asc()).all()
 
@@ -626,10 +825,21 @@ async def _forward_to_agent(conversation: Conversation, message_text: str, db: S
     chega a Meta e ao historico exatamente como uma resposta normal chegaria.
     Nao existe caminho em que o cliente escreve e nao recebe nada.
     """
-    # Build ALL messages as context for the agent (full conversation history)
+    # AUDIT-2026-08-W1D (F8) — historico LIMITADO e so com o que o cliente viu.
+    #
+    # A variavel se chamava `recent_msgs` mas a query nao tinha `.limit()` nem
+    # janela: em toda rodada o payload carregava a conversa INTEIRA para o n8n.
+    # Numa conversa longa isso incha a chamada, o custo de token da Bia e o
+    # tempo de resposta, sem ganho — o agente ja tem o contexto recente.
+    # Pior: incluia outbound 'failed', mensagens que NUNCA chegaram ao cliente,
+    # e a Bia raciocinava como se ele as tivesse lido.
+    # Ordena DESC + limit para pegar as N ULTIMAS (e nao as N primeiras) e
+    # inverte para a ordem cronologica que o agente espera.
     recent_msgs = db.query(Message).filter(
         Message.conversation_id == conversation.id,
-    ).order_by(Message.created_at.asc()).all()
+        or_(Message.direction != "outbound", Message.status != "failed"),
+    ).order_by(Message.created_at.desc(), Message.id.desc()).limit(AGENT_HISTORY_LIMIT).all()
+    recent_msgs.reverse()
 
     historico = [
         {"direction": m.direction, "content": m.content, "type": m.msg_type}
@@ -671,7 +881,10 @@ async def _forward_to_agent(conversation: Conversation, message_text: str, db: S
             db, conversation, parte, "text", wa_response,
             update_preview=False, commit=False,
         )
-        if agent_msg.status == "sent":
+        # AUDIT-2026-08-W1D (F3): em development o envio simulado tambem "passou"
+        # — nao e falha. Nao aceitar 'simulated' aqui faria todo dev ver o log de
+        # "cliente sem resposta" a cada resposta da Bia.
+        if agent_msg.status in NOT_FAILED_STATUSES:
             last_ok_part = parte
 
     # Update conversation preview only with the last SENT part.

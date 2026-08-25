@@ -382,8 +382,17 @@ r_sim = client.post(f"/api/conversations/{conv_rt_id}/messages",
                     json={"content": "msg simulada dev", "msg_type": "text"})
 check(r_sim.status_code == 200, "envio simulado responde 200 (nao e falha)")
 sim_msg = [m for m in q_messages(conversation_id=conv_rt_id) if m.content == "msg simulada dev"][0]
-check(sim_msg.status == "sent" and sim_msg.whatsapp_msg_id is None,
-      "simulado: 'sent' explicito SEM wamid (distinguivel de envio real)")
+# AUDIT-2026-08-W1D-orq: este check exigia status == "sent". A justificativa
+# escrita era "distinguivel de envio real" pela AUSENCIA do wamid — mas ninguem
+# filtra por wamid: o inbox, os relatorios e o proprio retry olham `status`. Com
+# 'sent', um envio que nunca saiu ficava identico a um entregue, e um token
+# rotacionado em producao silenciava o canal inteiro sem deixar rastro. O status
+# proprio e a correcao; o teste e que descrevia o defeito.
+check(sim_msg.status == "simulated",
+      f"simulado grava status PROPRIO 'simulated' (veio {sim_msg.status!r})")
+check(sim_msg.status not in ("sent", "delivered", "read"),
+      "simulado NUNCA e lido como entregue")
+check(sim_msg.whatsapp_msg_id is None, "simulado nao inventa wamid")
 check(sim_msg.last_error is None, "simulado nao registra erro")
 
 # ============ MIGRATION m003 idempotente ============
