@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean
+from sqlalchemy import (
+    Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Index, text,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -42,7 +44,16 @@ class Conversation(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     lead_id = Column(Integer, nullable=False, index=True)
-    whatsapp = Column(String(30), nullable=False, index=True)
+    # AUDIT-2026-08-W2E (F1) — o numero e a CHAVE de negocio da conversa, nao um
+    # campo pesquisavel qualquer. `webhook.py` e `conversations.py` fazem
+    # find-or-create sobre ele; sem UNIQUE, duas primeiras mensagens do mesmo
+    # numero chegando juntas criam DUAS conversas e todo leitor usa `.first()`,
+    # entao metade das mensagens do cliente some numa thread invisivel.
+    # O UNIQUE aqui e o mesmo mecanismo que ja torna o inbound idempotente via
+    # `Message.whatsapp_msg_id` — e a unica trava que sobrevive a concorrencia.
+    # `index=True` foi REMOVIDO de proposito: o indice unico ja atende as buscas
+    # por numero; manter os dois seria indice duplicado na mesma coluna.
+    whatsapp = Column(String(30), nullable=False)
     nome = Column(String(200), nullable=True)
     status = Column(String(20), default="aberta", nullable=False, index=True)
     ultimo_msg = Column(Text, nullable=True)
@@ -58,6 +69,16 @@ class Conversation(Base):
     # NAO e atividade do cliente (last_customer_msg_at), nem updated_at/created_at.
     # Preenchido no handoff BIA->humano e no release; zerado quando alguem assume.
     queued_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+    # AUDIT-2026-08-W2E (F1) — declarado como Index(unique=True) e nao como
+    # UniqueConstraint de proposito: assim `create_all()` e a migration m011
+    # emitem EXATAMENTE o mesmo objeto (`CREATE UNIQUE INDEX uq_...`) nos dois
+    # dialetos. Este sistema tem dois donos de schema competindo (create_all no
+    # startup + scripts manuais); DDL divergente entre eles ja produziu drift
+    # (ver m003 vs create_all em `send_attempts`) e nao vamos criar mais um.
+    __table_args__ = (
+        Index("uq_conversations_whatsapp", "whatsapp", unique=True),
+    )
 
     # Relationships
     messages = relationship(
@@ -111,7 +132,12 @@ class Message(Base):
     # CONV-08b — integridade de outbound (base para retry).
     # Bancos existentes: aplicar migrations/m003_conversas_message_error_fields.py.
     last_error = Column(Text, nullable=True)          # resumo SEGURO da ultima falha (sem token/payload)
-    send_attempts = Column(Integer, default=0, nullable=False)  # tentativas de envio (outbound)
+    # AUDIT-2026-08-W2E (F5) — `default=0` e CLIENT-side: so a ORM o aplica.
+    # A coluna e NOT NULL sem DEFAULT no DDL, entao qualquer INSERT fora da ORM
+    # (psql, n8n, COPY, o SQL cru de services/crm.py) era REJEITADO. Pior: o
+    # m003 ja cria a coluna com `DEFAULT 0`, logo banco migrado e banco nascido
+    # do create_all tinham DDL diferente. `server_default` alinha os dois.
+    send_attempts = Column(Integer, default=0, server_default=text("0"), nullable=False)
     last_attempt_at = Column(DateTime(timezone=True), nullable=True)  # ultima tentativa de envio
 
     # Relationships

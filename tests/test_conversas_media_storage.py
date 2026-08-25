@@ -97,10 +97,21 @@ JPEG_BYTES = b"\xff\xd8\xff\xe0FAKEJPEGDATA" * 10
 
 def make_asset(media_id="MID-1", mime="image/jpeg", msg_type="image"):
     s = SessionLocal()
-    conv = Conversation(lead_id=1, whatsapp="5511900022222", nome="Cliente Storage", status="aberta")
-    s.add(conv)
-    s.commit()
-    s.refresh(conv)
+    # AUDIT-2026-08-W2E-orq: este helper e chamado varias vezes e criava uma
+    # conversa NOVA a cada chamada com o MESMO numero. Isso so passava porque
+    # conversations.whatsapp nao tinha UNIQUE — e produzir N conversas para um
+    # unico numero e exatamente o defeito que o indice novo existe para impedir
+    # (os dois caminhos de criacao do app, webhook.py:488 e conversations.py:426,
+    # fazem busca-por-numero-e-cria-se-nao-achar). O helper passa a fazer o mesmo
+    # que a aplicacao faz: reutiliza a conversa do numero.
+    conv = s.query(Conversation).filter(
+        Conversation.whatsapp == "5511900022222").first()
+    if conv is None:
+        conv = Conversation(lead_id=1, whatsapp="5511900022222",
+                            nome="Cliente Storage", status="aberta")
+        s.add(conv)
+        s.commit()
+        s.refresh(conv)
     m = Message(conversation_id=conv.id, direction="inbound", content="[MIDIA]",
                 msg_type=msg_type, media_url=media_id, status="received")
     s.add(m)

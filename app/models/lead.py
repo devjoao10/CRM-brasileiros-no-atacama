@@ -1,4 +1,7 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Date, Text, JSON, ForeignKey
+from sqlalchemy import (
+    Column, Integer, String, Boolean, DateTime, Date, Text, JSON, ForeignKey,
+    true, text,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -28,11 +31,19 @@ class Lead(Base):
 
     # Custom fields — JSON dict for unlimited customization
     # Example: {"origem": "Instagram", "idioma": "pt-BR", "observacoes": "VIP"}
-    campos_personalizados = Column(JSON, default=dict, nullable=False)
+    # AUDIT-2026-08-W2E (F5) — as tres colunas abaixo sao NOT NULL mas o default
+    # existia SO em Python (`default=` e aplicado pela ORM, nunca vai para o DDL).
+    # Resultado: qualquer INSERT que nao passe pela ORM — reparo manual via psql,
+    # n8n, COPY de restore — era rejeitado por NOT NULL sem DEFAULT. `server_default`
+    # poe o default no banco; `default=` continua para nao mudar nada do lado Python.
+    campos_personalizados = Column(JSON, default=dict, server_default=text("'{}'"), nullable=False)
 
     # Status
-    status_venda = Column(String(30), default="em_negociacao", nullable=False, index=True) # em_negociacao, venda, perda
-    is_active = Column(Boolean, default=True, nullable=False)
+    status_venda = Column(String(30), default="em_negociacao", server_default="em_negociacao",
+                          nullable=False, index=True) # em_negociacao, venda, perda
+    # `true()` compila para `true` no PostgreSQL e `1` no SQLite — um literal
+    # cru quebraria num dos dois dialetos.
+    is_active = Column(Boolean, default=True, server_default=true(), nullable=False)
 
     # Responsável (owner) — FK to users table, 0 = Agente IA
     responsavel_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)

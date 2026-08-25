@@ -17,6 +17,7 @@ de schema para bancos **já existentes** ficam aqui, como scripts **idempotentes
 | # | Script | O que faz |
 |---|---|---|
 | 001 | `m001_schema_drift_leads_tasks.py` | `leads`: +6 colunas de viagem (`dias_por_destino`, `total_dias`, `datas_destinos`, `num_viajantes`, `num_criancas`, `idades_criancas`); `tasks`: `user_id` nullable + `resultado_ia`; índices de performance |
+| 011 | `m011_audit_unique_constraints.py` | AUDIT-2026-08-W2E — 4 índices UNIQUE que faltavam: `conversations(whatsapp)`, `funnel_entries(lead_id,funnel_id)`, `operational_card_assignees(card_id,user_id)`, `operational_card_field_values(card_id,definition_id)`; + `SET DEFAULT` (só PostgreSQL) em `leads.campos_personalizados/status_venda/is_active` e `messages.send_attempts`. **Recusa** rodar sem `DATABASE_URL` ou contra SQLite (salvo `--allow-sqlite`); com duplicatas **aborta com exit 2** listando os ids — não deduplica, não apaga. Exit != 0 em qualquer falha. |
 
 ## Como rodar (LOCAL / STAGING)
 ```bash
