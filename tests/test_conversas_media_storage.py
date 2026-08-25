@@ -20,6 +20,7 @@ Meta 100% mockada; storage em scratch/. Roda standalone:
 """
 import asyncio
 import os
+from datetime import datetime, timezone
 import pathlib
 import sys
 
@@ -309,6 +310,73 @@ httpx.AsyncClient = _orig
 check(res and "messages" in res, "send por media_id retorna sucesso")
 check(sent_payload.get("image", {}).get("id") == "UPLOADED-MEDIA-1",
       "payload usa {'id': media_id} (nao link)")
+
+
+# ============ MIME PERIGOSO NAO E RENDERIZAVEL ============
+# AUDIT-2026-08-orq (F-012/F-013): `meta_mime_type` e o MIME DECLARADO PELO
+# REMETENTE, persistido verbatim do payload da Meta. Ele saia como `media_type`
+# com `Content-Disposition: inline`. O front busca /api/media/{id}, faz
+# `resp.blob()` — cujo `type` vem do Content-Type — e chama
+# `window.open(URL.createObjectURL(blob))`. Um blob: URL herda a origem da
+# pagina que o criou. Ou seja: um cliente do WhatsApp que declarasse text/html
+# executava script NA ORIGEM DO CONVERSAS, com o cookie de sessao do operador.
+#
+# A correcao e server-side (media.py): o que a politica de midia nao classifica
+# vira octet-stream + attachment, que o browser BAIXA em vez de interpretar.
+# Estes checks travam isso pelo COMPORTAMENTO da rota, nao pelo texto do codigo.
+print()
+print("CONV-MEDIA-MIME — o remetente nao escolhe como o browser interpreta")
+
+from app.services import media_policy as _mp  # noqa: E402
+
+for _mime in ("text/html", "image/svg+xml", "application/xhtml+xml", "text/xml"):
+    check(_mp.classify_mime(_mime) is None,
+          f"politica NAO classifica {_mime} (nao renderizavel)")
+
+# Camada 1 — o download nem acontece: a politica recusa o MIME na origem.
+_aid_recusa = make_asset("MID-HTML-FETCH", mime="text/html", msg_type="document")
+mock_meta({"url": "https://cdn.meta/fake", "mime_type": "text/html", "file_size": len(JPEG_BYTES)},
+          {"content": JPEG_BYTES})
+_rf = client.post(f"/api/media/{_aid_recusa}/fetch")
+check(_rf.status_code != 200,
+      f"/fetch RECUSA baixar MIME nao permitido (veio {_rf.status_code})")
+
+# Camada 2 — e se o arquivo ja estiver no disco (baixado antes desta regra
+# existir, ou por outro caminho), servir tambem nao pode devolve-lo como HTML.
+# Materializa direto no banco/storage, sem passar pelo /fetch.
+_aid_html = make_asset("MID-HTML-SERVE", mime="text/html", msg_type="document")
+_sess = SessionLocal()
+try:
+    _a = _sess.query(MediaAsset).filter(MediaAsset.id == _aid_html).first()
+    _a.status = "downloaded"
+    _a.local_path = f"asset_{_aid_html}.bin"
+    _a.local_size_bytes = len(JPEG_BYTES)
+    _a.downloaded_at = datetime.now(timezone.utc)
+    _sess.commit()
+finally:
+    _sess.close()
+(STORAGE / f"asset_{_aid_html}.bin").write_bytes(b"<script>alert(document.cookie)</script>")
+
+_r = client.get(f"/api/media/{_aid_html}")
+check(_r.status_code == 200, f"a midia ja no disco continua sendo servida (got {_r.status_code})")
+check(_r.headers.get("content-type", "").startswith("application/octet-stream"),
+      f"text/html declarado NAO volta como text/html (veio {_r.headers.get('content-type')!r})")
+check("attachment" in _r.headers.get("content-disposition", ""),
+      f"vem como attachment, nao inline (veio {_r.headers.get('content-disposition')!r})")
+check(_r.headers.get("x-content-type-options") == "nosniff",
+      "nosniff presente (o browser nao adivinha o tipo)")
+
+# Controle: um MIME legitimo continua inline, senao o teste acima passaria
+# simplesmente porque tudo virou attachment.
+_aid_jpg = make_asset("MID-JPG-OK", mime="image/jpeg", msg_type="image")
+mock_meta({"url": "https://cdn.meta/fake", "mime_type": "image/jpeg", "file_size": len(JPEG_BYTES)},
+          {"content": JPEG_BYTES})
+client.post(f"/api/media/{_aid_jpg}/fetch")
+_r2 = client.get(f"/api/media/{_aid_jpg}")
+check(_r2.headers.get("content-type", "").startswith("image/jpeg"),
+      f"MIME permitido continua sendo servido como ele mesmo (veio {_r2.headers.get('content-type')!r})")
+check("inline" in _r2.headers.get("content-disposition", ""),
+      "MIME permitido continua inline (o controle prova que o teste discrimina)")
 
 
 # --- Resultado ---

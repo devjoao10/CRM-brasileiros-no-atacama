@@ -51,8 +51,17 @@ def seed_dev_user():
                 nome="Admin Dev",
                 email=CONVERSAS_DEV_EMAIL,
                 hashed_password=_hash_password(CONVERSAS_DEV_PASSWORD),
-                role="admin",
+                # AUDIT-2026-08-orq: era "admin" MINUSCULO. O CRM declara
+                # role como SAEnum(UserRole) e o SQLAlchemy persiste o NOME do
+                # membro, entao o valor que faz round-trip e "ADMIN". Com
+                # "admin" na coluna, query(User) do CRM levanta
+                #   LookupError: 'admin' is not among the defined enum values
+                # em TODA consulta que retorne esta linha — listagem de
+                # usuarios, join de equipe, analytics. Verificado nos dois
+                # sentidos antes desta mudanca.
+                role="ADMIN",
                 is_active=True,
+                email_verified=True,
             )
             db.add(user)
             db.commit()

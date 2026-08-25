@@ -17,17 +17,37 @@ from app.database import Base, get_db
 
 # ─── User Model (mirrors CRM's users table) ─────
 class User(Base):
-    """User model — reads from the SAME users table as the CRM."""
+    """Espelho de LEITURA da tabela `users`, cujo DONO e o CRM (app/models/user.py).
+
+    AUDIT-2026-08-orq — `users` e a unica tabela compartilhada pelos dois
+    servicos, e este espelho entra no `Base.metadata` do Conversas, que roda
+    `create_all()` no startup. Num banco onde o Conversas suba PRIMEIRO, quem
+    cria a tabela e ESTE arquivo — e ele divergia do dono em quatro pontos:
+    `nome` era String(200) contra String(100), faltava `email_verified` (que o
+    CRM declara NOT NULL) e `api_key` nao tinha UNIQUE nem indice. O CRM
+    quebrava no primeiro INSERT contra a tabela assim criada.
+
+    As colunas abaixo agora batem com a declaracao do dono. Se o CRM mudar,
+    ESTE arquivo muda junto — a fonte da verdade e app/models/user.py.
+
+    `role` continua String(20) de proposito: o CRM usa `SAEnum(UserRole)`, que
+    grava o NOME do membro ("ADMIN"), e declarar o mesmo enum aqui exigiria
+    importar o enum do CRM (que este servico nao importa). A normalizacao de
+    leitura vive em `is_admin_role()`, logo abaixo. Para ESCRITA vale a regra
+    inversa e ela e obrigatoria: grave "ADMIN"/"USER" em caixa alta, senao a
+    ORM do CRM levanta LookupError ao ler a linha.
+    """
     __tablename__ = "users"
     __table_args__ = {'extend_existing': True}
 
     id = Column(Integer, primary_key=True, index=True)
-    nome = Column(String(200), nullable=False)
+    nome = Column(String(100), nullable=False)
     email = Column(String(255), unique=True, nullable=False, index=True)
     hashed_password = Column(String(255), nullable=False)
-    role = Column(String(20), default="user")
-    is_active = Column(Boolean, default=True)
-    api_key = Column(String(255), nullable=True)
+    role = Column(String(20), default="USER")
+    is_active = Column(Boolean, default=True, nullable=False)
+    email_verified = Column(Boolean, default=False, nullable=False)
+    api_key = Column(String(255), unique=True, nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

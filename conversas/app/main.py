@@ -24,8 +24,27 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: create tables if they don't exist."""
-    Base.metadata.create_all(bind=engine)
+    """Startup: cria as tabelas DESTE servico; `users` so em development.
+
+    AUDIT-2026-08-orq — `users` e a unica tabela compartilhada, e o DONO dela e
+    o CRM (app/models/user.py). O `Base.metadata` daqui contem um ESPELHO dela
+    (conversas/app/auth.py), entao um `create_all()` sem filtro fazia deste
+    servico um criador legitimo da tabela — bastava ele subir primeiro num banco
+    novo. O espelho e necessariamente aproximado: o CRM declara `role` como
+    `SAEnum(UserRole)`, que no PostgreSQL vira um TIPO ENUM NATIVO, e o espelho
+    declara `VARCHAR(20)`. Nao ha como o espelho criar a coluna certa sem
+    importar o enum do outro servico.
+
+    Entao ele deixa de criar. Em development a tabela continua sendo criada,
+    porque o Conversas roda isolado no proprio SQLite e precisa dela para o
+    login local. Fora de development, `users` ausente e erro de implantacao — o
+    CRM sobe antes e cria — e o certo e falhar cedo, nao improvisar um schema
+    que o dono nao reconhece.
+    """
+    tabelas = list(Base.metadata.sorted_tables)
+    if ENVIRONMENT != "development":
+        tabelas = [t for t in tabelas if t.name != "users"]
+    Base.metadata.create_all(bind=engine, tables=tabelas)
     seed_dev_user()  # Guarded internally by CONVERSAS_SEED_DEV_DATA
     if CONVERSAS_SEED_DEV_DATA:
         seed_quick_replies()

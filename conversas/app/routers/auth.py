@@ -6,6 +6,7 @@ In production, authentication goes through the CRM API.
 """
 
 import hashlib
+import hmac
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -69,8 +70,12 @@ def _hash_password(password: str) -> str:
 
 
 def _verify_password(plain: str, hashed: str) -> bool:
-    """Verify against SHA-256 hash."""
-    return _hash_password(plain) == hashed
+    """Confere contra hash SHA-256. SO EXISTE PARA DEV — ver `login`.
+
+    `compare_digest` no lugar de `==`: comparacao de string em Python sai no
+    primeiro byte diferente, e o tempo da resposta vaza quanto do hash bate.
+    """
+    return hmac.compare_digest(_hash_password(plain), hashed or "")
 
 
 def _create_token(email: str) -> str:
@@ -97,7 +102,15 @@ async def login(data: LoginRequest, response: Response, db: Session = Depends(ge
     - PRODUCAO (flag false): comportamento ORIGINAL preservado — proxy ao CRM.
     Nunca logar senha/token; 401 uniforme (nao revela se o email existe).
     """
-    if CONVERSAS_SEED_DEV_DATA:
+    # AUDIT-2026-08-orq: o portao era SO `CONVERSAS_SEED_DEV_DATA` — uma flag
+    # de SEED. Quem a ligasse em producao para popular dados de demonstracao
+    # trocaria, junto e sem perceber, TODA a autenticacao deste servico: de
+    # proxy ao CRM (bcrypt, via passlib) para SHA-256 SEM SAL conferido
+    # diretamente contra `users.hashed_password`, a coluna compartilhada. E o
+    # seed gravaria um hash sem sal na tabela de producao. Uma flag de DADOS nao
+    # pode decidir o esquema de senha: o ambiente decide, e a flag so escolhe se
+    # ha dados de dev. Fora de development, o unico caminho e o CRM.
+    if CONVERSAS_SEED_DEV_DATA and ENVIRONMENT == "development":
         # ── Autenticacao LOCAL (dev) — nao toca CRM_BASE_URL ──
         user = db.query(User).filter(User.email == data.email).first()
         if not user or not user.is_active or not _verify_password(data.password, user.hashed_password):
