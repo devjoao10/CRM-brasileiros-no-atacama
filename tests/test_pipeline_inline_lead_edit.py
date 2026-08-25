@@ -203,7 +203,7 @@ def _roda(corpo, valores=None, respostas=None, extras=""):
     script = _HARNESS % (json.dumps(v), json.dumps(r),
                          "\n".join(_fn(f, PARTIAL) for f in _DO_PARTIAL) + extras,
                          corpo)
-    p = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    p = subprocess.run([node, "-e", script], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert p.returncode == 0, f"node falhou: {p.stderr.strip()[:400]}"
     return json.loads(p.stdout)
 

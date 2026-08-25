@@ -18,6 +18,14 @@ AUDIT-2026-08-W0 — regressoes de tres defeitos achados na auditoria global.
    LF->CRLF ANTES do gzip, entao TODO dump ja feito esta byte-corrompido: o
    restore funciona e suja em silencio a ultima coluna de cada linha COPY.
 
+4. 16 chamadas de subprocess.run(..., text=True) sem `encoding` na suite. Sem
+   `encoding`, a decodificacao usa o codec PADRAO DA PLATAFORMA — cp1252 no
+   Windows. test_conversas_auth_hardening.py verifica a mensagem de recusa do
+   Conversas, que tem cadeado e acentos: no Windows a leitura do stderr
+   estourava UnicodeDecodeError, `stderr` virava None e o check morria com
+   TypeError em vez de reprovar. Verde no CI (Linux), vermelho na maquina de
+   quem escreve o codigo — o pior lugar para uma falha aparecer.
+
 Rodar:  python tests/test_filter_normalization_and_backup.py
 """
 import ast
@@ -144,6 +152,47 @@ pos_find = sh.find("find \"${BACKUP_DIR}\"")
 check(
     pos_mv != -1 and pos_find != -1 and pos_mv < pos_find,
     "a retencao so poda DEPOIS de um backup verificado existir",
+)
+
+
+# ─── 4. a suite le a saida de subprocesso como utf-8 ─────────────────
+print()
+print("4) tests/ — subprocess.run com text=True declara o encoding")
+
+import re as _re
+
+sem_encoding = []
+for arq in sorted((ROOT / "tests").glob("*.py")):
+    # Este arquivo cita o padrao em PROSA (docstring e mensagem de erro), e o
+    # detector nao distingue codigo de texto. Excluir a si mesmo e mais honesto
+    # que refinar o regex ate ele adivinhar a diferenca.
+    if arq.name == pathlib.Path(__file__).name:
+        continue
+    fonte = arq.read_text(encoding="utf-8")
+    # olha a CHAMADA inteira, nao a linha: encoding costuma vir na linha seguinte
+    for m in _re.finditer(r"subprocess\.run\(", fonte):
+        i = m.end()
+        prof = 1
+        while i < len(fonte) and prof:
+            if fonte[i] == "(":
+                prof += 1
+            elif fonte[i] == ")":
+                prof -= 1
+            i += 1
+        chamada = fonte[m.start():i]
+        if "text=True" in chamada and "encoding=" not in chamada:
+            linha = fonte[: m.start()].count(chr(10)) + 1
+            sem_encoding.append(f"{arq.name}:{linha}")
+
+check(
+    not sem_encoding,
+    "nenhum subprocess.run(text=True) sem encoding explicito "
+    + (f"(faltando: {sem_encoding})" if sem_encoding else ""),
+)
+# Controle: sem isto o loop acima poderia estar quebrado e passar sempre.
+check(
+    "text=True" in (ROOT / "tests" / "test_secret_hygiene.py").read_text(encoding="utf-8"),
+    "o detector tem o que examinar (ha chamadas com text=True na suite)",
 )
 
 

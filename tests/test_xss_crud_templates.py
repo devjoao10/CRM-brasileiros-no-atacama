@@ -170,7 +170,7 @@ def _roda():
         _corpo(TAREFAS, "esc", "\n"),
         _corpo(TAREFAS, "renderTasks"),
     )
-    p = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    p = subprocess.run([node, "-e", script], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert p.returncode == 0, f"node falhou: {p.stderr.strip()}"
     _cache["r"] = json.loads(p.stdout)
     return _cache["r"]

@@ -103,7 +103,30 @@ js_section = js[js_start:js_end]
 check("matchMedia('(max-width: 640px)')" in js_section, "estado mobile via matchMedia")
 check("classList.add('open')" in js_section, "load mobile abre a lista (drawer .open)")
 check("classList.remove('open')" in js_section, "abrir conversa fecha o drawer")
-check("closeMobileDrawerForChat();" in js.split("async function loadChat")[1][:1200],
+def _corpo_da_funcao(fonte, assinatura):
+    """Corpo da funcao, do primeiro { ate a chave que o fecha.
+
+    AUDIT-2026-08-W2F-orq: aqui havia `[:1200]` — os 1200 primeiros caracteres
+    depois da assinatura. Esse numero nao descreve nada do produto: descreve o
+    tamanho que a funcao tinha no dia em que o teste foi escrito. Um comentario
+    de quatro linhas adicionado acima da chamada empurrou `closeMobileDrawerForChat()`
+    para o caractere 1204 e o teste ficou vermelho sem que nada de comportamento
+    mudasse. Contar chaves custa oito linhas e nao envelhece.
+    """
+    i = fonte.index(assinatura)
+    i = fonte.index("{", i)
+    prof = 0
+    for j in range(i, len(fonte)):
+        if fonte[j] == "{":
+            prof += 1
+        elif fonte[j] == "}":
+            prof -= 1
+            if prof == 0:
+                return fonte[i:j + 1]
+    raise AssertionError(f"chave nao fechada em {assinatura}")
+
+
+check("closeMobileDrawerForChat();" in _corpo_da_funcao(js, "async function loadChat"),
       "loadChat fecha o drawer no mobile")
 check("getElementById('mobileBack')" in js, "back-to-list ligado ao #mobileBack existente")
 check(".mobile-back" in css_section and "display: flex !important" in css_section,

@@ -231,7 +231,7 @@ def _roda(corpo, href="https://crm.test/leads?open=7", respostas=None):
     script = _HARNESS % (
         json.dumps(href), json.dumps(respostas or {}),
         "\n".join(_fn(f) for f in _FUNCOES), corpo)
-    p = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    p = subprocess.run([node, "-e", script], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert p.returncode == 0, f"node falhou: {p.stderr.strip()[:500]}"
     return json.loads(p.stdout)
 

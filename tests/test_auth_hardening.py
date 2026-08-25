@@ -192,7 +192,7 @@ def _login_set_cookie_in(environment: str) -> str:
                ADMIN_INITIAL_EMAIL=ADMIN_EMAIL,
                ADMIN_INITIAL_PASSWORD=ADMIN_PASSWORD)
     p = subprocess.run([sys.executable, "-c", _PROD_PROBE],
-                       capture_output=True, text=True, cwd=str(ROOT), env=env)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(ROOT), env=env)
     assert p.returncode == 0, f"subprocesso falhou: {p.stderr.strip()[-800:]}"
     assert "STATUS 200" in p.stdout, f"login no subprocesso falhou: {p.stdout!r}"
     cookies = [ln[len("SETCOOKIE "):] for ln in p.stdout.splitlines()
@@ -400,7 +400,7 @@ def _run_login_js(**scen):
     if node is None:
         return None
     p = subprocess.run([node, "-e", _HARNESS, "--", json.dumps(scen)],
-                       capture_output=True, text=True, cwd=str(ROOT))
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(ROOT))
     assert p.returncode == 0, f"node falhou: {p.stderr.strip()[:600]}"
     return json.loads(p.stdout)
 

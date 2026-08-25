@@ -225,7 +225,7 @@ print("\nRESP02 — sem backend/migration no pacote")
 try:
     changed = subprocess.run(
         ["git", "diff", "--name-only", f"{RESP02_MERGE}^1", f"{RESP02_MERGE}^2"],
-        cwd=str(ROOT), capture_output=True, text=True, timeout=30, check=True,
+        cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, check=True,
     ).stdout.splitlines()
     bad = [f for f in changed if f.startswith("conversas/app/") or f.startswith("migrations/")]
     check(not bad, f"pacote RESP02 nao tocou conversas/app nem migrations ({bad or 'ok'})")

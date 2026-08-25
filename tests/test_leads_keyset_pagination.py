@@ -825,7 +825,7 @@ def _roda_js(corpo, valores=None, resposta=None, atraso=0):
         json.dumps(valores or {}), json.dumps(resposta), atraso,
         _fn("filtrosAtuais"), _fn("reloadLeads"), _fn("loadLeads"), _fn("loadMore"),
         corpo)
-    p = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    p = subprocess.run([node, "-e", script], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert p.returncode == 0, f"node falhou: {p.stderr.strip()[:400]}"
     return json.loads(p.stdout)
 

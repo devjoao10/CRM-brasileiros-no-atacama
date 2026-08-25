@@ -112,7 +112,16 @@
         }
         document.getElementById('cfgWabaId').value = config.meta_waba_id || '';
         document.getElementById('cfgPhoneId').value = config.meta_phone_number_id || '';
-        document.getElementById('cfgVerifyToken').value = config.meta_verify_token || '';
+        // AUDIT-2026-08-W2D-orq: o backend deixou de devolver meta_verify_token em
+        // claro (W1-B/F7) e passou a mandar has_verify_token: bool. Este campo
+        // continuava lendo a chave antiga, entao mostrava VAZIO mesmo com token
+        // salvo — sem nada dizendo que existe um. Salvar nao apaga (o router
+        // ignora null), mas o admin nao tinha como saber. Mesmo padrao do access
+        // token, logo acima.
+        document.getElementById('cfgVerifyToken').value = '';
+        document.getElementById('cfgVerifyToken').placeholder = config.has_verify_token
+            ? '(Token salvo — insira para alterar)'
+            : 'defina um token e repita no painel da Meta';
         document.getElementById('cfgApiVersion').value = config.meta_api_version || 'v21.0';
         if (config.webhook_url) {
             document.getElementById('cfgWebhookUrl').value = config.webhook_url;
@@ -158,14 +167,21 @@
         const token = document.getElementById('cfgAccessToken').value.trim();
         if (token) payload.meta_access_token = token;
 
+        // AUDIT-2026-08-W2D-orq: as tres guardas eram `!== undefined` sobre
+        // `.value.trim()`, que SEMPRE devolve string — nunca podiam ser falsas.
+        // Codigo morto com cara de validacao. O ramo `|| null` tambem nunca fez
+        // nada: PUT /api/config faz `if data.X is not None`, entao null e
+        // ignorado (limpar campo pela UI nao e suportado pelo endpoint). O que
+        // sobra e o unico comportamento que existia de fato — mandar o campo so
+        // quando o usuario digitou algo.
         const wabaId = document.getElementById('cfgWabaId').value.trim();
-        if (wabaId !== undefined) payload.meta_waba_id = wabaId || null;
+        if (wabaId) payload.meta_waba_id = wabaId;
 
         const phoneId = document.getElementById('cfgPhoneId').value.trim();
-        if (phoneId !== undefined) payload.meta_phone_number_id = phoneId || null;
+        if (phoneId) payload.meta_phone_number_id = phoneId;
 
         const verifyToken = document.getElementById('cfgVerifyToken').value.trim();
-        if (verifyToken !== undefined) payload.meta_verify_token = verifyToken || null;
+        if (verifyToken) payload.meta_verify_token = verifyToken;
 
         const apiVersion = document.getElementById('cfgApiVersion').value.trim();
         if (apiVersion) payload.meta_api_version = apiVersion;
@@ -275,17 +291,20 @@
                 <div class="auto-reply-header">
                     <div class="auto-reply-info">
                         <span class="auto-reply-title">${escapeHtml(r.title)}</span>
-                        <span class="auto-reply-trigger">${r.trigger}</span>
+                        <span class="auto-reply-trigger">${escapeHtml(r.trigger)}</span>
                     </div>
                     <label class="toggle-switch">
-                        <input type="checkbox" ${r.is_active ? 'checked' : ''} onchange="window._toggleAutoReply('${r.trigger}', this.checked)">
+                        <!-- AUDIT-2026-08-W2D-orq: r.trigger ia CRU para dentro de um literal
+                             JS aqui e no botao Salvar. escapeHtml nem resolveria: o parser
+                             decodifica a entidade ANTES de o JS compilar. Vai por data-trigger. -->
+                        <input type="checkbox" ${r.is_active ? 'checked' : ''} data-trigger="${escapeHtml(r.trigger)}" onchange="window._toggleAutoReply(this.dataset.trigger, this.checked)">
                         <span class="toggle-slider"></span>
                     </label>
                 </div>
-                <textarea class="auto-reply-message" id="ar-${r.trigger}" rows="3" 
+                <textarea class="auto-reply-message" id="ar-${escapeHtml(r.trigger)}" rows="3" 
                     placeholder="Mensagem automatica...">${escapeHtml(r.message)}</textarea>
                 <div class="auto-reply-actions">
-                    <button class="btn-sm btn-primary" onclick="window._saveAutoReply('${r.trigger}')">Salvar</button>
+                    <button class="btn-sm btn-primary" data-trigger="${escapeHtml(r.trigger)}" onclick="window._saveAutoReply(this.dataset.trigger)">Salvar</button>
                 </div>
             </div>
         `).join('');
@@ -386,7 +405,10 @@
                 <div class="qr-item-main">
                     <div class="qr-shortcut">${escapeHtml(qr.shortcut)}</div>
                     <div class="qr-title">${escapeHtml(qr.title)}</div>
-                    <div class="qr-preview">${escapeHtml(qr.content).substring(0, 100)}${qr.content.length > 100 ? '...' : ''}</div>
+                    <!-- AUDIT-2026-08-W2D-orq: escapava e SO ENTAO truncava em 100. O corte
+                         podia cair no meio de uma entidade (&amp; virando &am) e quebrar a
+                         renderizacao. Trunca o texto, depois escapa. -->
+                    <div class="qr-preview">${escapeHtml((qr.content || '').substring(0, 100))}${(qr.content || '').length > 100 ? '...' : ''}</div>
                 </div>
                 <div class="qr-item-meta">
                     ${qr.category ? `<span class="qr-category">${escapeHtml(qr.category)}</span>` : ''}

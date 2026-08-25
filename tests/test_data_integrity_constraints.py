@@ -287,7 +287,7 @@ _CONV_SCRIPT = textwrap.dedent(
 def run_child(script, *args):
     return subprocess.run(
         [sys.executable, "-c", script, *args],
-        cwd=str(ROOT), capture_output=True, text=True,
+        cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
 
 
@@ -347,7 +347,7 @@ def run_m011(url, *args):
         env["DATABASE_URL"] = url
     return subprocess.run(
         [sys.executable, str(M011), *args],
-        cwd=str(ROOT), capture_output=True, text=True, env=env,
+        cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
     )
 
 

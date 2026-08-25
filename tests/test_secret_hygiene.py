@@ -36,7 +36,7 @@ def check(cond, msg):
 
 def git(*args):
     return subprocess.run(
-        ["git", *args], cwd=ROOT, capture_output=True, text=True
+        ["git", *args], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace"
     )
 
 

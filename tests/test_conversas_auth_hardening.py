@@ -129,9 +129,16 @@ def import_config(env_overrides):
     env.pop("SECRET_KEY", None)
     env["PYTHONPATH"] = str(CONVERSAS_DIR)
     env.update(env_overrides)
+    # AUDIT-2026-08-orq: `text=True, encoding="utf-8", errors="replace"` sem `encoding` decodifica com o codec
+    # PADRAO DA PLATAFORMA. No Windows isso e cp1252, e a mensagem de erro que
+    # este proprio teste verifica tem cadeado e acentos: a decodificacao estoura
+    # UnicodeDecodeError, `stderr` volta None e o check seguinte morre com
+    # TypeError em vez de reprovar com mensagem. O teste passava no Linux do CI e
+    # falhava na maquina de quem escreve o codigo — o pior lugar para falhar.
     return subprocess.run(
         [sys.executable, "-c", _probe],
         cwd=str(CONVERSAS_DIR), env=env, capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
     )
 
 

@@ -99,7 +99,7 @@ def _roda(url_inicial):
     assert node, "node e necessario para exercitar clearTargetLead de verdade"
     script = _HARNESS % (json.dumps(url_inicial), CLASSE,
                          _corpo("setTargetLead"), _corpo("clearTargetLead"))
-    p = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    p = subprocess.run([node, "-e", script], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert p.returncode == 0, f"node falhou: {p.stderr.strip()}"
     return json.loads(p.stdout)
 

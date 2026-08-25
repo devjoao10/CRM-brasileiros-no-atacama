@@ -180,7 +180,7 @@ def _roda_render():
         "fetchCustomFields": _sem_comentarios(_corpo("fetchCustomFields")),
         "fetchHistory": _sem_comentarios(_corpo("fetchHistory")),
     }
-    p = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    p = subprocess.run([node, "-e", script], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert p.returncode == 0, f"node falhou: {p.stderr.strip()}"
     return json.loads(p.stdout)
 

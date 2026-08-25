@@ -333,7 +333,7 @@ def _run_login_js(**scen):
     if node is None:
         return None
     p = subprocess.run([node, "-e", _HARNESS, "--", json.dumps(scen)],
-                       capture_output=True, text=True, cwd=str(ROOT))
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(ROOT))
     assert p.returncode == 0, f"node falhou: {p.stderr.strip()[:400]}"
     return json.loads(p.stdout)
 
