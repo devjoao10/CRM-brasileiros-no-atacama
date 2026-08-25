@@ -1,0 +1,75 @@
+RELATORIO W1-C — superficie de ferramentas do LLM (Perpetua)
+Arquivos: app/services/ai_tools.py, app/routers/ai.py,
+          tests/test_ai_tool_hardening.py (NOVO)
+
+CHANGES
+- app/services/ai_tools.py
+  F1 SSRF: regex estrita de caminho, ancorada em "/", rejeitando "..", "@", "\",
+     "//" e qualquer esquema; depois disso, ASSERCAO de que
+     urlsplit(url).hostname == "127.0.0.1". O bypass verificado na auditoria
+     (caminho comecando com "@") deixa de existir.
+  F4 /api/auth/* e qualquer DELETE sao negados ANTES de a HMAC ser assinada —
+     a rota que devolve uma API key permanente de privilegio total some da
+     superficie do modelo.
+  F2 Path traversal na ESCRITA: uma unica _safe_document_target() usada pelos
+     dois escritores — basename, whitelist [A-Za-z0-9_-] com teto de 64 chars,
+     e is_relative_to(upload_dir) como confinamento final.
+  F3 _FORBIDDEN_TABLES com limite de palavra rejeita `users` e `chat_messages`;
+     `users` sai de get_database_schema (o modelo nao ve mais o que nao pode ler).
+  F5 O engine readonly se RECUSA a existir quando ENVIRONMENT != development e
+     DATABASE_READONLY_URL == DATABASE_URL; run_select_query devolve erro claro.
+     FAIL-CLOSED por decisao: sem DSN readonly real, a ferramenta SQL fica
+     desligada em producao.
+  F6 _ALLOWED_STATUS_VENDA = {em_negociacao, venda, perda} aplicado em
+     update_lead_status E em create_lead; as quatro tools de escrita passam a
+     recusar quando get_ai_user_context() esta vazio.
+  F7 flag_modified(lead, "campos_personalizados") — sem isso o SQLAlchemy nao
+     detectava a mutacao in-place e o dado era descartado no commit.
+- app/routers/ai.py
+  F8 Limiter local deletado; passa a importar app.limiter.limiter (havia DOIS
+     limitadores, e o local nao compartilhava contagem com o resto do app).
+  F9 Cinco `except:` nus estreitados + logger.exception; strings de excecao
+     deixam de ser serializadas para dentro do contexto do modelo; texto final
+     vazio agora levanta HTTPException(502) nomeando as tools que ja rodaram,
+     com `except HTTPException: raise` para o handler externo nao reescrever
+     como 500 generico.
+
+TESTS (todos exit 0)
+  tests/test_ai_tool_hardening.py ......... OK (10 testes)
+  tests/test_perpetua_internal_auth.py .... OK
+  tests/test_perpetua_pdf_generation.py ... 16/16
+  tests/test_security_greps.py ............ OK
+
+PRE-FIX PROOF
+  F7: com flag_modified monkeypatchado para no-op, o teste falha com
+      "motivo_perda descartado: {...}" — prova de que a correcao e a causa.
+  F5: rodando com ENVIRONMENT=production e sem DATABASE_READONLY_URL, o engine
+      e None e a tool devolve o erro de configuracao.
+
+NOT_DONE (com razao tecnica)
+- F6 estrutural: as quatro tools ainda abrem SessionLocal() e mutam o ORM direto.
+  Rotea-las por call_internal_api (para herdarem authz, filtro de posse, auditoria
+  e efeitos n8n) e reescrita de ~130 linhas mais cobertura de rota nova. So a
+  whitelist e o guard de contexto de usuario entraram.
+- F3 real e acao de OPERADOR: docker/postgres/init.sql:21 concede
+  SELECT ON ALL TABLES a crm_readonly. A denylist e camada de aplicacao; o que
+  fecha de fato e revogar SELECT em users e chat_messages no banco.
+- F5 idem: DATABASE_READONLY_URL precisa apontar para um DSN crm_readonly real
+  no ambiente de deploy.
+
+NOTES / repasses
+- Restam dois `except:` nus em ai_tools.py (fallbacks de json em call_internal_api,
+  ~569/575) e um `except: pass` no loop de largura de coluna do Excel (~685).
+  Nao pertencem a nenhum finding desta tarefa; deixados intactos para manter o
+  diff no alvo. REGISTRADO como divida.
+- app/schemas/lead.py continha NUL transitoriamente durante a execucao (escrita
+  concorrente do orquestrador) e quebrou uma rodada de teste; resolveu-se sozinho
+  e esta limpo. [ORQUESTRADOR: era meu bug, ja corrigido e verificado.]
+- docs/perpetua_pdf_generation.md:80-85 ainda lista DOCUMENT-FILENAME-SECURITY-01
+  como pendente; a metade de ESCRITA esta corrigida, a metade de AUTORIZACAO DE
+  DOWNLOAD (qualquer usuario logado busca qualquer arquivo gerado) continua aberta.
+- docstrings de update_lead_status/create_lead anunciavam 'arquivado' ao modelo;
+  atualizadas para bater com a whitelist.
+- MUDANCA DE COMPORTAMENTO PARA O FRONT: /api/ai/chat nao devolve mais 200 com
+  uma string de desculpa quando o modelo volta vazio. templates/ai.html precisa
+  tratar nao-200. [ORQUESTRADOR: verificado — ver VERIFICACAO.md]

@@ -1,0 +1,62 @@
+RELATORIO W2-C — kanban operacional
+Arquivos: templates/operational/kanban.html, boards.html, pending.html,
+          tests/test_operational_ui_hardening.py (NOVO)
+
+CHANGES
+- kanban.html — bloco de scripts reescrito.
+  F1  Auth.requireAuth() no topo; as ~23 chamadas migradas de fetch cru para
+      Auth.apiRequest (token lido POR REQUISICAO — o snapshot unico da variavel
+      foi deletado; retorno null = 401 ja tratado); ramo else com mensagem visivel
+      em todas. Falha ao carregar o quadro agora pinta erro em #kanbanContainer em
+      vez de deixar "Carregando quadro..." para sempre.
+  F2  /api/users -> /api/users/for-select, lendo data.users (contrato correto).
+  F3+F9 esc() aplicado nas seis interpolacoes que faltavam (nome de usuario, nome
+      de campo, valor corrente em dois atributos aspeados, value e texto de option,
+      acao do historico); historico montado em array e atribuido de uma vez.
+  F4  saveCustomField confere a resposta, restaura o ultimo valor confirmado pelo
+      servidor (fieldSavedValues) e alerta na falha.
+  F5  drop le o corpo, trata status === "no_change", mostra detail em nao-ok,
+      re-sincroniza sempre via fetchCards(); catch vazio eliminado.
+  F6  setSubmitting() desabilita/reabilita o botao em finally nos tres forms
+      (+ select de responsavel e botao de arquivar).
+  F7  checkbox passa `this` e e revertido em caso de falha.
+  F8  openCardDetails usa cardDetailSeq monotonico, so define activeCardId apos
+      fetch bem-sucedido, e passa cardId as cinco sub-requisicoes, que descartam
+      resposta obsoleta.
+  F10 comentario marcando a checagem de role como cosmetica (a autoridade e o backend).
+- boards.html — F11 guard de submit + finally; mensagem de falha ramificando em
+  403 / 422 / outro; retorno null silencioso. F13 wrapper .content-area interno removido.
+- pending.html — F12 override global de .content-area trocado por .pending-grid com
+  escopo de pagina, mais media query em 900px colapsando para uma coluna e
+  liberando max-height. F13 wrapper interno removido.
+
+TESTS
+  tests/test_operational_ui_hardening.py ... 24/24 OK
+  tests/test_kanban_ui.py .................. OK (inalterado)
+  tests/test_render_templates.py ........... OK
+  tests/test_notifications_ui.py ........... OK
+  tests/test_security_greps.py ............. OK
+  extra: node --check sobre o JS renderizado dos tres templates .... OK
+
+CONFLICTING_TESTS: nenhum.
+
+NOT_DONE: nada de F1-F13.
+
+NOTES / repasses
+- O teste novo e METADE COMPORTAMENTAL: extrai esc, fetchUsers, fetchAssignees,
+  fetchCustomFields e fetchHistory do template e os executa sob `node` com stub de
+  DOM contra dois payloads (uma tag img com onerror e uma quebra de atributo com
+  onmouseover), afirmando que o HTML produzido e inerte. Faz assert quando `node`
+  falta, em vez de SKIP. A checagem de paridade response.ok/else casa chaves e
+  exige >= 20 ocorrencias, entao apagar uma checagem tambem falha. A remocao de
+  comentarios cobre // e barra-asterisco — correcao comentada nao passa.
+- app/routers/operational_flow.py:38-45 — o move para a mesma lista devolve
+  JSONResponse com {"status":"no_change"} contornando o response_model declarado
+  (CardMovementResponse): o OpenAPI documenta um formato que o endpoint as vezes
+  nao devolve. O front agora tolera os dois; o backend continua incoerente.
+- app/routers/operational_flow.py:47-49 — comentario afirma que o caso "ja esta na
+  posicao" e levantado; o service devolve None. Comentario obsoleto.
+- Sem chave de idempotencia em POST /api/operational/cards, /lists e
+  /cards/{id}/comments. O front agora barra o duplo clique, mas um retry ou uma
+  segunda aba ainda cria duplicata no servidor.
+- /api/users continua require_admin — intocado; o kanban era o unico mau uso.

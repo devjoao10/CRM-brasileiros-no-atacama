@@ -17,12 +17,12 @@
         .stat-icon.orange { background: rgba(221, 107, 32, 0.1); }
         .stat-icon.green { background: rgba(56, 161, 105, 0.1); }
         .stat-icon.red { background: rgba(229, 62, 62, 0.1); }
-        .stat-value { font-size: var(--font-size-2xl); font-weight: var(--font-weight-bold); color: var(--color-dark); line-height: 1; }
+        .stat-value { font-size: var(--font-size-2xl); font-weight: var(--fw-bold); color: var(--color-dark); line-height: 1; }
         .stat-label { font-size: var(--font-size-sm); color: var(--color-dark-500); margin-top: var(--space-1); }
 
         .charts-row { display: grid; grid-template-columns: 2fr 1fr; gap: var(--space-6); margin-bottom: var(--space-8); }
         .chart-card { background: var(--color-white); border-radius: var(--radius-xl); padding: var(--space-6); box-shadow: var(--shadow-sm); }
-        .chart-title { font-size: var(--font-size-lg); font-weight: var(--font-weight-semibold); margin-bottom: var(--space-6); color: var(--color-dark); }
+        .chart-title { font-size: var(--font-size-lg); font-weight: var(--fw-semibold); margin-bottom: var(--space-6); color: var(--color-dark); }
 
         .dataTable { width: 100%; border-collapse: collapse; }
         .dataTable th { text-align: left; padding: var(--space-3) 0; border-bottom: 2px solid var(--color-dark-100); color: var(--color-dark-500); font-weight: 500; font-size: 13px; }
@@ -132,6 +132,11 @@
         document.addEventListener('DOMContentLoaded', () => {
             if (!Auth.requireAuth()) return;
             const user = Auth.getUser();
+            // AUDIT-2026-08-W2A (F12): esta checagem e COSMETICA. O `role` vem do
+            // blob `crm_user` do localStorage, que o proprio usuario edita; quem
+            // quiser continua chamando /api/analytics/reports direto. Vale como UX
+            // (evita a pagina quebrada para quem nao tem dados), nunca como controle
+            // de acesso — a autorizacao de verdade e o require_admin no router.
             if (user && user.role !== 'admin') {
                 alert("Acesso restrito para administradores.");
                 window.location.href = "/dashboard";
@@ -207,6 +212,11 @@
             });
         }
 
+        // AUDIT-2026-08-W2A (F4): as chaves de `data.breakdown.*` sao valores de
+        // campo do lead e nomes de tag — dado que qualquer usuario comum (ou a
+        // integracao n8n/WhatsApp) escreve — e entravam no innerHTML sem escape
+        // nenhum: esta pagina nao tinha helper. Como o relatorio e restrito a admin,
+        // o payload caia justamente no navegador de maior privilegio.
         function renderTableGeneric(dataObj, total, tableId, emptyMsg) {
             const tbody = document.querySelector(`#${tableId} tbody`);
             tbody.innerHTML = '';
@@ -221,11 +231,16 @@
                 const vol = dataObj[k];
                 const perc = total > 0 ? ((vol / total) * 100).toFixed(1) : 0;
                 tbody.innerHTML += `<tr>
-                    <td><span style="background:var(--color-dark-100); padding:2px 8px; border-radius:12px; font-weight:500;">${k}</span></td>
+                    <td><span style="background:var(--color-dark-100); padding:2px 8px; border-radius:12px; font-weight:500;">${esc(k)}</span></td>
                     <td><b>${vol}</b></td>
                     <td>${perc}%</td>
                 </tr>`;
             }
         }
+
+        // AUDIT-2026-08-W2A (F4): mesmo helper das paginas irmas (tags, tarefas,
+        // equipes). Correto para TEXTO HTML e para valor de atributo entre aspas —
+        // que e o unico uso aqui. Nao serve para literal de string JS dentro de on*.
+        function esc(str) { if (!str) return ''; const d = document.createElement('div'); d.textContent = str; return d.innerHTML.replace(/\"/g, '&quot;').replace(/'/g, '&#39;'); }
     </script>
 {% endblock %}
