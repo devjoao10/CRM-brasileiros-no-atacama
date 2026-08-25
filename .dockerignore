@@ -1,4 +1,22 @@
-.env
+# AUDIT-2026-08-W1E (F7/F8): o contexto de build assava a maquina do dev dentro
+# da imagem de PRODUCAO. Sem regra de *.db, um `docker compose build` local
+# levava scratch/ (bancos SQLite de teste com leads, users e hashes de senha
+# reais) e docs/ (que continha a API key vazada) para dentro do container.
+# Mantido em paridade com conversas/.dockerignore — as duas listas divergiram
+# uma vez e foi assim que o buraco apareceu.
+
+# Segredos
+.env*
+
+# Bancos locais / dumps
+*.db
+*.sqlite3
+*.sql
+*.sql.gz
+*.dump
+backups/
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -7,7 +25,14 @@ __pycache__/
 env/
 venv/
 .venv/
+
+# Versionamento e artefatos de dev
 .git/
 .gitignore
+.github/
+scratch/
+graphify-out/
+docs/
+tests/
 n8n/
 uploads/

@@ -1,4 +1,18 @@
-.env
+# AUDIT-2026-08-W1E (F7/F8): mesma lista do .dockerignore da raiz. Divergencia
+# entre os dois arquivos ja deixou banco de dev entrar na imagem do CRM.
+
+# Segredos
+.env*
+
+# Bancos locais / dumps
+*.db
+*.sqlite3
+*.sql
+*.sql.gz
+*.dump
+backups/
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -7,7 +21,11 @@ __pycache__/
 env/
 venv/
 .venv/
+
+# Versionamento e artefatos de dev
 .git/
 .gitignore
-*.db
-*.sqlite3
+scratch/
+graphify-out/
+docs/
+tests/
