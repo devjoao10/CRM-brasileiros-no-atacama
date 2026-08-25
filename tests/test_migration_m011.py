@@ -7,6 +7,15 @@ destruido aqui dentro.
 
 Rodar:  python tests/test_migration_m011.py
 
+JOB DO CI: este arquivo cai no job `crm` (nao contem o literal CONVERSAS_DIR,
+que e o discriminador em .github/workflows/test.yml). E deliberado, apesar de
+ele montar o schema dos DOIS servicos: os unicos pacotes que
+conversas/requirements.txt tem a mais sao `httpx` — que o job crm ja instala
+explicitamente, para o TestClient — e `pydantic`, que vem como dependencia
+transitiva do fastapi. Ou seja, o ambiente do job crm cobre os dois lados; o do
+job conversas nao cobriria o do CRM (faltariam slowapi, passlib, bcrypt,
+google-generativeai e outros sete).
+
 Por que isto existe: `RELEASE_READINESS.md` afirma que a m011 "detecta
 duplicatas e se recusa a continuar, sem apagar nada". Essa afirmacao vale zero
 se vier de ter LIDO o script. A migration e a unica peca desta entrega feita
