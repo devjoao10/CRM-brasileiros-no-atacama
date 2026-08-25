@@ -149,6 +149,17 @@ Ações:
   revogar o `SELECT` no banco.
 - `docker/postgres/init-hardening.sh` só roda em volume novo — em produção ele
   **nunca rodou**. Precisa ser aplicado à mão.
+
+> **A `m011` foi EXECUTADA, não só lida.** `tests/test_migration_m011.py` monta o
+> schema real dos dois serviços num SQLite descartável, **remove os índices
+> únicos** para reproduzir o estado de produção (onde o schema nasceu de um
+> `create_all()` anterior a esta auditoria) e roda o script nos dois cenários:
+> banco limpo → cria os quatro índices, sai 0, e a segunda execução não muda
+> nada; banco com duas conversas do mesmo número → **exit 2, índice não criado,
+> nenhuma linha apagada nem deduplicada**, e a saída diz o que reconciliar.
+> Isso continua **não** sendo permissão para rodá-la em produção: rode primeiro
+> contra uma cópia do dado real, porque só lá aparecem as duplicatas que
+> existirem.
 - `DATABASE_READONLY_URL` precisa apontar para um DSN `crm_readonly` real. Sem
   isso, a ferramenta SQL da IA fica **desligada** em produção — fail-closed
   deliberado desta auditoria (`app/services/ai_tools.py`, F5).
