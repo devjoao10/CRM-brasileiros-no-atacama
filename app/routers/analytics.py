@@ -9,12 +9,17 @@ from app.models.lead import Lead
 from app.models.pipeline import Funnel, FunnelEntry, LeadHistory
 from app.models.task import Task
 from app.models.user import User
-from app.auth import get_current_user
+from app.auth import get_current_user, require_admin
 
 router = APIRouter(prefix="/api/analytics", tags=["Analytics"])
 
+# AUDIT-2026-08-W2G (F13): teto da janela de /reports. O endpoint materializa
+# TODOS os leads do período em memória junto com tags e funnel_entries; sem
+# teto, `start_date=1900-01-01` carrega a tabela inteira e derruba o worker.
+MAX_REPORT_DAYS = 366
+
 @router.get("/dashboard")
-async def get_dashboard_analytics(
+def get_dashboard_analytics(
     start_date: Optional[date] = Query(None, description="Data inicial do período (YYYY-MM-DD)"),
     end_date: Optional[date] = Query(None, description="Data final do período (YYYY-MM-DD)"),
     current_user: User = Depends(get_current_user),
@@ -112,16 +117,39 @@ async def get_dashboard_analytics(
 
 
 @router.get("/reports")
-async def get_detailed_reports(
+def get_detailed_reports(
     start_date: Optional[date] = Query(None, description="Data inicial do período (YYYY-MM-DD)"),
     end_date: Optional[date] = Query(None, description="Data final do período (YYYY-MM-DD)"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db)
 ):
+    """Relatório consolidado da empresa inteira — **somente admin**.
+
+    AUDIT-2026-08-W2G (F1): dependia só de `get_current_user`. O "apenas admin"
+    existia unicamente no navegador (`templates/relatorios.html`, a partir do
+    blob `crm_user` do localStorage, que o próprio usuário controla), então
+    qualquer conta autenticada lia todos os leads, vendas, perdas e os recortes
+    de tag/funil batendo direto em /api/analytics/reports.
+
+    AUDIT-2026-08-W2G (F12): era `async def` fazendo I/O SÍNCRONO do
+    SQLAlchemy — o endpoint mais pesado do app rodava NO event loop e travava
+    todas as outras requisições do worker enquanto durasse. Como `def` puro, o
+    FastAPI o joga na threadpool (mesmo padrão já usado em leads/pipeline).
+    """
     if not end_date:
         end_date = date.today()
     if not start_date:
         start_date = end_date - timedelta(days=29)
+
+    # AUDIT-2026-08-W2G (F13): guarda de intervalo que só o endpoint irmão
+    # /dashboard tinha, mais o teto de janela.
+    if start_date > end_date:
+        raise HTTPException(status_code=400, detail="start_date não pode ser maior que end_date.")
+    if (end_date - start_date).days > MAX_REPORT_DAYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Período muito longo: máximo de {MAX_REPORT_DAYS} dias por relatório.",
+        )
 
     start_dt = datetime.combine(start_date, time.min)
     end_dt = datetime.combine(end_date, time.max)
@@ -156,8 +184,11 @@ async def get_detailed_reports(
     
     for l in all_leads:
         # Time series
-        d_str = l.created_at.strftime("%Y-%m-%d")
-        if d_str in status_by_day:
+        # AUDIT-2026-08-W2G (F13): `created_at` é nullable — sem esta guarda o
+        # relatório inteiro morria com AttributeError em uma única linha antiga
+        # importada sem data.
+        d_str = l.created_at.strftime("%Y-%m-%d") if l.created_at else None
+        if d_str and d_str in status_by_day:
             if l.status_venda in status_by_day[d_str]:
                 status_by_day[d_str][l.status_venda] += 1
                 

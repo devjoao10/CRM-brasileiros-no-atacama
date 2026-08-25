@@ -1,6 +1,7 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -18,11 +19,16 @@ from app.auth import get_current_user, require_admin
 
 router = APIRouter(prefix="/api/tags", tags=["Tags"])
 
+# AUDIT-2026-08-W2G (F12): handlers deste router são `def` puros, não
+# `async def` — fazem I/O SÍNCRONO do SQLAlchemy, que como `async` rodava no
+# event loop e travava as demais requisições do worker. Sendo `def`, o FastAPI
+# executa na threadpool (mesmo padrão de leads.py/pipeline.py).
+
 
 # ─── Tags CRUD ───────────────────────────────────────────
 
 @router.get("", response_model=TagListResponse, summary="Listar todas as tags")
-async def list_tags(
+def list_tags(
     search: Optional[str] = Query(None, description="Busca por nome"),
     skip: int = Query(0, ge=0, description="Registros para pular"),
     limit: int = Query(100, ge=1, le=500, description="Máximo de registros"),
@@ -47,7 +53,7 @@ async def list_tags(
 
 
 @router.get("/{tag_id}", response_model=TagResponse, summary="Detalhes de uma tag")
-async def get_tag(
+def get_tag(
     tag_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -59,7 +65,7 @@ async def get_tag(
 
 
 @router.post("", response_model=TagResponse, status_code=201, summary="Criar tag")
-async def create_tag(
+def create_tag(
     data: TagCreate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -78,13 +84,24 @@ async def create_tag(
 
     tag = Tag(nome=data.nome, cor=data.cor)
     db.add(tag)
-    db.commit()
+    # AUDIT-2026-08-W2G (F7): o check acima é só fast path. `tags.nome` tem
+    # índice único no banco: dois POSTs concorrentes (retry do n8n, dois
+    # operadores) passavam os dois pelo check e o segundo virava 500 opaco com a
+    # transação abortada e sem caminho de rollback. O contrato aqui é 409.
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Já existe uma tag com este nome"
+        )
     db.refresh(tag)
     return TagResponse.model_validate(tag)
 
 
 @router.put("/{tag_id}", response_model=TagResponse, summary="Atualizar tag")
-async def update_tag(
+def update_tag(
     tag_id: int,
     data: TagUpdate,
     current_user: User = Depends(get_current_user),
@@ -107,13 +124,22 @@ async def update_tag(
     for field, value in update_data.items():
         setattr(tag, field, value)
 
-    db.commit()
+    # AUDIT-2026-08-W2G (F7): mesma corrida do create — renomear para um nome que
+    # outra transação acabou de gravar bate no mesmo índice único.
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Já existe uma tag com este nome"
+        )
     db.refresh(tag)
     return TagResponse.model_validate(tag)
 
 
 @router.delete("/{tag_id}", summary="Excluir tag")
-async def delete_tag(
+def delete_tag(
     tag_id: int,
     current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
@@ -131,7 +157,7 @@ async def delete_tag(
 # ─── Lead-Tag Association ────────────────────────────────
 
 @router.put("/lead/{lead_id}", summary="Definir tags de um lead")
-async def set_lead_tags(
+def set_lead_tags(
     lead_id: int,
     data: LeadTagsUpdate,
     current_user: User = Depends(get_current_user),
@@ -166,7 +192,7 @@ async def set_lead_tags(
 
 
 @router.get("/lead/{lead_id}", summary="Tags de um lead")
-async def get_lead_tags(
+def get_lead_tags(
     lead_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
