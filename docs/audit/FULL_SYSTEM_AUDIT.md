@@ -242,6 +242,47 @@ mencionam `META_APP_SECRET`; todos o definem vazio, para desligar a verificaçã
 
 ---
 
+## 8b. FASE 2 — o que a evidência externa mudou nesta auditoria (2026-08-25)
+
+Os três workflows n8n **realmente em produção** foram fornecidos. Isso corrigiu
+premissas que esta auditoria carregava desde o começo.
+
+**A arquitetura n8n descrita nas seções acima estava desatualizada.** Em
+produção existem **três** workflows, não seis. Não estão em produção:
+**Notificador**, **Gerente Autônomo de Tarefas IA**, **Analista de Métricas**,
+**Envio de Tarefas por Responsável** e **Notificação WhatsApp**. E existe um que
+esta auditoria **nunca viu**: *Formulário do Site → CRM BnA*, com webhook público
+próprio e escrita no CRM.
+
+**Um finding CRITICAL desta auditoria estava errado sobre a produção.** "Um
+webhook entrega método E URL à escolha de um LLM" descrevia o
+`Gerente_Autonomo_de_Tarefas_IA`, que **não roda**. Nos três workflows atuais
+toda URL de ferramenta é string fixa. O finding foi marcado OBSOLETE, junto de
+outros dois do mesmo workflow, e um quarto virou FALSE_POSITIVE.
+
+**A Bia melhorou muito e a auditoria não sabia.** O workflow passou de 7 para 14
+nós, todos de defesa: portão para mensagem só de emoji, validação da saída contra
+vazamento de termo interno, fallback de erro, base de conhecimento como
+subworkflow. O `Agente Gerenciador de Leads`, ao contrário, **não mudou em nada
+estrutural** — e é onde estão os dois CRITICAL desta fase.
+
+**A separação entre "fila humana" e "notificar atendente" já está codificada no
+produto.** O system message da Bia proíbe, em quinze formulações, afirmar que um
+atendente foi notificado, e manda explicar que o atendimento é por ordem de
+chegada. O nó `Tool Acionar Notificador` que sobrou no Gerenciador contradiz isso
+e aponta para um workflow que não existe mais.
+
+**E dois defeitos graves foram encontrados no trabalho da FASE 1 desta própria
+auditoria:** o script de backup "corrigido" abortaria todo backup real (SIGPIPE +
+`pipefail` invertendo a guarda), e a guarda anti-CR não funcionava fora do Linux.
+O teste da Fase 1 não pegou porque verificava o **texto** do script e nunca o
+**executava** — a mesma classe de defeito que esta auditoria mais denunciou.
+
+Detalhe em `N8N_CURRENT_STATE_RECONCILIATION.md`, `POSTGRES_VALIDATION.md` e
+`BACKUP_RESTORE_VALIDATION.md`.
+
+---
+
 ## 9. Estado da estabilização
 
 Ver `FULL_SYSTEM_STABILIZATION_PLAN.md` para as waves e

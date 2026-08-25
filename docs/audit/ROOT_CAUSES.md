@@ -321,3 +321,41 @@ altitude vale) — não é inferível do código. Documentado como bloqueio de p
 | ROOT-012 | corrigir os scripts | re-executar hardening / `NOSUPERUSER` |
 | ROOT-013 | remover o literal + guard | **rotacionar a chave, purgar o histórico** |
 | ROOT-014 | — | **decisão de negócio** |
+
+
+---
+
+## FASE 2 (2026-08-25) — causas raiz acrescentadas pela evidência externa
+
+**ROOT-015 — o repositório não é fonte de verdade sobre o n8n.**
+Os workflows versionados em `n8n/workflows/` divergem do que roda. Três dos seis
+snapshots não estão em produção, e um workflow de produção não estava versionado.
+Toda conclusão da Fase 1 sobre n8n herdou esse erro. Findings que dependem dela:
+F-019 a F-026, e a descrição inteira da arquitetura de automação.
+*Correção estrutural:* versionar o export a cada alteração, ou aceitar que
+qualquer auditoria de n8n exige export fresco como entrada.
+
+**ROOT-016 — a suíte roda num dialeto e a produção em outro, e a diferença não é
+só de sintaxe.** Não é apenas "faltam testes em PostgreSQL": há código que a
+suíte **não pode executar** (`NOW()`, `::jsonb` em `crm.py`), classificação de
+erro que muda de classe entre dialetos e decide se a Meta reentrega uma mensagem,
+e defaults de ordenação **opostos**. Três dos nove achados dessa família eram
+falhas silenciosas em produção com a suíte verde.
+*Correção estrutural:* um PostgreSQL no CI. Enquanto não houver, toda afirmação
+de cobertura sobre esses caminhos é sobre o SQLite, não sobre o produto.
+
+**ROOT-017 — verificação por grep chamada de teste.**
+`test_filter_normalization_and_backup.py` afirmava a integridade do backup
+conferindo se a string `"gzip -t"` existia no arquivo. O script, quando
+executado, abortava todo backup real. Esta causa é a mesma de F-172, F-173,
+F-182, F-184 e F-185 — e desta vez ela produziu um defeito no trabalho da própria
+auditoria. *Correção estrutural:* um teste que não executa o artefato não pode
+afirmar nada sobre o comportamento dele.
+
+**ROOT-018 — string vazia e null tratados como sinônimos numa API com dois
+consumidores que os usam com sentidos opostos.** O n8n manda `""` para "não
+coletei"; a interface manda `null` para "limpe". `LeadUpdate` colapsava os dois em
+`None`, e `exclude_unset` não podia mais distinguir. Resultado: 422 no `nome`,
+apagamento silencioso de `whatsapp` e `destinos`. *Correção estrutural:* quando
+dois clientes falam a mesma API, a semântica de "ausente" tem de ser explícita no
+contrato, não emergente do validador.

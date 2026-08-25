@@ -1,0 +1,35 @@
+base = d4831486b767
+ANTES : 129 modulos, 343 arestas de import interno
+DEPOIS: 134 modulos, 353 arestas de import interno
+delta: +5 modulos, +10 arestas
+
+arestas NOVAS (10):
+  app.routers.ai -> app.limiter
+  app.routers.auth -> app.config
+  app.routers.tasks -> app.models.lead
+  app.schemas.user -> app.models.user
+  conversas.app.routers.pages -> conversas.app.auth
+  conversas.app.routers.pages -> conversas.app.database
+  docs.audit.evidencia_fase2.payloads_reais -> app.main
+  docs.audit.evidencia_fase2.payloads_reais -> app.schemas.lead
+  docs.audit.evidencia_fase2.payloads_reais -> app.schemas.pipeline
+  docs.audit.evidencia_fase2.payloads_reais -> app.schemas.task
+
+arestas REMOVIDAS (0):
+
+fronteira entre servicos (violacao = qualquer linha abaixo):
+  nenhuma — os dois servicos continuam sem se importar
+
+in-degree dos modulos de maior blast radius:
+   41 (+0)  app.database
+   26 (+1)  app.models.user
+   24 (+1)  conversas.app.database
+   22 (+0)  app.auth
+   20 (+1)  app.config
+   14 (+1)  conversas.app.auth
+   10 (+0)  conversas.app.services
+    9 (+0)  conversas.app.config
+    8 (+0)  app.models.tag
+    8 (+0)  conversas.app.models.conversation
+    8 (+0)  app.models.operational.notification
+    8 (+1)  app.models.lead

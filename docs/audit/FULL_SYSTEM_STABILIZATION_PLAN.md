@@ -100,3 +100,74 @@ reportar arquivo:linha para adjudicação.
   explícita — ainda assim ele fecha `frame-ancestors`, `object-src` e `base-uri`.
 - **Não** decide preço, prazo de reembolso ou regra de altitude para menores de
   7 anos. São decisões de negócio.
+
+
+---
+
+# FASE 2 — plano reconciliado (2026-08-25)
+
+Escrito **depois** de ter os três workflows de produção na mão. O plano das waves
+1–3 acima continua válido como registro; o que muda é a priorização, porque a
+evidência nova invalidou parte dela e revelou o que realmente quebra.
+
+## O que a evidência nova fez com o plano anterior
+
+- **Saiu do plano:** tudo que dependia de `Gerente Autônomo de Tarefas IA`,
+  `Notificador`, `Analista de Métricas`, `Envio de Tarefas por Responsável` e
+  `Notificação WhatsApp` — nenhum está em produção. Isso inclui o CRITICAL "o LLM
+  escolhe método e URL".
+- **Entrou no plano:** o workflow *Formulário do Site → CRM BnA*, que nunca havia
+  sido auditado e escreve no CRM a partir de um webhook público.
+- **Mudou de dono:** três correções que pareciam de código são de **operador**
+  (M1, M2, M4 em `N8N_MANUAL_CHANGES.md`), e uma que parecia de operador era de
+  código (o 422 do `PUT /api/leads`).
+
+## WAVE 4 — executada nesta fase
+
+| Tarefa | Arquivos | Estado |
+|---|---|---|
+| Contrato `PUT /api/leads` com o n8n | `app/schemas/lead.py`, `app/routers/leads.py` | feito, `tests/test_n8n_contract_lead_update.py` |
+| Silêncio ≠ falha na ponte Conversas↔Bia | `conversas/app/routers/webhook.py` | **metade** — a outra é M3 |
+| Reverter o risco de disponibilidade do `StageSchema.id` | `app/schemas/pipeline.py` | feito |
+| Classificação de erro dialeto-dependente | `conversas/app/routers/webhook.py` | feito, `tests/test_postgres_dialect_divergence.py` |
+| `SELECT ... INTO` na denylist da IA | `app/services/ai_tools.py` | feito |
+| Ordenação de NULL na fila legada | `conversas/app/routers/conversations.py` | feito |
+| Corrida de primeiro contato, antes da m011 | `conversas/app/routers/webhook.py` | feito |
+| Backup executado de verdade | `scripts/backup_postgres.sh` | feito, 2 defeitos graves corrigidos |
+
+## WAVE 5 — o operador, e só ele
+
+Não há tarefa de código aqui. `docs/audit/N8N_MANUAL_CHANGES.md` tem o passo a
+passo. Ordem que eu seguiria:
+
+1. **M1** (um caractere) e **M2** (remover nó morto) — são os dois que estão no
+   caminho da entrada na fila humana. Aplique e observe um dia.
+2. **D4** — verificar o nome do modelo. Se estiver errado, tudo o mais é
+   irrelevante porque os agentes não rodam.
+3. **M3** — fecha a metade que falta do pedido de desculpas por emoji.
+4. **D5** — rotacionar a chave, na ordem descrita (n8n primeiro, revogação por
+   último), senão os três workflows param juntos.
+5. **D1/D2** — autenticar os dois webhooks service-to-service.
+6. **D3** — decidir o que o formulário público pode sobrescrever.
+7. **M4**, **M5**, **D6**, **D7**.
+
+## WAVE 6 — o que fecha o veredito, e ainda não foi feito
+
+| Tarefa | Por que ainda não | O que destrava |
+|---|---|---|
+| PostgreSQL no CI | sem Docker nesta máquina | rodar a suíte no dialeto real, fechando ROOT-016 |
+| `m011` contra clone do dado real | precisa do dump de produção | saber se há duplicatas a reconciliar |
+| Restore real do backup | precisa de PostgreSQL | fechar o último blocker de dado |
+| Cobertura do boundary CRM↔Conversas (F-106) | `auto_link_conversation` está mockado em 10 testes | dar teste às correções de `crm.py`, que hoje não têm nenhum |
+| `FunnelEntry` para lead criado pelo n8n (F-341) | é decisão de produto: o endpoint do CRM cria só o Lead | leads da Bia deixam de nascer fora do Kanban |
+
+## O que este plano deliberadamente NÃO faz
+
+- **Não recria o Notificador**, nem propõe substituto. A fila humana já é o
+  mecanismo, e o prompt da Bia já explica isso ao cliente.
+- **Não edita `n8n/workflows/live_exports/`** — snapshots são registro histórico.
+- **Não refatora a hierarquia de `LeadBase`/`LeadCreate`/`LeadUpdate`**, embora a
+  duplicação de validadores seja real (apontada pelo Caveman). É redesenho do
+  schema mais consumido do sistema, e o teste que a Fase 1 reancorou trava o
+  conjunto de campos — o risco não paga o ganho numa fase de estabilização.
+- **Não decide preço, política de reembolso nem regra de altitude.**
