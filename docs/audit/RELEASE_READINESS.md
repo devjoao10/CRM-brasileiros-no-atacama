@@ -4,7 +4,7 @@ Estado do sistema BnA ao fim da auditoria + estabilização global.
 
 **Branch:** `audit/full-system-stabilization-2026-08-24`
 **Base:** `d4831486b767988ed2b91518167d8c50fbeb636e` (HEAD de `main`)
-**Commits:** 14 · **122 arquivos** · **+10.476 / −793**
+**Commits:** 16 · `124 files changed, 11074 insertions(+), 796 deletions(-)`
 
 > **Nenhum deploy foi feito. Nenhum dado de produção foi tocado. Nenhuma
 > migration foi executada. Nenhum merge foi feito.** Este documento existe para
@@ -221,6 +221,16 @@ escolhido pelo cliente, interpolado **cru em seis atributos**; e `allDestinos`
 agrega o campo `destinos` de todo lead. `tests/test_frontend_injection_contract.py`
 transforma isso em regra que vale para arquivos que ainda não existem.
 
+**O link de verificação de e-mail deixou de ser uma sessão do Conversas.**
+Achado na **reauditoria**, não na leitura: os dois serviços assinam com a mesma
+`SECRET_KEY`, e `app/routers/users.py` emite um token de verificação de e-mail
+que viaja na **query string** de um link — logo, em log de acesso, histórico e
+`Referer`. O CRM passou a exigir `typ: "access"` (W1-A); o `decode_token` do
+Conversas não olhava propósito nenhum. Enquanto isso valeu, **aquele link era
+uma sessão válida do Conversas** — o inbox de WhatsApp inteiro, todas as
+conversas de todos os clientes. Cada wave olhou só o seu serviço; o buraco vivia
+exatamente no meio.
+
 **Sessão parou de ser forjável.**
 O Conversas tinha `SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-change-me")`
 **versionado**. Como os dois serviços validam com a mesma chave e compartilham
@@ -277,6 +287,48 @@ exercitada.** 29 arquivos de teste mencionam `META_APP_SECRET`; todos o definem
 vazio, justamente para desligar a verificação. `tests/test_conversas_webhook_signature.py`
 cobre isso com o segredo ligado, incluindo o check que prova que a assinatura
 cobre os **bytes** e não o JSON.
+
+---
+
+## 6a. Cobertura da REAUDITORIA
+
+A auditoria perguntava "todo arquivo do escopo foi lido?" — 345/345, registrado
+em `AUDIT_COVERAGE.csv`. A reauditoria pergunta outra coisa: **todo arquivo que
+MUDOU foi conferido, e por quem?** A resposta está em `REAUDIT_COVERAGE.csv`,
+linha a linha.
+
+Dos 124 arquivos alterados, 33 são artefatos desta própria auditoria
+(`docs/audit/*`, escritos por mim). Sobram **91 arquivos de código**:
+
+| Evidência | Arquivos | % |
+|---|---:|---:|
+| Diff lido por mim, linha a linha | 72 | 79% |
+| Coberto por teste desta auditoria | 61 | 67% |
+| **Ambos** | 42 | 46% |
+| **Ao menos uma das duas** | **91** | **100%** |
+
+As duas colunas são deliberadamente separadas porque valem coisas diferentes: um
+teste prova comportamento e não vê intenção; uma leitura vê intenção e não prova
+nada em runtime. A coluna de leitura é uma **lista curada, escrita à mão** —
+inferi-la de heurística seria exatamente a cobertura fictícia que esta missão
+proíbe.
+
+A primeira geração dessa planilha acusou 17 arquivos de código sem evidência
+nenhuma. Eles foram lidos na segunda passada, e é por isso que a linha final é
+100% — não porque a régua foi afrouxada.
+
+**Achados dessa segunda passada** (a leitura pagou o custo dela):
+
+- O buraco do token de verificação de e-mail (§5) foi encontrado lendo o diff de
+  `app/auth.py` e perguntando o que acontece do outro lado da chave compartilhada.
+- O guard anti-SSRF foi **sondado**, não aceito: 13 tentativas de bypass —
+  `@`-prefixo (a original), `//`, `%2e%2e`, `\`, fragmento com `#@host`, esquema
+  absoluto — todas recusadas; caminhos legítimos passam.
+- A afirmação de W1-E de que `--forwarded-allow-ips=*` é seguro foi **conferida**
+  contra o `docker-compose.yml`: nenhum serviço publica `ports:`, todos usam
+  `expose:`, então de fato não há caminho até eles que não passe pelo Traefik.
+- Os `async def` trocados por `def` em analytics/tags foram verificados quanto a
+  chamadas internas com `await` — não há nenhuma; são apenas route handlers.
 
 ---
 
