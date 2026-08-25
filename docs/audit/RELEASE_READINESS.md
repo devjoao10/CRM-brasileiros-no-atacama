@@ -4,7 +4,7 @@ Estado do sistema BnA ao fim da auditoria + estabilização global.
 
 **Branch:** `audit/full-system-stabilization-2026-08-24`
 **Base:** `d4831486b767988ed2b91518167d8c50fbeb636e` (HEAD de `main`)
-**Commits:** 18 · `126 files changed, 11408 insertions(+), 796 deletions(-)`
+**Commits:** 20 · `126 files changed, 11450 insertions(+), 796 deletions(-)`
 
 > **Nenhum deploy foi feito. Nenhum dado de produção foi tocado. Nenhuma
 > migration foi executada. Nenhum merge foi feito.** Este documento existe para
