@@ -7,6 +7,44 @@ from app.schemas.tag import TagResponse
 DESTINOS_PRINCIPAIS = ["Atacama", "Uyuni", "Santiago"]
 
 
+# AUDIT-2026-08-W0 — NUL em JSON derruba o filtro de campo personalizado.
+#
+# `Lead.campos_personalizados` e declarado `Column(JSON)`, que no PostgreSQL
+# compila para o tipo `json` (texto). O tipo `json` ACEITA a sequencia \u0000;
+# o tipo `jsonb` NAO. E app/query_filters.py faz `cast(coluna, JSONB)` em TODA
+# linha para poder expandir os pares com jsonb_each_text.
+#
+# Consequencia: UMA unica linha envenenada faz `GET /api/leads?campo_chave=...`
+# e TODO segmento que use campo personalizado responderem 500 para TODOS os
+# usuarios, ate alguem achar e consertar a linha na mao. O CASE de guarda que
+# existe no filtro nao salva — ele roda DEPOIS do cast.
+#
+# A correcao estrutural e migrar a coluna para JSONB (que valida na escrita) e
+# limpar as linhas existentes; isso mexe em dados de producao e esta fora do
+# escopo desta auditoria. O que da para fechar aqui e a PORTA DE ENTRADA: a API
+# e o n8n param de conseguir gravar o caractere.
+def _rejeita_nul(valor, campo: str):
+    """Levanta ValueError se houver NUL em qualquer chave ou valor do dict."""
+    if valor is None:
+        return valor
+    pilha = [valor]
+    while pilha:
+        atual = pilha.pop()
+        if isinstance(atual, str):
+            if "\u0000" in atual:
+                raise ValueError(
+                    f"{campo}: caractere NUL (\u0000) nao e aceito — ele torna a "
+                    "linha impossivel de filtrar no PostgreSQL"
+                )
+        elif isinstance(atual, dict):
+            pilha.extend(atual.keys())
+            pilha.extend(atual.values())
+        elif isinstance(atual, (list, tuple)):
+            pilha.extend(atual)
+    return valor
+
+
+
 class LeadFunnelInfo(BaseModel):
     """Summary of a lead's placement in a funnel."""
     funnel_id: int
@@ -68,7 +106,7 @@ class LeadBase(BaseModel):
                 return json.loads(v)
             except json.JSONDecodeError:
                 return v
-        return v
+        return _rejeita_nul(v, "campo JSON")
 
     @field_validator("data_chegada", "data_partida", mode="before")
     @classmethod
@@ -140,7 +178,7 @@ class LeadUpdate(BaseModel):
                 return json.loads(v)
             except json.JSONDecodeError:
                 return v
-        return v
+        return _rejeita_nul(v, "campo JSON")
 
     @field_validator("data_chegada", "data_partida", mode="before")
     @classmethod

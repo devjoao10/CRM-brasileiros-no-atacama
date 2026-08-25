@@ -13,8 +13,26 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 from app.database import IS_SQLITE
 
-# Mesmo conjunto que str.strip() remove nas bordas.
-_ESPACOS = " \t\n\r\v\f"
+# AUDIT-2026-08-W0 — este conjunto PRECISA bater com o que str.strip() remove.
+#
+# Antes eram so os seis ASCII (" \t\n\r\v\f") sob um comentario afirmando ser "o
+# mesmo conjunto que str.strip() remove". Nao era: str.strip() remove todo
+# caractere com isspace() True, o que inclui NBSP (\xa0), \x1c-\x1f, \x85 e os
+# separadores Unicode do bloco U+2000. A assimetria era invisivel ate alguem
+# colar uma chave do Excel/Word/WhatsApp: o TERMO DE BUSCA perdia o NBSP no
+# .strip() do Python, a CHAVE ARMAZENADA nao perdia no trim() do SQL, e a
+# comparacao " origem" == "origem" dava False — aquela chave virava
+# permanentemente impossivel de filtrar, sem erro nenhum.
+#
+# NBSP na borda e exatamente o que um paste humano produz, entao este era o
+# caso comum, nao o exotico. trim()/btrim() operam sobre CARACTERES (nao bytes)
+# nos dois dialetos, entao os codepoints multibyte abaixo funcionam nos dois.
+_ESPACOS = (
+    " \t\n\r\v\f"
+    "\x1c\x1d\x1e\x1f\x85\xa0"
+    "            "
+    "    　"
+)
 
 
 def campo_personalizado_match(coluna, chave: str, valor: str):
