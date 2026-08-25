@@ -4,7 +4,7 @@ Estado do sistema BnA ao fim da auditoria + estabilização global.
 
 **Branch:** `audit/full-system-stabilization-2026-08-24`
 **Base:** `d4831486b767988ed2b91518167d8c50fbeb636e` (HEAD de `main`)
-**Commits:** 16 · `124 files changed, 11074 insertions(+), 796 deletions(-)`
+**Commits:** 18 · `126 files changed, 11408 insertions(+), 796 deletions(-)`
 
 > **Nenhum deploy foi feito. Nenhum dado de produção foi tocado. Nenhuma
 > migration foi executada. Nenhum merge foi feito.** Este documento existe para
@@ -29,8 +29,8 @@ O veredito formal está na seção 9.
 
 | Gate | Baseline (antes) | Agora |
 |---|---|---|
-| Suíte (um processo por arquivo, como o CI) | **51/51 PASS** (51 arquivos) | **63/63 PASS** (63 arquivos) |
-| Arquivos de teste | 51 | 63 (**+12**) |
+| Suíte (um processo por arquivo, como o CI) | **51/51 PASS** (51 arquivos) | **64/64 PASS** (64 arquivos) |
+| Arquivos de teste | 51 | 64 (**+13**) |
 | Lint | não existe | não existe |
 | Typecheck | não existe | não existe |
 | E2E / navegador | não existe | não existe |
@@ -374,6 +374,39 @@ Nenhum módulo de alto blast radius cresceu mais que `+1` de in-degree
 (`app.database` 41, `+0`; `app.auth` 22, `+0`). Não houve deriva arquitetural, e
 **os dois serviços continuam sem se importar** — a fronteira que a auditoria
 mapeou segue de pé.
+
+---
+
+## 6c. Uma correção que eu decidi NÃO fazer
+
+`app/routers/segments.py` (F-054, HIGH, CONFIRMED): `get_segment_leads` e
+`preview_segment` fazem `.all()` no conjunto filtrado INTEIRO e só então fatiam
+em Python (`unique_leads[skip:skip+limit]`). Com 19 mil leads, devolver 100
+carrega 19 mil objetos ORM. E não há critério de desempate, então a paginação é
+instável quando `created_at` empata. É o mesmo anti-padrão que `leads.py:398`
+documenta como já corrigido em outro lugar.
+
+**Não corrigi, de propósito.** O `.all()` existe porque o `joinedload(Lead.tags)`
+duplica linhas de `Lead`, e é por isso que a deduplicação acontece em Python. A
+correção certa é paginar por ID numa query leve e só então carregar os objetos —
+e é aí que mora a armadilha:
+
+```sql
+SELECT DISTINCT leads.id ... ORDER BY leads.created_at DESC
+```
+
+O SQLite aceita. O **PostgreSQL recusa**: *"for SELECT DISTINCT, ORDER BY
+expressions must appear in select list"*. Toda a suíte deste repositório roda em
+SQLite (§7). Eu escreveria a correção, ela passaria verde aqui, e quebraria a
+listagem de segmentos em produção — na rota que o n8n usa antes de disparar
+mensagem.
+
+Trocar um problema de desempenho por uma falha de dialeto **não verificável neste
+ambiente** não é estabilizar. Fica registrado com a armadilha nomeada, para quem
+fizer a correção com um PostgreSQL na frente: selecione `Lead.id` **e**
+`Lead.created_at` no `with_entities`, para que as duas colunas do `ORDER BY`
+estejam na lista do `SELECT DISTINCT`; e confira antes se o caminho de
+`tag_mode="all"` já traz `GROUP BY`/`HAVING`, porque isso muda a forma da query.
 
 ---
 
