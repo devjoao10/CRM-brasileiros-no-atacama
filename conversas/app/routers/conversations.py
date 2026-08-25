@@ -6,14 +6,14 @@ Includes responsavel (owner) management and CRM integration.
 import logging
 from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import set_committed_value
-from sqlalchemy import and_, desc, func, update as sa_update
+from sqlalchemy import and_, case, desc, func, or_, update as sa_update
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.auth import get_current_user, User
+from app.auth import get_current_user, is_admin_role, User
 from app.models.conversation import Conversation, Message, service_window_open
 from app.schemas.conversation import (
     ConversationResponse,
@@ -44,6 +44,12 @@ router = APIRouter(prefix="/api/conversations", tags=["Conversas"])
 # status='aguardando' persistido. Ate a normalizacao (m007, opcional), essas
 # linhas sao tratadas como ABERTAS em todos os filtros derivados.
 LEGACY_OPEN_STATUSES = ("aberta", "aguardando")
+
+# AUDIT-2026-08-W2F (F12) — tetos dos payloads de POLLING (5s por aba aberta).
+# Nao sao paginacao: sao limites de seguranca para que o custo de um poll nao
+# cresca com a idade do inbox nem com o tamanho do historico.
+UNREAD_MAP_LIMIT = 200
+CONVERSATION_MESSAGES_LIMIT = 200
 
 # ─── CONV-WINDOW-01: janela de 24h da Meta ────────────────────────────
 # O BACKEND e a autoridade. O frontend desabilita o composer por UX, mas quem
@@ -257,6 +263,64 @@ def _apply_human_state(
         conversation.queued_at = None
     elif not (keep_queue_position and conversation.queued_at):
         conversation.queued_at = datetime.now(timezone.utc)
+
+
+def _require_active_user(db: Session, user_id: int) -> User:
+    """
+    AUDIT-2026-08-W2F (F7) — MESMA validacao que `/assign` ja fazia.
+
+    Sem ela, `responsavel_id` chegava como query param cru, o lookup falhava,
+    `responsavel_nome` virava None e o id INEXISTENTE era commitado do mesmo
+    jeito — e depois empurrado para a tabela `leads` do CRM por
+    `sync_responsavel_to_crm`, cujo `UPDATE leads SET responsavel_id` nao tem
+    FK. Resultado: leads do CRM atribuidos a usuarios que nao existem (ou
+    inativos) e `lead_history` gravando a transicao fantasma.
+    """
+    target = db.query(User).filter(User.id == user_id, User.is_active == True).first()  # noqa: E712
+    if not target:
+        raise HTTPException(status_code=404, detail="Usuario nao encontrado ou inativo")
+    return target
+
+
+async def _apply_responsavel(
+    db: Session, conversation: Conversation, responsavel_id: Optional[int]
+) -> None:
+    """
+    AUDIT-2026-08-W2F (F7+F8) — ponto UNICO de escrita do responsavel COMERCIAL.
+
+    Os dois caminhos (`PUT /{id}` e `PUT /{id}/responsavel`) tinham a mesma
+    dupla de defeitos: id nao validado (F7) e sync com o CRM disparado DEPOIS
+    do commit, com o booleano de retorno jogado fora (F8). Como
+    `_repair_responsavel_cache` reescreve o cache local a partir do CRM em toda
+    listagem (5s) e em toda abertura, um sync que falhava produzia um 200
+    mentiroso e a atribuicao "voltava sozinha" no refresh seguinte.
+
+    Aqui a escrita local e a do CRM ficam na MESMA transacao (base unica,
+    session factory unica): ou as duas valem, ou nenhuma vale e o operador
+    recebe 502. NAO commita — quem chama fecha a transacao, para que o PUT
+    completo (status + estado operacional + responsavel) seja atomico.
+    """
+    real_resp_id = None if (responsavel_id is None or responsavel_id == 0) else responsavel_id
+
+    if real_resp_id is None:
+        conversation.responsavel_id = None
+        conversation.responsavel_nome = "Agente IA"
+    else:
+        target = _require_active_user(db, real_resp_id)
+        conversation.responsavel_id = target.id
+        conversation.responsavel_nome = target.nome
+
+    if conversation.lead_id and conversation.lead_id > 0:
+        ok = await crm_service.sync_responsavel_to_crm(conversation.lead_id, real_resp_id, db)
+        if not ok:
+            db.rollback()
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Nao foi possivel sincronizar o responsavel com o CRM. "
+                    "A atribuicao NAO foi salva — tente novamente."
+                ),
+            )
 
 
 def _repair_responsavel_cache(db: Session, conversation: Conversation, lead_resp: dict) -> bool:
@@ -497,7 +561,12 @@ async def list_conversations(
             query = query.filter(Conversation.atendente_id == atendente_id)
 
     # PACOTE-B: categoria do inbox — MESMOS predicados do /counts.
-    order_by = [desc(Conversation.updated_at)]
+    # AUDIT-2026-08-W2F (F14): `id.desc()` como desempate, igual ao que
+    # `_inbox_order` ja fazia. `updated_at` tem granularidade grosseira o
+    # bastante para empatar (mesmo lote de webhook, mesma migracao) e sem
+    # desempate o LIMIT/OFFSET de uma lista repaginada a cada 5s pode repetir
+    # ou PULAR uma conversa entre paginas — o operador perde uma linha da fila.
+    order_by = [desc(Conversation.updated_at), Conversation.id.desc()]
     if inbox is not None:
         query = query.filter(*_inbox_predicates(inbox, current_user.id))
         order_by = _inbox_order(inbox)
@@ -508,8 +577,8 @@ async def list_conversations(
             Conversation.status.in_(LEGACY_OPEN_STATUSES),
             Conversation.atendente_id.is_(None),
         )
-        # quem espera ha mais tempo primeiro
-        order_by = [Conversation.last_customer_msg_at.asc()]
+        # quem espera ha mais tempo primeiro (AUDIT-2026-08-W2F/F14: desempate)
+        order_by = [Conversation.last_customer_msg_at.asc(), Conversation.id.asc()]
     elif queue == "em_atendimento":
         query = query.filter(
             Conversation.status.in_(LEGACY_OPEN_STATUSES),
@@ -572,10 +641,16 @@ async def conversation_counts(
     row = counts_query.one()
     payload = {cat: int(getattr(row, cat) or 0) for cat in INBOX_CATEGORIES}
 
+    # AUDIT-2026-08-W2F (F12): o mapa `unread` era ILIMITADO — toda conversa
+    # aberta com pendencia, serializada a cada 5 segundos por aba aberta. Num
+    # fim de semana sem atendimento isso e o inbox inteiro no corpo de um poll.
+    # O limite e por ATIVIDADE (as mais recentes sao as que a UI mostra e as
+    # que geram notificacao); o COUNT por categoria acima continua exato, entao
+    # o badge nao mente — so a lista auxiliar e truncada.
     unread_rows = db.query(Conversation.id, Conversation.unread_count).filter(
         Conversation.status.in_(LEGACY_OPEN_STATUSES),
         Conversation.unread_count > 0,
-    ).all()
+    ).order_by(desc(Conversation.updated_at), Conversation.id.desc()).limit(UNREAD_MAP_LIMIT).all()
     payload["unread"] = {str(cid): int(n or 0) for cid, n in unread_rows}
     return payload
 
@@ -610,34 +685,85 @@ async def list_users_for_responsavel(
 @router.get("/{conversation_id}", response_model=ConversationDetail)
 async def get_conversation(
     conversation_id: int,
+    opening: bool = Query(
+        # AUDIT-2026-08-W2F-orq: o default era False, e NENHUM cliente manda o
+        # parametro — nem o conversas.js, nem o n8n, nem os testes. Na pratica
+        # isso desligou o espelho de tags CRM->Conversas (CONV-TAGS-SYNC-01) e o
+        # read-repair de responsavel para todo o trafego, nao so para o polling.
+        # Uma otimizacao nao pode mudar o comportamento de quem nao optou por
+        # ela: o default preserva o contrato, e quem pode abrir mao (o poll de
+        # 5s, que e o unico custo real) manda opening=false explicitamente.
+        True,
+        description="False no POLLING de 5s; True (default) na abertura e para "
+                    "qualquer cliente que nao conheca este parametro",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get a conversation with all its messages."""
-    conversation = db.query(Conversation).filter(
+    """
+    Get a conversation with its messages.
+
+    AUDIT-2026-08-W2F (F12) — esta rota e POLLADA a cada 5s por aba aberta.
+    Antes cada poll fazia: SELECT de TODAS as mensagens ja trocadas + um SELECT
+    de `media_asset` por mensagem (N+1 lazy na serializacao) + dois read-repairs
+    no CRM + COMMIT. Tres mudancas, todas sem alterar o que a UI ve num
+    atendimento normal:
+
+    1. `selectinload` de `messages.media_asset` e `tags`: o N+1 vira 2 queries.
+    2. Historico limitado as ultimas CONVERSATION_MESSAGES_LIMIT mensagens,
+       devolvidas em ordem cronologica (a UI ja rola do fim para cima).
+    3. Read-repair do CRM (tags + responsavel) so com `opening=true`. A LISTA
+       (`GET /api/conversations`) ja refaz o repair do responsavel em lote a
+       cada refresh, entao o cache continua convergindo sozinho; repetir por
+       conversa a cada 5s era trabalho duplicado.
+    4. COMMIT so quando ha o que escrever (unread pendente ou repair sujo).
+    """
+    conversation = db.query(Conversation).options(
+        selectinload(Conversation.tags),
+    ).filter(
         Conversation.id == conversation_id
     ).first()
 
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversa nao encontrada")
 
-    # CONV-TAGS-SYNC-01: espelha as tags do lead (CRM) ao abrir a conversa
-    # (read-repair; no-op se conversa sem lead ou CRM inacessivel em dev)
-    crm_service.sync_lead_tags_to_conversation(conversation, db)
+    dirty = False
+    if opening:
+        # CONV-TAGS-SYNC-01: espelha as tags do lead (CRM) ao abrir a conversa
+        # (read-repair; no-op se conversa sem lead ou CRM inacessivel em dev)
+        crm_service.sync_lead_tags_to_conversation(conversation, db)
 
-    # CONV-HOTFIX-POSTDEPLOY-01: read-repair do responsavel a partir do lead
-    # (mesmo padrao do espelho de tags; no-op sem lead ou CRM inacessivel).
-    # Persistido pelo commit logo abaixo.
-    if conversation.lead_id and conversation.lead_id > 0:
-        responsaveis = crm_service.get_leads_responsaveis([conversation.lead_id], db)
-        if responsaveis:
-            info = responsaveis.get(conversation.lead_id)
-            if info is not None:
-                _repair_responsavel_cache(db, conversation, info)
+        # CONV-HOTFIX-POSTDEPLOY-01: read-repair do responsavel a partir do lead
+        # (mesmo padrao do espelho de tags; no-op sem lead ou CRM inacessivel).
+        if conversation.lead_id and conversation.lead_id > 0:
+            responsaveis = crm_service.get_leads_responsaveis([conversation.lead_id], db)
+            if responsaveis:
+                info = responsaveis.get(conversation.lead_id)
+                if info is not None:
+                    _repair_responsavel_cache(db, conversation, info)
+        dirty = True
 
     # Mark as read
-    conversation.unread_count = 0
-    db.commit()
+    if conversation.unread_count:
+        conversation.unread_count = 0
+        dirty = True
+    if dirty:
+        db.commit()
+
+    # DEPOIS do commit (que expira os objetos): as ultimas N mensagens, com
+    # `media_asset` carregado em LOTE. `desc+limit` no BANCO — nao um slice em
+    # Python — e o que impede a query de crescer com o historico; a lista volta
+    # a ordem cronologica antes de virar payload. `set_committed_value` planta
+    # o resultado na relacao SEM sujar a sessao, entao a serializacao nao
+    # dispara o lazy load da colecao completa.
+    recent = db.query(Message).options(
+        selectinload(Message.media_asset),
+    ).filter(
+        Message.conversation_id == conversation.id
+    ).order_by(desc(Message.created_at), Message.id.desc()).limit(
+        CONVERSATION_MESSAGES_LIMIT
+    ).all()
+    set_committed_value(conversation, "messages", list(reversed(recent)))
 
     return ConversationDetail.model_validate(conversation)
 
@@ -649,7 +775,26 @@ async def update_conversation(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Update conversation status, assignee, or responsavel."""
+    """
+    Update conversation status, assignee, or responsavel.
+
+    AUDIT-2026-08-W2F (F6) — este PUT escrevia `atendente_id` e `is_bot_active`
+    DIRETO no objeto, furando `_apply_human_state`, que o proprio codigo declara
+    o "ponto UNICO que escreve o estado operacional". `queued_at` nunca era
+    tocado, violando a invariante documentada em `_apply_human_state`, e o
+    `atendente_id` nao era validado contra a tabela de usuarios (ao contrario
+    de `/assign`).
+
+    O estado resultante — dono definido E `is_bot_active=True` — nao e apenas
+    inconsistente: ele nao existe para o inbox. Casa APENAS com o predicado de
+    `bia` e com NENHUM de `meus`/`fila`/`todos`. Na pratica o atendente recebia
+    a conversa e ela sumia da caixa dele, enquanto a BIA continuava respondendo
+    o cliente. O toggle do bot da UI (static/js/conversas.js:648-651) chega aqui.
+
+    Agora os dois campos operacionais passam por `_apply_human_state`, o alvo e
+    validado como `/assign` valida, e o PUT inteiro (status + estado operacional
+    + responsavel + sync no CRM) commita UMA vez.
+    """
     conversation = db.query(Conversation).filter(
         Conversation.id == conversation_id
     ).first()

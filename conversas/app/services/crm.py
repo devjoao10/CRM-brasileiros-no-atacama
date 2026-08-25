@@ -21,31 +21,64 @@ from app.models.conversation import Conversation
 logger = logging.getLogger(__name__)
 
 
+def _only_digits(value: Optional[str]) -> str:
+    """Normalizacao unica de telefone: so digitos (+, espacos, (), - e . somem)."""
+    return "".join(ch for ch in (value or "") if ch.isdigit())
+
+
 async def lookup_lead_by_whatsapp(whatsapp: str, db: Session) -> Optional[dict]:
     """
     Look up a lead in the CRM by WhatsApp number.
     Uses direct DB query on the shared 'leads' table.
     Returns the lead data dict or None if not found.
+
+    AUDIT-2026-08-W2F (F10) — IDENTIDADE, nao "busca flexivel".
+    O casamento antigo era `whatsapp LIKE '%<10 ultimos digitos>%'` e o primeiro
+    resultado vencia. Em numeros brasileiros os 10 ultimos digitos NAO
+    identificam ninguem: 5511987654321 e 5521987654321 terminam ambos em
+    1987654321 — DDDs diferentes, clientes diferentes. Como
+    `auto_link_conversation` grava o lead_id PERMANENTEMENTE na conversa e
+    `variables.py` resolve @...CLIENTE a partir dele, um casamento errado manda
+    nome/e-mail do cliente B para o cliente A dentro de um template. Nao e
+    ruido de busca: e vazamento entre clientes. (`variables.py:226-229` ja
+    documentava esta funcao como insegura para identidade e a evitava.)
+
+    Agora: o LIKE sobrou apenas como PRE-FILTRO barato (aproveita o indice/scan
+    e nao depende de regexp_replace, que existe no PostgreSQL mas nao no
+    SQLite); a decisao e feita em Python por igualdade EXATA dos digitos. E,
+    se mais de um lead casar exatamente, devolve NENHUM — ambiguidade e
+    recusada, nunca resolvida por "ORDER BY created_at DESC LIMIT 1", que
+    escolhia um cliente arbitrario.
     """
-    # Normalize: remove +, spaces, dashes
-    normalized = whatsapp.replace("+", "").replace(" ", "").replace("-", "").strip()
-    # Use last 10 digits for flexible matching
+    normalized = _only_digits(whatsapp)
+    if not normalized:
+        return None
+    # Use last 10 digits only to NARROW the candidate set (nunca para decidir)
     suffix = normalized[-10:] if len(normalized) >= 10 else normalized
 
     try:
-        result = db.execute(
+        candidates = db.execute(
             text(
                 "SELECT id, nome, whatsapp, email, responsavel_id "
                 "FROM leads "
                 "WHERE whatsapp LIKE :pattern "
                 "ORDER BY created_at DESC "
-                "LIMIT 1"
+                "LIMIT 50"
             ),
             {"pattern": f"%{suffix}%"},
-        ).fetchone()
+        ).fetchall()
 
-        if not result:
+        exact = [r for r in candidates if _only_digits(r.whatsapp) == normalized]
+        if not exact:
             return None
+        if len({r.id for r in exact}) > 1:
+            logger.warning(
+                "Lookup de lead AMBIGUO para %s: %s leads com o mesmo numero "
+                "(%s) — nenhum vinculo automatico sera feito.",
+                normalized, len(exact), sorted({r.id for r in exact}),
+            )
+            return None
+        result = exact[0]
 
         # Get responsavel name
         responsavel_nome = "Agente IA"
@@ -122,6 +155,21 @@ async def sync_responsavel_to_crm(
     Uses direct DB update on the shared 'leads' table.
     Also logs the change in lead_history.
     Returns True on success.
+
+    AUDIT-2026-08-W2F (F8) — NAO COMMITA MAIS.
+    Antes: o router commitava a conversa e SO DEPOIS chamava esta funcao, que
+    commitava (ou fazia rollback e devolvia False) por conta propria — com o
+    resultado descartado. Como `_repair_responsavel_cache` reescreve o cache da
+    conversa A PARTIR DO CRM a cada listagem (5s) e a cada abertura, uma
+    atribuicao cujo UPDATE no lead falhasse aparecia como sucesso e REVERTIA
+    sozinha no refresh seguinte.
+
+    Conversas e CRM compartilham a MESMA base e a MESMA session factory, entao
+    a correcao certa nao e "avisar depois": e uma transacao unica. Esta funcao
+    passa a apenas EMITIR os comandos e devolver True/False; quem commita (ou
+    aborta tudo, conversa inclusive) e o caller. O `rollback()` do except
+    continua, porque uma transacao abortada precisa ser limpa antes de qualquer
+    outra query na mesma sessao.
     """
     if lead_id <= 0:
         return False
@@ -166,7 +214,7 @@ async def sync_responsavel_to_crm(
                 },
             )
 
-        db.commit()
+        # Sem commit: o caller fecha a transacao (ver docstring, F8).
         logger.info(f"Responsável sync'd: lead={lead_id}, responsavel={responsavel_id}")
         return True
     except Exception as e:
@@ -245,16 +293,27 @@ async def auto_create_lead_in_crm(
                 )
 
             # Log in lead_history
+            #
+            # AUDIT-2026-08-W2F (F9): `dados` E OBRIGATORIO. Sem a coluna aqui a
+            # linha nascia com SQL NULL, mas o schema de resposta do CRM declara
+            # `dados: dict = {}` (app/schemas/pipeline.py:129) e
+            # app/routers/pipeline.py:765 valida CADA linha —
+            # GET /api/pipeline/history/{lead_id} entao estourava ValidationError
+            # e devolvia 500 para TODO lead criado automaticamente pelo WhatsApp,
+            # justamente os que mais precisam da timeline. O outro INSERT deste
+            # modulo (sync_responsavel_to_crm) e o writer do proprio CRM sempre
+            # mandaram `dados`; so este nao mandava. '{}' = mesmo default do schema.
             db.execute(
                 text(
                     "INSERT INTO lead_history "
-                    "(lead_id, evento, descricao, created_at) "
-                    "VALUES (:lid, 'created', :desc, NOW())"
+                    "(lead_id, evento, descricao, dados, created_at) "
+                    "VALUES (:lid, 'created', :desc, :dados, NOW())"
                 ),
                 {
                     "lid": lead_id,
                     "desc": f"Lead criado automaticamente via WhatsApp. "
                             f"Adicionado ao funil (etapa: {first_stage_id})",
+                    "dados": "{}",
                 },
             )
 
@@ -372,8 +431,16 @@ def get_leads_responsaveis(lead_ids: list, db: Session) -> Optional[dict]:
             r.lead_id: {"responsavel_id": r.responsavel_id, "responsavel_nome": r.nome}
             for r in rows
         }
-    except Exception:
+    except Exception as e:
         db.rollback()  # limpa a transacao abortada (dev sem tabelas CRM)
+        # AUDIT-2026-08-W2F-orq: este except era MUDO. Quando dispara, a lista de
+        # conversas perde o responsavel de TODAS elas de uma vez, sem erro na tela
+        # e sem uma linha de log — indistinguivel de "ninguem foi atribuido".
+        logger.warning(
+            "Lookup em lote de responsavel no CRM falhou (%s: %s) — %s conversa(s) "
+            "ficam sem responsavel nesta chamada.",
+            type(e).__name__, e, len(lead_ids) if lead_ids else 0,
+        )
         return None
 
 
@@ -423,8 +490,15 @@ def get_lead_tags(lead_id: int, db: Session):
             {"lid": lead_id},
         ).fetchall()
         return [{"nome": r.nome, "cor": _safe_color(r.cor)} for r in rows]
-    except Exception:
+    except Exception as e:
         db.rollback()  # limpa a transacao abortada (dev sem tabelas CRM)
+        # AUDIT-2026-08-W2F-orq: este except era MUDO. Quando dispara, a conversa
+        # deixa de espelhar as tags do lead — sem erro e sem log. Um espelho que
+        # para de espelhar em silencio e indistinguivel de um lead sem tags.
+        logger.warning(
+            "Leitura das tags do lead %s no CRM falhou (%s: %s) — a conversa NAO "
+            "sera espelhada nesta chamada.", lead_id, type(e).__name__, e,
+        )
         return None
 
 
@@ -453,7 +527,11 @@ def add_tag_to_lead(lead_id: int, nome: str, cor: str, db: Session) -> bool:
         return True
     except Exception as e:
         db.rollback()
-        logger.warning(f"Tag sync Conversas->CRM indisponivel (lead {lead_id}): {type(e).__name__}")
+        logger.warning(
+            "Tag sync Conversas->CRM falhou (lead %s, tag %r) — %s: %s. A tag ficou "
+            "so no Conversas e o CRM segue sem ela.",
+            lead_id, nome, type(e).__name__, e,
+        )
         return False
 
 
@@ -471,7 +549,11 @@ def remove_tag_from_lead(lead_id: int, nome: str, db: Session) -> bool:
         return True
     except Exception as e:
         db.rollback()
-        logger.warning(f"Tag unsync Conversas->CRM indisponivel (lead {lead_id}): {type(e).__name__}")
+        logger.warning(
+            "Tag unsync Conversas->CRM falhou (lead %s, tag %r) — %s: %s. A tag "
+            "continua no CRM depois de removida no Conversas.",
+            lead_id, nome, type(e).__name__, e,
+        )
         return False
 
 

@@ -340,7 +340,10 @@
             // e qualquer acao do usuario recarrega. Badges seguem vivos.
             if (loadedWindowSize <= MAX_PAGE_LIMIT) loadConversations('refresh');
             if (activeConversation) {
-                const resp = await Auth.apiRequest(`/api/conversations/${activeConversation.id}`);
+                // opening=false: este e o refresh de 5s. Sem isto o backend
+                // refaz os read-repairs contra o CRM a cada ciclo, por aba.
+                const resp = await Auth.apiRequest(
+                    `/api/conversations/${activeConversation.id}?opening=false`);
                 if (!resp || !resp.ok) return;
                 const data = await resp.json();
                 // CONV-NOTIFICATIONS-01: novas inbound da conversa aberta
@@ -781,7 +784,11 @@
     }
 
     async function loadChat(conversationId) {
-        const resp = await Auth.apiRequest(`/api/conversations/${conversationId}`);
+        // opening=true: abertura de fato. E aqui que o espelho de tags do CRM e o
+        // read-repair de responsavel precisam rodar. Explicito no call site para
+        // nao depender do default do backend.
+        const resp = await Auth.apiRequest(
+            `/api/conversations/${conversationId}?opening=true`);
         if (!resp || !resp.ok) return;
 
         activeConversation = await resp.json();
@@ -1886,28 +1893,42 @@
     };
 
     // CONV-08b: reenvio manual de mensagem outbound com falha
-    window._retryMessage = async function (msgId) {
+    window._retryMessage = async function (msgId, btn) {
         if (!activeConversation) return;
         // CONV-WINDOW-01: reenvio e free-form — o botao some com a janela fechada,
         // mas o clique tambem e barrado aqui (e no backend, que e a autoridade).
         if (windowClosed()) { applyWindowState(activeConversation); return; }
-        const resp = await Auth.apiRequest(
-            `/api/conversations/${activeConversation.id}/messages/${Number(msgId)}/retry`,
-            { method: 'POST' }
-        );
-        if (resp && resp.ok) {
-            showToast('Mensagem reenviada');
-        } else {
-            const d = resp ? await readErrorDetail(resp) : {};
-            if (resp && resp.status === 409 && d.code === 'WINDOW_CLOSED') {
-                await handleWindowClosed(d);
-                loadChat(activeConversation.id);
-                return;
+        // AUDIT-2026-08-W2D — F2: nao havia guard nenhum. Duplo toque (trivial
+        // no celular) disparava DOIS POSTs; o backend so checa status != 'failed'
+        // ANTES da chamada assincrona a Meta, entao os dois passam e o CLIENTE
+        // recebe a mesma mensagem duas vezes — na mesma linha do banco, ou seja,
+        // invisivel na UI. Mesmo padrao do tplSending dos templates: flag de
+        // modulo + botao desabilitado durante TODO o request.
+        if (retrySending) return;
+        retrySending = true;
+        if (btn) btn.disabled = true;
+        try {
+            const resp = await Auth.apiRequest(
+                `/api/conversations/${activeConversation.id}/messages/${Number(msgId)}/retry`,
+                { method: 'POST' }
+            );
+            if (resp && resp.ok) {
+                showToast('Mensagem reenviada');
+            } else {
+                const d = resp ? await readErrorDetail(resp) : {};
+                if (resp && resp.status === 409 && d.code === 'WINDOW_CLOSED') {
+                    await handleWindowClosed(d);
+                    loadChat(activeConversation.id);
+                    return;
+                }
+                showToast(d.message || 'Falha ao reenviar a mensagem.');
             }
-            showToast(d.message || 'Falha ao reenviar a mensagem.');
+            loadChat(activeConversation.id);
+            loadConversations();
+        } finally {
+            retrySending = false;
+            if (btn && btn.isConnected) btn.disabled = false;
         }
-        loadChat(activeConversation.id);
-        loadConversations();
     };
 
     // ─── Rendering ──────────────────────────────
@@ -2068,6 +2089,11 @@
             else if (msg.status === 'sent') statusIcon = '<span class="message-status">&#10003;</span>';
             else if (msg.status === 'delivered') statusIcon = '<span class="message-status delivered">&#10003;&#10003;</span>';
             else if (msg.status === 'read') statusIcon = '<span class="message-status read">&#10003;&#10003;</span>';
+            // AUDIT-2026-08-W1D-orq: 'simulated' (dev sem credenciais da Meta) nao
+            // tinha ramo aqui e caia no else implicito — a mensagem aparecia SEM
+            // marcador nenhum, indistinguivel de uma ainda sem status. Marcador
+            // proprio, com o titulo dizendo o que aconteceu.
+            else if (msg.status === 'simulated') statusIcon = '<span class="message-status" title="Simulado: sem credenciais da Meta, nada foi enviado (apenas em desenvolvimento)">&#9210;</span>';
             else if (msg.status === 'failed') {
                 // CONV-WINDOW-01: `last_error` ja e um resumo SEGURO produzido por
                 // whatsapp._error_result (nunca token/header/payload). Antes so

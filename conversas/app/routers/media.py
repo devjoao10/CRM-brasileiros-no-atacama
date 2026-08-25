@@ -23,7 +23,7 @@ from app.database import get_db
 from app.auth import get_current_user, User
 from app.models.media_asset import MediaAsset
 from app.schemas.conversation import MediaAssetResponse
-from app.services import media_storage
+from app.services import media_policy, media_storage
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +77,26 @@ async def serve_media(
         # local_path ausente/corrompido/fora do storage (traversal) ou arquivo sumiu
         raise HTTPException(status_code=404, detail="Arquivo de midia indisponivel")
 
+    # AUDIT-2026-08-W2D — F1: `meta_mime_type` e o MIME DECLARADO PELO REMETENTE,
+    # persistido verbatim do payload da Meta. Devolve-lo como media_type + inline
+    # deixava um cliente do WhatsApp escolher 'text/html' e executar script na
+    # origem do app (o operador abre a midia -> blob no mesmo origin -> token da
+    # sessao, cookie e toda a API autenticada nas maos do cliente). A politica de
+    # midia (CONV-01) ja e a fonte unica de verdade do que aceitamos: o que ela
+    # nao classifica NAO e renderizavel — vira octet-stream + attachment, que o
+    # browser baixa em vez de interpretar. Nada de allowlist nova aqui.
+    kind = media_policy.classify_mime(asset.meta_mime_type)
+    if kind is None:
+        return FileResponse(
+            path,
+            media_type="application/octet-stream",
+            filename=asset.filename or path.name,
+            content_disposition_type="attachment",
+        )
+
     return FileResponse(
         path,
-        media_type=asset.meta_mime_type or "application/octet-stream",
+        media_type=asset.meta_mime_type,
         filename=asset.filename or path.name,
         content_disposition_type="inline",
     )
