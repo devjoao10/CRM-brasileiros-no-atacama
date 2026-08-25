@@ -13,6 +13,312 @@ Estado do sistema BnA ao fim da auditoria + estabilização global.
 
 ---
 
+---
+
+# FASE 2 — reconciliação com o n8n real (2026-08-25)
+
+> Esta seção tem **precedência** sobre o que vem depois dela neste documento.
+> Onde divergirem, vale a Fase 2: ela foi escrita com os três workflows de
+> produção na mão, coisa que a Fase 1 não tinha.
+
+**Entrada nova:** os exports dos três workflows n8n **realmente em produção**,
+fornecidos como evidência externa. Versionados em
+`n8n/workflows/live_exports/20260825_fase2/` (sem segredo — só referência de
+credencial por ID). Detalhe completo em
+`docs/audit/N8N_CURRENT_STATE_RECONCILIATION.md`.
+
+## CURRENT N8N WORKFLOWS RECONCILED
+
+| Workflow | webhook | nós | situação |
+|---|---|--:|---|
+| WF-01 Agente Bia | `POST /webhook/agent-bia` | 14 | reconciliado |
+| Agente Gerenciador de Leads — BnA | `POST /webhook/gerenciador-leads` | 18 | reconciliado |
+| Formulário do Site → CRM BnA | `POST /webhook/formulario-site` | 16 | reconciliado — **nunca auditado antes** |
+
+## NOTIFIER REMOVED FROM CURRENT ARCHITECTURE
+
+**Sim, e a arquitetura documentada foi corrigida.** O Notificador não está em
+produção e não deve ser recriado. *Colocar na fila humana* ≠ *notificar
+atendente* — o próprio system message da Bia já codifica essa separação, em
+quinze formulações.
+
+**Mas a dependência morta continua viva no Gerenciador:** o nó
+`Tool Acionar Notificador` está lá, conectado como ferramenta, apontando para
+`/webhook/notificacao`. Removê-lo é o item **M2** de `N8N_MANUAL_CHANGES.md`.
+
+## N8N CHANGES REQUIRED / DEPLOYED
+
+**Requeridas: 5 mudanças de campo (M1–M5) + 7 decisões (D1–D7).
+Aplicadas em produção: 0.** Nenhuma podia ser aplicada daqui — não tenho acesso
+ao n8n e não tentei obtê-lo. Instruções campo a campo, com valor antigo, valor
+novo, teste manual e rollback, em `docs/audit/N8N_MANUAL_CHANGES.md`. JSONs de
+referência em `docs/audit/proposed_n8n/`, marcados
+`PROPOSED ONLY — NOT DEPLOYED`.
+
+As duas que mais importam:
+
+**M1 — o sinal de entrada na fila humana sai como `"=true"`.** O campo
+`pronto_para_humano` começa com **dois** sinais de igual. No n8n o primeiro `=`
+marca a expressão e o resto é template, então o `=` sobrando vira texto. O
+consumidor compara literalmente com `"true"`/`"false"` e **nenhum ramo casa**.
+Não é falha determinística — é ambiguidade determinística na transição de estado
+mais importante do sistema. Correção: apagar um caractere.
+
+**M2 — remover `Tool Acionar Notificador`.** Alcançável sempre que o modelo lê
+`pronto_para_humano` como verdadeiro (ou seja, na decisão já ambígua de M1),
+devolve 404, e o agente do Gerenciador **não tem ramo de erro** — pode deixar o
+lead criado sem tag e sem responsável.
+
+## Findings anteriores INVALIDADOS pela evidência nova
+
+| Antes | Agora |
+|---|---|
+| **"Um webhook entrega método E URL à escolha de um LLM"** (F-022, F-023, CRITICAL) | **OBSOLETE** — isso vivia em `Gerente_Autonomo_de_Tarefas_IA`, que **não está em produção**. Nos três atuais, toda URL de tool é fixa. |
+| F-021 — prompt do Gerente Autônomo montado a partir de tarefa do CRM | **OBSOLETE** — mesmo workflow ausente |
+| F-025 — parâmetro `whatsapp` escolhido livremente pelo LLM | **FALSE_POSITIVE** — no export atual é `fieldValue` vindo do webhook do Conversas |
+| F-019/F-020 — "14 tools de escrita" | **UPDATE** — são 13 de CRM + 1 morta |
+| F-024 — prompt sem defesa de injeção | **HIGH**, não CRITICAL — a Bia atual tem 3 ferramentas e ganhou validação de saída; a injeção envenena dado, não executa ação arbitrária |
+
+## O que a Fase 2 corrigiu no repositório
+
+Cinco defeitos, todos com teste que exercita comportamento:
+
+1. **`PUT /api/leads/{id}` devolvia 422 em toda atualização sem nome novo.** A
+   `Tool Atualizar Lead` tem corpo fixo e manda `""` no que não coletou. O dado
+   que a Bia acabara de coletar era descartado em silêncio. Pré-existente.
+2. **Reação de emoji recebia pedido de desculpas por instabilidade.** Silêncio
+   deliberado da Bia era tratado como degradação. Metade feita aqui; a outra é M3.
+3. **`_INFRA_ERRORS` era dialeto-dependente** (§ PostgreSQL abaixo).
+4. **`SELECT ... INTO` passava por todos os guards da ferramenta de IA.**
+5. **Corrida de primeiro contato**, tratada **antes** de a m011 rodar.
+
+E um risco introduzido pela Fase 1 foi revertido: o `pattern` de slug em
+`StageSchema.id` quebraria qualquer funil de produção cuja etapa tenha espaço —
+e o próprio Gerenciador chama a etapa de "Sem Contato".
+
+## POSTGRESQL TEST ENVIRONMENT
+
+**Não foi possível subir.** `docker info` expira (daemon parado) e não há `psql`
+nem `pg_dump` instalados — verificado, não suposto.
+
+O que foi feito no lugar, e é real: `psycopg2` está instalado e o SQLAlchemy
+**compila** contra o dialeto `postgresql` sem conexão. Cada query relevante foi
+compilada contra os **dois** dialetos e o SQL comparado; o mapeamento de erro foi
+resolvido por `psycopg2.errors.lookup(SQLSTATE)`. Resultado: **9 divergências**,
+3 corrigidas, 6 documentadas com o comando exato que o operador roda para fechar.
+Detalhe em `docs/audit/POSTGRES_VALIDATION.md`.
+
+- **POSTGRESQL INTEGRATION TESTS:** `tests/test_postgres_dialect_divergence.py`,
+  78 checks, sem servidor. Isso **não é** teste de integração no dialeto real —
+  é travamento da forma do SQL. Subir um PostgreSQL no CI continua pendente.
+- **POSTGRESQL MIGRATIONS:** não executadas contra PostgreSQL.
+- **M011:** ramo PostgreSQL **inspecionado e aprovado** (SQL capturado e lido);
+  **não executado** fora de SQLite descartável. Duas pré-condições operacionais:
+  ownership das tabelas, e aplicar antes a correção da corrida de primeiro
+  contato — sem ela, o índice único troca "conversa duplicada" por **mensagem de
+  cliente perdida**.
+
+## BACKUP / RESTORE
+
+**O achado mais importante desta fase é sobre o trabalho da fase anterior.**
+
+O script de backup que a Fase 1 dava por corrigido **abortaria todo backup
+real**. `grep -q` sai no primeiro casamento e mata o `gzip` a montante com
+SIGPIPE; com `set -o pipefail`, o status do pipeline vira 141 e o `if !` inverte
+a guarda. Reproduzido de forma independente:
+
+```
+gzip -dc ok.gz | grep -qE "COPY (public\.)?users\b"
+  pipefail LIGADO  : 141      <- guarda invertida
+  pipefail DESLIGADO:   0
+```
+
+E a guarda anti-CR era decoração fora do Linux: o `grep` da família Cygwin/MSYS
+descarta o CR final de cada linha antes de casar — justamente o CR que o
+pseudo-TTY produz.
+
+**Por que a Fase 1 não pegou:** o teste dela verificava o **texto** do script
+(`"gzip -t" in sh`) e nunca o **executava**. É a classe de defeito que esta
+auditoria mais encontrou — e estava no meu próprio trabalho.
+
+- **BACKUP GENERATED:** sim — script executado ponta a ponta com um `docker`
+  falso emitindo dump plain-format de 1.196.760 bytes.
+- **BACKUP RESTORED:** sim, por dois métodos — igualdade byte a byte (zero CR) e
+  restore de verdade num SQLite, com as quatro tabelas conferidas por contagem
+  **e** por valor. `sha256sum -c` executado com sucesso.
+- 7 cenários exercitados, incluindo o de regressão do defeito original.
+- `tests/test_backup_restore_e2e.py`, 45 checks. Contra o script anterior dava
+  **9 falhas**.
+- **Não provado sem PostgreSQL real:** que `pg_dump` produz este formato e que
+  `psql -f` reconstrói constraints, índices, sequences e FKs. Comando do operador
+  em `docs/audit/BACKUP_RESTORE_VALIDATION.md`.
+- **Backups históricos continuam suspeitos**, agora por dois motivos.
+
+## FINDINGS — estado após a Fase 2
+
+606 findings (588 da Fase 1 + 18 novos).
+
+| Estado | Qtd |
+|---|---:|
+| OPEN | 307 |
+| ADDRESSED_UNVERIFIED | 130 |
+| RESOLVED | 94 |
+| BLOCKED_OPERATOR | 66 |
+| PROPOSED_FIX (n8n, aguardando o operador) | 4 |
+| OBSOLETE (invalidados pela evidência nova) | 3 |
+| RESOLVED_PARCIAL (metade feita, metade é n8n) | 1 |
+| FALSE_POSITIVE | 1 |
+
+Não resolvidos nem bloqueados, por severidade:
+**CRITICAL 0** · HIGH 108 · MEDIUM 234 · LOW 95.
+
+**ADDRESSED_UNVERIFIED caiu de 151 para 130.** A queda não é mecânica: 34
+findings do raio de impacto dos workflows foram adjudicados **lendo o código de
+hoje**, com evidência citada por finding — 21 viraram RESOLVED, 4
+BLOCKED_OPERATOR, e **14 continuaram OPEN** porque a região do código mudou mas o
+defeito descrito não foi tocado. Esses 14 são o resultado mais útil da
+adjudicação, e os quatro de maior consequência são:
+
+- **F-341** — leads criados pelo n8n via `POST /api/leads` continuam **sem
+  `FunnelEntry`**. É o único finding do escopo que quebra diretamente o fluxo de
+  produção das automações, e ninguém mexeu nele.
+- **F-098 + F-099** — a corrida e a exaustão de pool do debounce estão como
+  estavam; a Fase 1 corrigiu o *corte do lote*, não o *reentrante*.
+- **F-106** — o boundary CRM↔Conversas continua com **zero cobertura
+  executável**: `auto_link_conversation` está substituído por um no-op em 10
+  arquivos de teste. Nenhuma das correções de `crm.py` tem teste que as trave.
+
+Uma observação de qualidade sobre o próprio CSV: os 34 findings de `webhook.py`
+correspondem a ~20 defeitos distintos (F-092≡F-093, F-325≡F-326, F-327≡F-535,
+F-330≡F-331, F-333≡F-536, F-324≡F-532, F-538≡F-539, F-101≡F-336≡F-537). Qualquer
+contagem por severidade derivada do CSV bruto está inflada em ~40% nesse arquivo.
+
+## TEST SUITE / REGRESSION
+
+| | Baseline | Fase 1 | Fase 2 |
+|---|---|---|---|
+| Arquivos de teste | 51 | 64 | **68** |
+| Resultado | 51/51 | 64/64 | **68/68** |
+
+Novos nesta fase: `test_n8n_contract_lead_update.py` (bate na **rota**, com o
+corpo reconstruído do export de produção), `test_conversas_agent_silence.py`,
+`test_postgres_dialect_divergence.py` (78 checks), `test_backup_restore_e2e.py`
+(45 checks).
+
+## Um erro meu, corrigido dentro da própria fase
+
+Registro porque o processo que o pegou vale mais que o defeito.
+
+A **primeira** versão da correção do `PUT /api/leads` convertia string vazia em
+`None` no schema e validava com `model_dump(exclude_none=True)`. **O router usa
+`exclude_unset`**, que remove o que não foi *enviado* — e a ferramenta envia
+tudo. O efeito real seria `setattr(lead, "nome", None)` contra uma coluna
+`NOT NULL`: **500 com transação abortada, pior que o 422 original**. E o teste
+passava verde sobre um comportamento que não existe em produção.
+
+Um revisor independente derrubou isso, eu verifiquei executando, e a correção
+certa é outra: string vazia faz a **chave ser descartada**, então o campo deixa
+de estar em `model_fields_set` e o `exclude_unset` o ignora sozinho. `null`
+explícito continua limpando o campo — que é o que a interface manda. Os dois
+consumidores já usavam a distinção corretamente; o schema é que a destruía.
+
+O teste passou a bater na **rota**, não no schema. Era exatamente aí que eu tinha
+errado.
+
+## VEREDITO DA FASE 2
+
+| Campo | Estado |
+|---|---|
+| **CRITICAL** | 29 (Fase 1) + 2 novos = 31 · **0 abertos e não bloqueados** |
+| **HIGH** | 108 não resolvidos nem bloqueados |
+| **MEDIUM** | 234 |
+| **LOW** | 95 |
+| RESOLVED | 94 |
+| OPEN | 307 |
+| BLOCKED_OPERATOR | 66 |
+| PROPOSED_FIX (n8n) | 4 |
+| OBSOLETE | 3 |
+| FALSE_POSITIVE | 1 |
+| ADDRESSED_UNVERIFIED restantes | **130** (era 151) |
+| **CURRENT N8N WORKFLOWS RECONCILED** | **3 de 3** |
+| **N8N CHANGES REQUIRED** | 5 de campo (M1–M5) + 7 decisões (D1–D7) |
+| **N8N CHANGES DEPLOYED** | **0** — nenhuma podia ser aplicada daqui |
+| **NOTIFIER REMOVED FROM CURRENT ARCHITECTURE** | sim na documentação e nos findings; **o nó morto continua no Gerenciador** (M2) |
+| **POSTGRESQL TEST ENVIRONMENT** | **não** — sem Docker, sem psql (verificado) |
+| **POSTGRESQL MIGRATIONS** | não executadas |
+| **POSTGRESQL INTEGRATION TESTS** | não. 78 checks de **compilação de dialeto**, que é outra coisa |
+| **M011** | ramo PostgreSQL inspecionado e **aprovado**; **não executado** |
+| **BACKUP GENERATED** | **sim**, ponta a ponta |
+| **BACKUP RESTORED** | **sim**, por dois métodos, com dados conferidos |
+| **CREDENTIAL ROTATION** | **não** — e a Fase 2 descobriu que ela derruba os 3 workflows se o n8n não for atualizado junto (D5) |
+| **SECURITY REVIEW** | sim — trust boundary reavaliado por webhook, um finding CRITICAL invalidado, dois novos |
+| **AIA-HARNESS REVIEW** | `doctor` + `scan` executados. Achado: o harness **nunca foi aplicado** neste projeto |
+| **CAVEMAN REVIEW** | sim — 3 críticas, 1 aceita, 2 rejeitadas com razão técnica |
+| **PONYTAIL REVIEW** | **não executado** — ver limitação abaixo |
+| **CODE REVIEW** | sim — e derrubou a primeira versão de uma correção minha |
+| **TEST SUITE** | **68/68** (baseline 51/51 → Fase 1 64/64) |
+| **REGRESSION** | sem regressão |
+| **GRAPHIFY / STRUCTURAL IMPACT** | Graphify indisponível; medida própria por AST, 0 violações de fronteira |
+
+### EXTERNAL BLOCKERS
+
+1. **Credencial de produção viva e exposta no histórico do git.** Agravante novo:
+   rotacionar sem atualizar a credencial `CRM Brasileiros API` no n8n **derruba
+   os três workflows juntos** (D5).
+2. **Dois webhooks service-to-service abertos na internet** (D1, D2), um deles
+   interpolando corpo anônimo no prompt de um agente com 13 ferramentas de
+   escrita no CRM.
+3. **O sinal de entrada na fila humana está ambíguo em produção** (M1) e a
+   ferramenta morta do Notificador continua conectada (M2).
+4. **Nenhum backup histórico é confiável**, e nenhum restore contra PostgreSQL
+   real foi feito.
+5. **Nenhum teste roda em PostgreSQL.** Reduzi de "invisível" para "conhecido e
+   travado na forma do SQL" — não é o mesmo que testar no dialeto real.
+6. **`models/gemini-3.5-flash-lite` não foi verificado** (D4). Se não existir, os
+   dois agentes falham sempre e o fallback mascara.
+
+### VERDICT
+
+**NOT READY FOR RELEASE VALIDATION**
+
+Justificativa, sem rodeio:
+
+O **código** melhorou de novo e de forma verificável: 68/68, zero CRITICAL
+aberto e não bloqueado, cinco defeitos reais fechados nesta fase, cada um com
+teste que exercita comportamento em vez de conferir string.
+
+O que impede não é o código:
+
+1. **Nada do n8n foi aplicado.** Cinco mudanças de campo estão descritas com
+   valor antigo, valor novo, teste e rollback — e **zero** foram feitas. Duas
+   delas (M1, M2) estão no caminho da decisão mais importante do sistema.
+2. **A credencial continua viva**, e agora sabemos que rotacioná-la sem
+   coordenar com o n8n para os três workflows.
+3. **Backup: melhorou muito e ainda não fecha.** O script foi executado,
+   restaurado e validado — mas contra um `pg_dump` falso, e a descoberta de que
+   a versão da Fase 1 abortaria todo backup real deveria calibrar a confiança em
+   qualquer "corrigido" que não tenha sido executado.
+4. **PostgreSQL continua sem teste de integração.**
+
+**O caminho para READY,** e continua não dependendo de mais programação:
+aplicar M1–M5 · decidir D1–D7 · rotacionar a chave na ordem de D5 · rodar a m011
+contra um clone do backup · subir um PostgreSQL de teste e rodar a suíte nele ·
+gerar um backup e **restaurá-lo** de verdade.
+
+### Limitação declarada: Ponytail
+
+O plugin Ponytail está instalado, mas eu **não o executei**. Caveman entrou como
+crítico independente do plano e produziu três críticas concretas; o segundo
+crítico independente desta fase acabou sendo o revisor de findings, que derrubou
+a primeira versão de uma correção minha. Registro a ausência em vez de alegar
+uma revisão que não houve.
+
+---
+
+---
+
+# FASE 1 — registro original (mantido)
+
 ## 1. O veredito, em uma frase
 
 O repositório está em condição **melhor e mensurável** — 0 CRITICAL fixáveis em
@@ -21,7 +327,10 @@ mas **três coisas que só um operador pode fazer continuam pendentes, e uma del
 é uma credencial viva exposta**. Enquanto elas não forem feitas, liberar não é
 uma decisão técnica de código.
 
-O veredito formal está na seção 9.
+> **Nota da Fase 2:** este parágrafo e a seção 9 abaixo são o registro da Fase 1
+> e foram mantidos como estavam. O veredito que vale é o do fim da seção da
+> Fase 2, acima — ele incorpora a evidência dos workflows reais e dois defeitos
+> graves descobertos no próprio trabalho da Fase 1.
 
 ---
 

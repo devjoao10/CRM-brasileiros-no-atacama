@@ -512,7 +512,6 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
     ).first()
 
     if not conversation:
-        is_new_conversation = True
         conversation = Conversation(
             lead_id=0,  # Will be linked later via CRM
             whatsapp=whatsapp_number,
@@ -542,6 +541,7 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
         # buscar e segue com a linha que o vencedor criou.
         try:
             db.flush()
+            is_new_conversation = True
             logger.info(f"Nova conversa criada: {sender_name} ({whatsapp_number})")
         except sa_exc.IntegrityError:
             db.rollback()
@@ -552,14 +552,16 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
                 # Nao foi a corrida do numero: e outra constraint, e nao ha o que
                 # reconciliar. Deixa subir para o tratamento por mensagem.
                 raise
-            is_new_conversation = False
             logger.info(
                 f"Corrida de primeiro contato em {whatsapp_number}: outra "
                 f"requisicao criou a conversa {conversation.id}; seguindo com ela"
             )
-            conversation.ultimo_msg = content[:200] if content else conversation.ultimo_msg
-            conversation.unread_count = (conversation.unread_count or 0) + 1
-    else:
+
+    # `is_new_conversation` so vira True apos o flush dar certo, entao quem
+    # PERDEU a corrida cai aqui junto com quem ja tinha conversa — sem repetir as
+    # duas linhas de atualizacao e, mais importante, sem pular a reabertura
+    # abaixo. Era `else:` do `if not conversation:` e nao cobria o perdedor.
+    if not is_new_conversation:
         # Update existing conversation
         conversation.ultimo_msg = content[:200] if content else conversation.ultimo_msg
         conversation.unread_count = (conversation.unread_count or 0) + 1
