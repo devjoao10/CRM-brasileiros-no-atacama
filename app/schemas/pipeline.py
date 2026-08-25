@@ -20,8 +20,28 @@ class StageSchema(BaseModel):
         ...,
         min_length=1,
         max_length=64,
-        pattern=r"^[A-Za-z0-9_-]+$",
-        description="ID unico da etapa, em slug (ex: 'novo', 'contato', 'negociacao')",
+        # AUDIT-2026-08-F2 — o padrao ERA `^[A-Za-z0-9_-]+$`, e isso era risco de
+        # DISPONIBILIDADE disfarcado de seguranca.
+        #
+        # `FunnelUpdate.etapas` revalida a lista INTEIRA. Entao qualquer funil de
+        # producao cuja etapa ja tenha id com espaco ou acento passaria a dar 422
+        # em QUALQUER edicao daquele funil — inclusive so renomear o funil. E o
+        # system message do proprio "Agente Gerenciador de Leads" chama a etapa
+        # de "Sem Contato", com espaco. Nao consigo ver o banco de producao para
+        # saber se isso acontece, e a correcao certa e nao depender disso.
+        #
+        # O que protege de verdade e o esc() no template (nove interpolacoes em
+        # templates/pipeline.html), travado por
+        # tests/test_frontend_injection_contract.py. Este padrao e defesa em
+        # profundidade — e defesa em profundidade que derruba funcionalidade
+        # legitima nao e defesa, e uma segunda falha.
+        #
+        # Passa a rejeitar exatamente o que quebra atributo HTML ou literal JS:
+        # aspa simples e dupla, menor/maior, & e barra invertida, mais todos os
+        # caracteres de controle. Espaco e acento sao aceitos — inofensivos
+        # depois de escapados.
+        pattern="^[^\"'<>&\\\\\\x00-\\x1f\\x7f]+$",
+        description="ID unico da etapa (ex: 'novo', 'sem_contato', 'Sem Contato')",
     )
     nome: str = Field(..., description="Nome exibido da etapa (ex: 'Novo Lead')")
     dias_limite: int = Field(7, ge=1, description="Dias máximos antes de considerar o lead estagnado nesta etapa")

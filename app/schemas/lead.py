@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, Union
 from datetime import date, datetime
 
@@ -193,6 +193,33 @@ class LeadUpdate(BaseModel):
         if isinstance(v, str) and not v.strip():
             return None
         return v
+
+    # AUDIT-2026-08-F2 — STRING VAZIA e NULL EXPLICITO querem coisas OPOSTAS,
+    # e os dois consumidores deste endpoint ja os usam assim.
+    #
+    #   n8n  `Tool Atualizar Lead` tem `jsonBody` FIXO: manda as doze chaves em
+    #        TODA chamada, com "" no que nao foi coletado ("Campos sem informacao
+    #        devem ficar vazios", diz o proprio toolDescription).
+    #        "" significa NAO INFORMADO -> nao encoste no campo.
+    #   UI   templates/partials/_lead_edit_modal.html:685-700 manda
+    #        `|| null` em todo campo opcional. `null` significa LIMPE ESTE CAMPO.
+    #
+    # `exclude_unset` no router remove o que nao foi ENVIADO — nao remove o que
+    # foi enviado como "". Sem isto, uma atualizacao rotineira da Bia APAGAVA o
+    # whatsapp e os destinos do lead (colunas anulaveis) e devolvia 500 no
+    # `nome` (NOT NULL). Descartar a chave aqui e o que faz "" virar de fato
+    # "nao informado": o campo deixa de estar em `model_fields_set`, e o
+    # `exclude_unset` do router o ignora sozinho — sem lista de campos escrita a
+    # mao e sem mudar o significado de `null`, que continua limpando.
+    @model_validator(mode="before")
+    @classmethod
+    def descartar_strings_vazias(cls, dados):
+        if not isinstance(dados, dict):
+            return dados
+        return {
+            k: v for k, v in dados.items()
+            if not (isinstance(v, str) and not v.strip())
+        }
 
 
 class LeadResponse(BaseModel):

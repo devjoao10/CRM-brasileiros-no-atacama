@@ -425,8 +425,12 @@ captured = {}
 
 
 async def _capture_agent(agent_url, payload, conversation_id):
+    # AUDIT-2026-08-F2: `_fetch_agent_parts` passou a devolver (partes, silencio)
+    # para distinguir "a Bia decidiu nao responder" de "a Bia nao conseguiu".
+    # O stub acompanha a assinatura real — senao o teste morre com ValueError no
+    # desempacotamento e os checks de F8 abaixo nunca chegam a rodar.
     captured.update(payload)
-    return ["resposta da bia"]
+    return ["resposta da bia"], False
 
 
 _orig_fetch = wh._fetch_agent_parts

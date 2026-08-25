@@ -152,7 +152,18 @@ def run_select_query(query: str) -> str:
         return json.dumps({"error": "Apenas consultas SELECT são permitidas."})
     
     # Bloquear subqueries destrutivas
-    _dangerous = re.compile(r'\b(insert|update|delete|drop|alter|create|attach|pragma|truncate)\b', re.IGNORECASE)
+    # AUDIT-2026-08-F2: `into` entrou na lista, junto de copy/grant/revoke.
+    # `SELECT * INTO copia FROM leads` passava por TODOS os guards acima —
+    # comeca com select, sem ponto e virgula, nenhuma palavra da lista antiga.
+    # No SQLite isso e erro de sintaxe, entao a suite nunca viu problema; no
+    # PostgreSQL e DDL: CRIA TABELA. Repare que `attach` e `pragma` so existem
+    # no SQLite — a lista protegia o dialeto de desenvolvimento e deixava o de
+    # producao aberto. Nenhuma consulta de leitura legitima usa INTO.
+    _dangerous = re.compile(
+        r'\b(insert|update|delete|drop|alter|create|attach|pragma|truncate'
+        r'|into|copy|grant|revoke)\b',
+        re.IGNORECASE,
+    )
     if _dangerous.search(query):
         return json.dumps({"error": "Query contém palavras-chave não permitidas para leitura."})
     

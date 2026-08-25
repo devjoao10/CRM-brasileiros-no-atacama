@@ -42,6 +42,17 @@
 #   • agendamento — o cron acima é comentário; não há crontab, systemd timer
 #     nem sidecar versionado no repositório que prove que isto já rodou.
 #   • teste de restore periódico — um backup nunca restaurado não é um backup.
+#
+# ─── AUDIT-2026-08-W0 (2a passada) — o que a EXECUÇÃO achou ──────────────
+# A 1a passada corrigiu o script lendo-o. Ninguém o RODOU. Ao exercitá-lo de
+# ponta a ponta com um `docker` falso (tests/test_backup_restore_e2e.py), as
+# próprias verificações se mostraram quebradas — ver os comentários adiante:
+#   5. `pipefail` + `grep -q`/`head -c`: quem para de ler cedo mata o gzip com
+#      SIGPIPE, o pipeline vira 141 e a guarda inverte. A de tabela reprovava
+#      TODO dump real; o backup nunca completava.
+#   6. `grep -q $'\r'` não enxerga CR nenhum no grep da família Cygwin/MSYS —
+#      a guarda de regressão do defeito 1 era decoração fora do Linux.
+# Rode o teste antes de mexer aqui:  python tests/test_backup_restore_e2e.py
 set -euo pipefail
 
 # Dump com PII e hash de senha: ninguém além do dono lê. Vem antes do mkdir.
@@ -83,6 +94,21 @@ if ! gzip -t "${tmp}"; then
   exit 1
 fi
 
+# ─── AUDIT-2026-08-W0 (2a passada) — por que o pipefail sai daqui ───────
+# As verificações 2 e 3 leem o dump com consumidores que param CEDO de
+# propósito: `grep -q` sai no primeiro casamento, `head -c` sai em 1 MB.
+# Quem para de ler mata o `gzip -dc` a montante com SIGPIPE, e o gzip sai 141.
+# Com `pipefail` LIGADO o status do PIPELINE vira 141 mesmo quando a checagem
+# deu certo — e as duas guardas invertem de sentido:
+#   • a de tabela (`if ! ...`) reprovava TODO dump maior que o buffer do pipe
+#     (~64 KB), ou seja, todo dump real: o backup nunca completava, dizendo
+#     "tabela 'users' ausente" sobre um dump que continha `COPY public.users`;
+#   • a de CR passaria batido justamente no caso que ela existe para pegar.
+# O `pipefail` protege o pipeline do DUMP (docker | gzip), onde uma falha do
+# pg_dump PRECISA derrubar o script. Aqui ele só atrapalha. Reativado logo
+# depois das leituras.
+set +o pipefail
+
 # Verificação 2: o dump contém as tabelas centrais. Um dump sintaticamente
 # valido de um banco VAZIO passa em tamanho e em gzip -t; esta é a checagem
 # que distingue "backup" de "arquivo".
@@ -95,10 +121,18 @@ done
 
 # Verificação 3: nenhum CR no conteúdo. Guarda de regressão do defeito 1 —
 # se alguem reintroduzir o -t, o backup falha ALTO em vez de corromper calado.
-if gzip -dc "${tmp}" | head -c 1048576 | grep -q $'\r'; then
-  echo "[backup][ERRO] CR encontrado no dump (pseudo-TTY? veja o cabecalho) — abortando" >&2
+# NÃO use `grep -q $'\r'` aqui: o grep da família Cygwin/MSYS descarta o CR
+# final de cada linha antes de casar, então ele NUNCA vê justamente o CR que
+# o pseudo-TTY produz — a guarda vira decoração em qualquer host que não seja
+# Linux. `tr -dc '\r'` conta bytes, sem noção de linha, e vale nos dois.
+# o `tr -dc '0-9'` final e por causa do wc do BSD/macOS, que alinha com espacos
+crs=$(gzip -dc "${tmp}" | head -c 1048576 | tr -dc '\r' | wc -c | tr -dc '0-9')
+if [ "${crs}" -gt 0 ]; then
+  echo "[backup][ERRO] CR encontrado no dump (${crs} em 1MB; pseudo-TTY? veja o cabecalho) — abortando" >&2
   exit 1
 fi
+
+set -o pipefail
 
 # Só agora vira um backup de verdade.
 mv "${tmp}" "${out}"

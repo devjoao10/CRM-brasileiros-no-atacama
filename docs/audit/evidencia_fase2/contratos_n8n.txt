@@ -1,0 +1,44 @@
+==============================================================================
+ROTAS REAIS NO CODIGO: 208 (crm=132, conversas=76)
+==============================================================================
+
+### Formulário do Site → CRM BnA   (ativo=True)
+  WEBHOOK  POST  /webhook/formulario-site        auth=NENHUMA  responseMode=responseNode
+  CALL     GET    /                                            auth=genericCredentialType  OK  -> app/routers/pages.py::root guardas=['NENHUMA']
+  CALL     PUT    /                                            auth=genericCredentialType  !! SEM ROTA CORRESPONDENTE
+  CALL     POST   /api/leads                                   auth=genericCredentialType  OK  -> app/routers/leads.py::create_lead guardas=['get_current_user']
+  CALL     POST   /api/pipeline/funnels/3/leads                auth=genericCredentialType  OK  -> app/routers/pipeline.py::add_lead_to_funnel guardas=['get_current_user']
+  CALL     PUT    /                                            auth=genericCredentialType  !! SEM ROTA CORRESPONDENTE
+
+### Agente Gerenciador de Leads — BnA   (ativo=True)
+  WEBHOOK  POST  /webhook/gerenciador-leads      auth=NENHUMA  responseMode=responseNode
+  MODELO   node='Gemini 2.5 Flash'  modelName='models/gemini-3.5-flash-lite'
+  CALL     GET    /api/leads/by-whatsapp/{whatsapp             auth=genericCredentialType  OK  -> app/routers/leads.py::get_lead_by_whatsapp guardas=['get_current_user']
+  CALL     POST   /api/leads                                   auth=genericCredentialType  OK  -> app/routers/leads.py::create_lead guardas=['get_current_user']
+  CALL     PUT    /api/leads/{lead_id                          auth=genericCredentialType  OK  -> app/routers/leads.py::update_lead guardas=['get_current_user']
+  CALL     GET    /api/tags                                    auth=genericCredentialType  OK  -> app/routers/tags.py::list_tags guardas=['get_current_user']
+  CALL     GET    /api/tags/lead/{lead_id                      auth=genericCredentialType  OK  -> app/routers/tags.py::get_lead_tags guardas=['get_current_user']
+  CALL     PUT    /api/tags/lead/{lead_id                      auth=genericCredentialType  OK  -> app/routers/tags.py::set_lead_tags guardas=['get_current_user']
+  CALL     GET    /api/pipeline/funnels                        auth=genericCredentialType  OK  -> app/routers/pipeline.py::list_funnels guardas=['get_current_user']
+  CALL     POST   /api/pipeline/funnels/{funnel_id             auth=genericCredentialType  !! SEM ROTA CORRESPONDENTE
+  CALL     PUT    /api/pipeline/entries/{entry_id              auth=genericCredentialType  !! SEM ROTA CORRESPONDENTE
+  CALL     POST   /api/pipeline/entries/{entry_id              auth=genericCredentialType  !! SEM ROTA CORRESPONDENTE
+  CALL     PUT    /api/leads/{lead_id                          auth=genericCredentialType  OK  -> app/routers/leads.py::update_lead guardas=['get_current_user']
+  CALL     POST   /api/tasks                                   auth=genericCredentialType  OK  -> app/routers/tasks.py::create_task guardas=['get_current_user']
+  CALL     PUT    /api/leads/{lead_id                          auth=genericCredentialType  OK  -> app/routers/leads.py::update_lead guardas=['get_current_user']
+  CALL     POST   /webhook/notificacao                         auth=NENHUMA                CHAMADA A OUTRO WORKFLOW n8n
+
+### WF-01 Agente Bia   (ativo=True)
+  WEBHOOK  POST  /webhook/agent-bia              auth=NENHUMA  responseMode=responseNode
+  SUBWF    BIA — Consultar Knowledge Base  (id=ZaCLNwNbQ84y4eAW)
+  MODELO   node='Gemini 2.5 Flash'  modelName='models/gemini-3.5-flash-lite'
+  CALL     GET    /api/leads/by-whatsapp/{whatsapp             auth=genericCredentialType  OK  -> app/routers/leads.py::get_lead_by_whatsapp guardas=['get_current_user']
+  CALL     POST   /webhook/gerenciador-leads                   auth=NENHUMA                CHAMADA A OUTRO WORKFLOW n8n
+
+==============================================================================
+CHAMADAS SEM ROTA CORRESPONDENTE: 5
+   ('Formulário do Site → CRM BnA', 'Atualizar lead existente', 'PUT', '/')
+   ('Formulário do Site → CRM BnA', 'Adicionar anotação ao lead', 'PUT', '/')
+   ('Agente Gerenciador de Leads — BnA', 'Tool Adicionar ao Funil', 'POST', '/api/pipeline/funnels/{funnel_id')
+   ('Agente Gerenciador de Leads — BnA', 'Tool Mover Etapa', 'PUT', '/api/pipeline/entries/{entry_id')
+   ('Agente Gerenciador de Leads — BnA', 'Tool Transferir Funil', 'POST', '/api/pipeline/entries/{entry_id')

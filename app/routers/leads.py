@@ -507,6 +507,26 @@ def update_lead(
         raise HTTPException(status_code=404, detail="Lead não encontrado")
 
     update_data = data.model_dump(exclude_unset=True)
+
+    # AUDIT-2026-08-F2 — `None` NUNCA pode virar UPDATE de coluna NOT NULL.
+    #
+    # `exclude_unset` remove o que NAO foi enviado; nao remove o que foi enviado
+    # COMO null. E a `Tool Atualizar Lead` do n8n manda as doze chaves em toda
+    # chamada, com string vazia no que nao foi coletado — que os validadores do
+    # schema convertem para None. Sem este filtro, `setattr(lead, "nome", None)`
+    # bate no `nullable=False` e devolve 500 com a transacao abortada, que e
+    # PIOR que o 422 anterior.
+    #
+    # O filtro e derivado do MODELO, nao de uma lista escrita a mao: se alguem
+    # tornar uma coluna NOT NULL amanha, a protecao passa a valer sozinha. E
+    # continua sendo possivel LIMPAR campo que aceita null (email, datas,
+    # responsavel_id), que e comportamento legitimo da interface.
+    _nao_anulaveis = {c.name for c in Lead.__table__.columns if not c.nullable}
+    update_data = {
+        campo: valor for campo, valor in update_data.items()
+        if not (valor is None and campo in _nao_anulaveis)
+    }
+
     for field, value in update_data.items():
         setattr(lead, field, value)
 

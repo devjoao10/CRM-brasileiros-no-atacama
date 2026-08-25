@@ -251,18 +251,30 @@ print("\n4) StageSchema.id validado na entrada")
 from app.schemas.pipeline import StageSchema  # noqa: E402
 import pydantic  # noqa: E402
 
-for bom in ("novo", "contato", "negociacao", "e1", "stage-1", "A_b-9"):
+# AUDIT-2026-08-F2: o padrao deixou de ser uma allowlist de slug.
+# Motivo, por extenso em app/schemas/pipeline.py: `FunnelUpdate` revalida a
+# lista `etapas` INTEIRA, entao exigir slug faria QUALQUER edicao de um funil de
+# producao cuja etapa tenha espaco ou acento devolver 422 — e o system message
+# do "Agente Gerenciador de Leads" chama a etapa de "Sem Contato". Defesa em
+# profundidade que derruba funcionalidade legitima nao e defesa.
+# O que segue travado e o que de fato protege: o esc() no template, verificado
+# na secao 3 acima e na regra da secao 1.
+for bom in ("novo", "contato", "negociacao", "e1", "stage-1", "A_b-9",
+            "sem_contato", "Sem Contato", "Pré-venda", "etapa 1"):
     try:
         StageSchema(id=bom, nome="x")
-        check(True, f"slug legitimo aceito: {bom!r}")
+        check(True, f"id legitimo aceito: {bom!r}")
     except pydantic.ValidationError as e:
-        check(False, f"slug legitimo REJEITADO: {bom!r} ({e})")
+        check(False, f"id legitimo REJEITADO: {bom!r} ({e})")
 
 for mau, porque in (
     ("x');alert(1);//", "quebra literal JS"),
     ('a"b', "quebra atributo aspeado"),
     ("<script>", "markup"),
-    ("com espaco", "espaco"),
+    ("a&b", "entidade HTML"),
+    ("a\\b", "barra invertida"),
+    ("tab\tid", "caractere de controle"),
+    ("nul\x00id", "NUL"),
     ("", "vazio"),
     ("x" * 65, "acima de 64 (funnel_entries.etapa_id e String(100))"),
 ):

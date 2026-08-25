@@ -61,6 +61,26 @@ AGENT_FALLBACK_REPLY = (
 #
 # IntegrityError NAO entra aqui de proposito: e subclasse de DBAPIError mas
 # significa "estes dados violam uma constraint", nao "o banco caiu".
+#
+# AUDIT-2026-08-F2 — ProgrammingError e DataError entraram, e a razao importa:
+# esta lista era DIALETO-DEPENDENTE, e o dialeto de producao e o que nao estava
+# coberto.
+#
+#   coluna/tabela/funcao inexistente  SQLite -> OperationalError  (na lista)
+#                                     Postgres -> ProgrammingError (FORA)
+#   valor fora do enum                SQLite -> OperationalError  (na lista)
+#                                     Postgres -> DataError       (FORA)
+#
+# Consequencia em producao, e so em producao: qualquer drift de schema fazia a
+# rota devolver 200 a Meta — "entreguei" — e a Meta NUNCA reenvia. Mensagem de
+# cliente perdida em definitivo. A suite SQLite demonstrava o comportamento
+# oposto (503 + reentrega) e por isso nada nunca acusou.
+#
+# IntegrityError continua FORA de proposito: e "estes dados violam uma
+# constraint", nao "o banco caiu" — pedir reentrega de um dado invalido so gera
+# tempestade. A corrida de primeiro contato, que passa a levantar IntegrityError
+# quando o indice unico de `conversations.whatsapp` existir, e tratada no ponto
+# de criacao da conversa, nao aqui.
 _INFRA_ERRORS = (
     sa_exc.OperationalError,
     sa_exc.InterfaceError,
@@ -68,7 +88,9 @@ _INFRA_ERRORS = (
     sa_exc.DisconnectionError,
     sa_exc.TimeoutError,     # pool exausto
     sa_exc.ResourceClosedError,
-    OSError,                 # cobre ConnectionError, socket, disco
+    sa_exc.ProgrammingError,  # PostgreSQL: 42703/42P01/42883 (schema drift)
+    sa_exc.DataError,         # PostgreSQL: 22P02 (valor fora do enum/tipo)
+    OSError,                  # cobre ConnectionError, socket, disco
 )
 
 # AUDIT-2026-08-W1D (F5) — precedencia de status de entrega da Meta.
@@ -501,8 +523,42 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
             last_customer_msg_at=msg_at if opens_window else None,
         )
         db.add(conversation)
-        db.flush()
-        logger.info(f"Nova conversa criada: {sender_name} ({whatsapp_number})")
+        # AUDIT-2026-08-F2 — a corrida de PRIMEIRO CONTATO precisa ser resolvida
+        # AQUI, e precisa existir ANTES de a m011 rodar.
+        #
+        # Isto e um busca-e-cria-se-nao-achar sem lock. Duas mensagens do mesmo
+        # numero chegando juntas (a Meta agrupa, e o cliente manda em rajada)
+        # entram as duas no ramo de criacao. Hoje, sem o indice unico, o perdedor
+        # cria uma SEGUNDA conversa e o historico do cliente nasce partido em
+        # dois — ruim, mas visivel e recuperavel.
+        #
+        # Assim que `uq_conversations_whatsapp` (m011) existir, o perdedor passa
+        # a levantar IntegrityError, que NAO esta em _INFRA_ERRORS de proposito:
+        # ele cairia no except que devolve 200 a Meta, e a Meta nunca reenvia.
+        # A conversa duplicada viraria MENSAGEM PERDIDA — a migration trocaria um
+        # defeito visivel por um invisivel.
+        #
+        # A saida e a canonica: quem perde a corrida releva o erro, volta a
+        # buscar e segue com a linha que o vencedor criou.
+        try:
+            db.flush()
+            logger.info(f"Nova conversa criada: {sender_name} ({whatsapp_number})")
+        except sa_exc.IntegrityError:
+            db.rollback()
+            conversation = db.query(Conversation).filter(
+                Conversation.whatsapp == whatsapp_number
+            ).first()
+            if conversation is None:
+                # Nao foi a corrida do numero: e outra constraint, e nao ha o que
+                # reconciliar. Deixa subir para o tratamento por mensagem.
+                raise
+            is_new_conversation = False
+            logger.info(
+                f"Corrida de primeiro contato em {whatsapp_number}: outra "
+                f"requisicao criou a conversa {conversation.id}; seguindo com ela"
+            )
+            conversation.ultimo_msg = content[:200] if content else conversation.ultimo_msg
+            conversation.unread_count = (conversation.unread_count or 0) + 1
     else:
         # Update existing conversation
         conversation.ultimo_msg = content[:200] if content else conversation.ultimo_msg
@@ -764,11 +820,28 @@ def _split_agent_reply(resposta: str) -> list:
     return partes
 
 
-async def _fetch_agent_parts(agent_url: str, payload: dict, conversation_id) -> list:
+async def _fetch_agent_parts(agent_url: str, payload: dict, conversation_id):
     """
-    CONV-AGENT-01 — partes da resposta da Bia, ou `[]` quando NAO foi possivel
-    obter resposta utilizavel. Lista vazia e o unico sinal de degradacao: quem
-    chama nao precisa distinguir os modos de falha, so saber que nao ha resposta.
+    CONV-AGENT-01 — devolve `(partes, silencio)`.
+
+    AUDIT-2026-08-F2 — antes devolvia so `list`, e a docstring dizia que "quem
+    chama nao precisa distinguir os modos de falha". Precisa: sao DOIS
+    resultados diferentes, com acoes opostas.
+
+      partes nao vazio        -> responder ao cliente com essas partes
+      ([], silencio=True)     -> a Bia DECIDIU nao responder. Nao mandar nada,
+                                 nao logar erro.
+      ([], silencio=False)    -> a Bia nao CONSEGUIU responder. Fallback.
+
+    O workflow atual da Bia tem um portao para mensagem composta so de emoji
+    (node `Ignorar mensagem`), que responde 204 sem corpo. Enquanto todo
+    nao-200 era degradacao, um cliente que mandasse um polegar pra cima
+    recebia "Tive uma instabilidade para processar sua mensagem agora" — e cada
+    reacao gravava uma linha de ERRO no log de um evento perfeitamente normal.
+
+    Tambem aceita `200 {"ignorar": true}` como silencio, para o caso de o
+    workflow preferir responder 200 — assim a correcao nao depende de qual das
+    duas formas o operador aplicar no n8n.
 
     Cobre, sem levantar: timeout (leitura e conexao), conexao recusada e demais
     erros de rede, HTTP != 200, corpo que nao e JSON, JSON sem `resposta` e
@@ -783,26 +856,42 @@ async def _fetch_agent_parts(agent_url: str, payload: dict, conversation_id) -> 
         async with httpx.AsyncClient(timeout=AGENT_TIMEOUT) as client:
             resp = await client.post(agent_url, json=payload)
 
+            # 204/205 = "recebi e nao ha o que responder". E a resposta certa
+            # para o portao de emoji, e NAO e degradacao.
+            if resp.status_code in (204, 205):
+                logger.debug(
+                    f"Agente IA sinalizou silencio ({resp.status_code}) "
+                    f"para a conversa {conversation_id}"
+                )
+                return [], True
+
             if resp.status_code != 200:
                 logger.warning(
                     f"Agente IA retornou status {resp.status_code} "
                     f"(conversa {conversation_id}): {resp.text[:200]}"
                 )
-                return []
+                return [], False
 
-            partes = _split_agent_reply(resp.json().get("resposta", ""))
+            corpo = resp.json()
+            if corpo.get("ignorar") is True:
+                logger.debug(
+                    f"Agente IA pediu para ignorar a conversa {conversation_id}"
+                )
+                return [], True
+
+            partes = _split_agent_reply(corpo.get("resposta", ""))
             if not partes:
                 logger.warning(
                     f"Agente IA respondeu 200 sem texto utilizavel "
                     f"(conversa {conversation_id})"
                 )
-            return partes
+            return partes, False
     except httpx.TimeoutException:
         logger.warning(
             f"Timeout ({AGENT_TIMEOUT.read}s) ao chamar agente IA "
             f"para conversa {conversation_id}"
         )
-        return []
+        return [], False
     except Exception as e:
         # Rede, DNS, conexao recusada, corpo nao-JSON: resumo seguro, sem o
         # texto bruto da excecao (pode carregar URL/payload).
@@ -810,7 +899,7 @@ async def _fetch_agent_parts(agent_url: str, payload: dict, conversation_id) -> 
             f"Erro ao encaminhar para agente IA (conversa {conversation_id}): "
             f"{type(e).__name__}"
         )
-        return []
+        return [], False
 
 
 async def _forward_to_agent(conversation: Conversation, message_text: str, db: Session):
@@ -857,7 +946,14 @@ async def _forward_to_agent(conversation: Conversation, message_text: str, db: S
 
     agent_url = f"{N8N_BASE_URL}/webhook/agent-bia"
 
-    partes = await _fetch_agent_parts(agent_url, payload, conversation.id)
+    partes, silencio = await _fetch_agent_parts(agent_url, payload, conversation.id)
+
+    # AUDIT-2026-08-F2: silencio DELIBERADO da Bia (portao de emoji) nao e
+    # degradacao. Sai daqui sem enviar nada e sem marcar falha — mandar o
+    # fallback aqui era responder "tive uma instabilidade" a quem so reagiu com
+    # um emoji.
+    if silencio:
+        return
 
     # Degradado = a Bia nao respondeu. UMA mensagem generica, montada aqui e nao
     # pedida ao n8n de novo: fallback nunca dispara uma segunda execucao da Bia.
