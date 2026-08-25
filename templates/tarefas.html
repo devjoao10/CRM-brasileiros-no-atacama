@@ -282,6 +282,24 @@
         const data = await resp.json();
         const select = document.getElementById('taskResponsavel');
 
+        // AUDIT-2026-08-W2G-orq: o backend passou a exigir admin para DEFINIR o
+        // dono de uma tarefa, e com razao — quem nao e admin so ve
+        // `Task.user_id == current_user.id` na listagem, entao atribuir a outra
+        // pessoa (ou ao Agente IA, que grava user_id NULL) faria a tarefa
+        // desaparecer da tela de quem a criou, sem volta pela interface.
+        // Este filtro e COSMETICO: a autoridade e o 403 do servidor, que o
+        // handler de salvar ja exibe. Ele existe para nao oferecer uma opcao que
+        // sempre falha.
+        const _u = (window.Auth && Auth.getUser && Auth.getUser()) || {};
+        const _papel = String(_u.role || '').toLowerCase();
+        if (_papel !== 'admin') {
+            const nota = document.createElement('option');
+            nota.disabled = true;
+            nota.textContent = '— atribuir a outra pessoa: só administradores —';
+            select.appendChild(nota);
+            return;
+        }
+
         for (const u of data.users) {
             const opt = document.createElement('option');
             if (u.id === 0) {

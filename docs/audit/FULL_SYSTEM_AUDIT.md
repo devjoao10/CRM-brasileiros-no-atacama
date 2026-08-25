@@ -191,7 +191,58 @@ lacunas é pior que nenhum:
 
 ---
 
-## 8. Estado da estabilização
+## 8. O que a fase de IMPLEMENTAÇÃO descobriu (e a leitura não)
+
+Registrado separado porque muda a leitura da seção 6: 100% de cobertura de
+leitura não é 100% de descoberta, e estes são a prova disso. Todos apareceram
+**depois**, ao verificar correções e ao não aceitar uma dispensa preguiçosa.
+
+**`stage.id` não é uma chave inteira.** A auditoria dispensou
+`onStageSearch('${stage.id}')` como "id interno". Ao conferir o modelo:
+`StageSchema.id: str = Field(...)` — sem `pattern`, sem `max_length` — escolhido
+pelo CLIENTE em `POST/PUT /api/pipeline/funnels` e guardado no JSON
+`funnels.etapas`. O board interpolava esse valor em NOVE lugares, e em SEIS
+deles **cru dentro de atributo** (`data-stage`, `id="cnt-…"`, `q-`, `per-`,
+`body-`), onde uma aspa dupla fecha o atributo e injeta HTML direto.
+
+**`allDestinos` não é vocabulário fechado.** `GET /api/leads/destinos` devolve
+`sorted(set(DESTINOS_PRINCIPAIS) | {todo destino de todo lead})`, e destino de
+lead é JSON livre escrito pelo n8n. Em `segmentacao.html` o TEXTO do chip já
+passava por `esc()` e o valor no `onclick` do mesmo elemento não passava por
+nada.
+
+**O envenenamento da ORM foi verificado, não deduzido.** `conversas/app/seed.py`
+grava `role="admin"`. Reproduzido nos dois sentidos num SQLite limpo: com
+`'admin'` na coluna, `query(User)` do CRM levanta
+`LookupError: 'admin' is not among the defined enum values`; com `'ADMIN'`,
+devolve `UserRole.ADMIN`. Não é um usuário quebrado — é toda consulta do CRM que
+retorne aquela linha.
+
+**Uma flag de dados decidia o esquema de senha.** O login local do Conversas
+(SHA-256 sem sal) era escolhido por `CONVERSAS_SEED_DEV_DATA`. Ligar essa flag em
+produção para popular dados de demonstração trocaria, junto e sem aviso, toda a
+autenticação do serviço.
+
+**O CI arquivava um teste no job errado.** `test_conversas_security.py` era o
+único teste do Conversas sem o literal `CONVERSAS_DIR`, que é o discriminador de
+job — rodava no job do CRM e passava por acidente.
+
+**Um `git stash` concorrente reverteu 49 arquivos.** Ver a observação de método
+em `RELEASE_READINESS.md` §8: propriedade exclusiva de ARQUIVO não basta quando o
+índice do git é global.
+
+**Cinco testes não mediam comportamento.** Um terminava em `or True` (sempre
+verdadeiro); dois fatiavam uma função em `[:1200]` e `[:600]` caracteres; um
+exigia diff zero contra `origin/main` para sempre; um dependia da ausência de um
+UNIQUE. E 16 chamadas `subprocess.run(text=True)` sem `encoding` — verdes no CI
+Linux, vermelhas na máquina de quem escreve o código.
+
+**A única autenticação do webhook nunca era exercitada.** 29 arquivos de teste
+mencionam `META_APP_SECRET`; todos o definem vazio, para desligar a verificação.
+
+---
+
+## 9. Estado da estabilização
 
 Ver `FULL_SYSTEM_STABILIZATION_PLAN.md` para as waves e
 `RELEASE_READINESS.md` para os números finais, o que ficou aberto, e a lista
