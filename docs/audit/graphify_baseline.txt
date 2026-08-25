@@ -1,0 +1,72 @@
+nodes=3182 edges=7148 directed=False
+relations={"contains": 1890, "calls": 1280, "references": 1043, "imports_from": 850, "imports": 841, "rationale_for": 549, "method": 217, "uses": 205, "inherits": 190, "indirect_call": 82, "re_exports": 1}
+files_with_nodes=290
+
+=== TOP 35 symbols by degree (hotspots / blast radius) ===
+  96 in= 91 out=  5  database.py                              app/database.py:L1
+  93 in= 28 out= 65  main.py                                  app/main.py:L1
+  88 in= 58 out= 30  auth.py                                  app/auth.py:L1
+  81 in=  0 out= 81  conversas.js                             conversas/static/js/conversas.js:L1
+  77 in=  0 out= 77  test_leads_keyset_pagination.py          tests/test_leads_keyset_pagination.py:L1
+  72 in= 72 out=  0  None                                     None:None
+  69 in= 66 out=  3  Conversation                             conversas/app/models/conversation.py:L39
+  64 in=  1 out= 63  pipeline.py                              app/routers/pipeline.py:L1
+  62 in=  1 out= 61  conversations.py                         conversas/app/routers/conversations.py:L1
+  61 in= 61 out=  0  None                                     None:None
+  60 in= 60 out=  0  None                                     None:None
+  60 in= 60 out=  0  None                                     None:None
+  59 in=  3 out= 56  leads.py                                 app/routers/leads.py:L1
+  57 in= 51 out=  6  get_current_user()                       app/auth.py:L134
+  56 in= 56 out=  0  None                                     None:None
+  56 in= 56 out=  0  None                                     None:None
+  56 in= 11 out= 45  webhook.py                               conversas/app/routers/webhook.py:L1
+  50 in= 50 out=  0  datetime                                 :
+  48 in= 46 out=  2  User                                     app/models/user.py:L14
+  48 in=  1 out= 47  ai_tools.py                              app/services/ai_tools.py:L1
+  47 in=  3 out= 44  segments.py                              app/routers/segments.py:L1
+  47 in=  0 out= 47  test_leads_deeplink_pinned.py            tests/test_leads_deeplink_pinned.py:L1
+  46 in=  7 out= 39  variables.py                             conversas/app/services/variables.py:L1
+  43 in=  1 out= 42  templates.py                             conversas/app/routers/templates.py:L1
+  42 in=  0 out= 42  test_segments_sql_count.py               tests/test_segments_sql_count.py:L1
+  41 in= 33 out=  8  conversation.py                          conversas/app/models/conversation.py:L1
+  41 in=  1 out= 40  test_auth_session_consistency.py         tests/test_auth_session_consistency.py:L1
+  41 in=  0 out= 41  test_pipeline_inline_lead_edit.py        tests/test_pipeline_inline_lead_edit.py:L1
+  40 in=  1 out= 39  variables.py                             conversas/app/routers/variables.py:L1
+  40 in=  4 out= 36  meta_templates.py                        conversas/app/services/meta_templates.py:L1
+  39 in=  2 out= 37  ai.py                                    app/routers/ai.py:L1
+  38 in=  7 out= 31  operational.py                           app/schemas/operational.py:L1
+  37 in= 35 out=  2  Lead                                     app/models/lead.py:L8
+  37 in= 35 out=  2  Message                                  conversas/app/models/conversation.py:L97
+  36 in=  2 out= 34  operational_cards.py                     app/routers/operational_cards.py:L1
+
+=== TOP 30 files by aggregate degree ===
+ 1009  nodes=257  ?
+  470  nodes= 82  conversas/static/js/conversas.js
+  368  nodes= 81  tests/test_leads_keyset_pagination.py
+  281  nodes= 27  app/auth.py
+  266  nodes= 50  conversas/app/routers/conversations.py
+  234  nodes= 43  app/routers/pipeline.py
+  226  nodes= 47  tests/test_leads_deeplink_pinned.py
+  221  nodes= 51  conversas/app/services/variables.py
+  204  nodes= 41  app/routers/leads.py
+  202  nodes= 54  tests/test_segments_sql_count.py
+  192  nodes= 44  conversas/app/services/meta_templates.py
+  172  nodes= 27  tests/test_pipeline_stage_pagination.py
+  168  nodes= 36  conversas/static/js/settings.js
+  162  nodes= 30  app/schemas/operational.py
+  161  nodes= 34  tests/test_pipeline_review_final.py
+  160  nodes= 32  conversas/app/routers/webhook.py
+  160  nodes= 45  tests/test_pipeline_inline_lead_edit.py
+  158  nodes= 11  conversas/app/models/conversation.py
+  157  nodes= 30  conversas/app/routers/templates.py
+  141  nodes= 28  conversas/app/services/whatsapp.py
+  137  nodes= 38  tests/test_auth_session_consistency.py
+  135  nodes= 20  app/routers/segments.py
+  134  nodes=  4  app/database.py
+  130  nodes= 24  conversas/app/routers/variables.py
+  123  nodes=  9  app/main.py
+  123  nodes= 27  app/routers/pages.py
+  122  nodes= 35  tests/test_pipeline_target_clear.py
+  117  nodes= 28  app/schemas/pipeline.py
+  114  nodes= 28  app/services/ai_tools.py
+  106  nodes= 15  app/routers/operational_cards.py
