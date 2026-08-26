@@ -218,7 +218,15 @@
                     </div>
                     <div class="filter-group">
                         <label>Viajantes</label>
-                        <input type="number" class="filter-days" id="pipeFilterViajantes" placeholder="min" min="1" oninput="applyFilters()" title="Filtrar leads com pelo menos X viajantes" style="width:70px">
+                        <!-- AUDIT-2026-08-WC5: "pelo menos" e "exatamente" sao perguntas
+                             diferentes. O campo era so minimo, e a operacao precisa
+                             separar viajante solo de casal e de familia. O modo e
+                             explicito para o filtro nunca mentir sobre o que faz. -->
+                        <select class="filter-days" id="pipeFilterViajantesModo" onchange="applyFilters()" title="Como comparar o numero de viajantes" style="width:96px">
+                            <option value="min">pelo menos</option>
+                            <option value="exato">exatamente</option>
+                        </select>
+                        <input type="number" class="filter-days" id="pipeFilterViajantes" placeholder="nº" min="1" oninput="applyFilters()" title="Numero de viajantes (adultos)" style="width:70px">
                     </div>
                     <button class="filter-clear" onclick="clearPipeFilters()">✕ Limpar</button>
                     <button class="filter-clear" id="clearTargetBtn" style="display:none" onclick="clearTargetLead()"
@@ -557,7 +565,13 @@
         if (g('pipeFilterSearch')) p.set('q', g('pipeFilterSearch'));
         if (g('pipeFilterDestino')) p.set('destino', g('pipeFilterDestino'));
         if (g('pipeFilterResponsavel') !== '') p.set('responsavel_id', g('pipeFilterResponsavel'));
-        if (g('pipeFilterViajantes')) p.set('viajantes_min', g('pipeFilterViajantes'));
+        if (g('pipeFilterViajantes')) {
+            // AUDIT-2026-08-WC5: um parametro OU o outro, nunca os dois — o
+            // backend recusa a combinacao com 422 de proposito.
+            const modoViajantes = g('pipeFilterViajantesModo') === 'exato'
+                ? 'viajantes_exato' : 'viajantes_min';
+            p.set(modoViajantes, g('pipeFilterViajantes'));
+        }
         // AUDIT-2026-08-WC (F-430): pipeFilterDays era lido por hasActiveFilters()
         // e limpo por clearPipeFilters(), mas nunca virava parametro de request —
         // o filtro parecia ativo e nao fazia nada. Reaproveita chegada_de/
@@ -834,6 +848,9 @@
         ['pipeFilterSearch','pipeFilterDestino','pipeFilterDays','pipeFilterDateFrom',
          'pipeFilterDateTo','pipeFilterResponsavel','pipeFilterViajantes']
             .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+        // AUDIT-2026-08-WC5: o modo volta ao default (pelo menos), nao a "".
+        const modoEl = document.getElementById('pipeFilterViajantesModo');
+        if (modoEl) modoEl.value = 'min';
         selectedFilterTags.clear();
         renderFilterTagsDropdown();
         updateTagBtnLabel();

@@ -294,6 +294,49 @@ def test_filtro_viajantes_minimo():
     assert ctx["l4"] not in ids, "lead sem num_viajantes nao pode casar >= N"
 
 
+def test_filtro_viajantes_exato():
+    """
+    AUDIT-2026-08-WC5 — "pelo menos X" e "exatamente X" sao perguntas diferentes.
+
+    O filtro nasceu como MINIMO (a UI diz "pelo menos X" e
+    `test_filtro_viajantes_minimo`, logo acima, trava esse contrato). A operacao
+    precisa tambem separar viajante solo de casal e de familia, o que o minimo
+    nao consegue expressar. Trocar a semantica do parametro existente atenderia
+    um dos dois e quebraria o outro — inclusive quem ja tivesse salvo um filtro.
+    Por isso e um parametro NOVO, e os dois convivem.
+
+    Fixtures: l1 tem 4 viajantes, l2 tem 2, l3 tem 9, l4 tem NULL.
+    """
+    client, ctx = _setup()
+
+    ids, _ = _ids(client, _stage(ctx, viajantes_exato=4))
+    assert ids == {ctx["l1"]}, f"viajantes == 4 deve trazer SO o l1: {ids}"
+    assert ctx["l3"] not in ids, "l3 tem 9 viajantes — o exato nao pode se comportar como minimo"
+
+    ids2, _ = _ids(client, _stage(ctx, viajantes_exato=2))
+    assert ids2 == {ctx["l2"]}, f"viajantes == 2 deve trazer SO o l2: {ids2}"
+
+    ids3, _ = _ids(client, _stage(ctx, viajantes_exato=1))
+    assert ids3 == set(), f"nenhum lead tem exatamente 1 viajante: {ids3}"
+
+    # NULL nao casa com numero nenhum, igual ao ramo do minimo.
+    ids4, _ = _ids(client, _stage(ctx, viajantes_exato=9))
+    assert ctx["l4"] not in ids4, "lead sem num_viajantes nao pode casar == N"
+
+    # O minimo continua intacto ao lado — este e o ponto do parametro novo.
+    ids5, _ = _ids(client, _stage(ctx, viajantes_min=4))
+    assert ids5 == {ctx["l1"], ctx["l3"]}, f"viajantes >= 4 nao pode ter mudado: {ids5}"
+
+
+def test_filtro_viajantes_min_e_exato_juntos_e_recusado():
+    """
+    Mandar os dois seria ambiguo: o backend nao deve escolher um em silencio.
+    """
+    client, ctx = _setup()
+    resp = client.get(_stage(ctx, viajantes_min=2, viajantes_exato=4))
+    assert resp.status_code == 422,         f"min + exato juntos devem ser recusados com 422, veio {resp.status_code}"
+
+
 def test_filtro_chegada_intervalo():
     client, ctx = _setup()
     ids, _ = _ids(client, _stage(ctx, chegada_de="2026-03-01", chegada_ate="2026-03-31"))

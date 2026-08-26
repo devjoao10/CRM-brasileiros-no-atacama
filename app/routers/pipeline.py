@@ -364,7 +364,19 @@ def _stage_query(db: Session, funnel_id: str, etapa_id: str, f: dict):
     if f.get("tag_ids"):
         sub = db.query(lead_tags.c.lead_id).filter(lead_tags.c.tag_id.in_(f["tag_ids"]))
         query = query.filter(Lead.id.in_(sub.subquery()))
-    if f.get("viajantes_min") is not None:
+    # AUDIT-2026-08-WC5 — "pelo menos X" e "exatamente X" sao perguntas
+    # DIFERENTES, e a operacao precisa das duas.
+    #
+    # O filtro nasceu como minimo (a UI diz "pelo menos X viajantes" e dois
+    # testes existentes afirmam esse contrato), mas a regra operacional que
+    # motivou este ajuste pede quantidade EXATA: separar casal de familia de
+    # viajante solo. Trocar a semantica de `viajantes_min` atenderia um dos
+    # dois e quebraria o outro — inclusive quem ja salvou um filtro.
+    # Por isso e um parametro NOVO, e os dois nunca chegam juntos (a rota
+    # rejeita a combinacao com 422).
+    if f.get("viajantes_exato") is not None:
+        query = query.filter(Lead.num_viajantes == f["viajantes_exato"])
+    elif f.get("viajantes_min") is not None:
         query = query.filter(Lead.num_viajantes >= f["viajantes_min"])
     if f.get("chegada_de"):
         query = query.filter(Lead.data_chegada >= f["chegada_de"])
@@ -425,7 +437,10 @@ def get_stage_cards(
     responsavel_id: Optional[int] = Query(None, description="0 = Agente IA"),
     destino: Optional[str] = Query(None),
     tag_ids: Optional[List[int]] = Query(None),
-    viajantes_min: Optional[int] = Query(None),
+    viajantes_min: Optional[int] = Query(
+        None, ge=1, description="Leads com PELO MENOS este numero de viajantes"),
+    viajantes_exato: Optional[int] = Query(
+        None, ge=1, description="Leads com EXATAMENTE este numero de viajantes"),
     chegada_de: Optional[date] = Query(None),
     chegada_ate: Optional[date] = Query(None),
     include_lead_id: Optional[int] = Query(
@@ -438,8 +453,15 @@ def get_stage_cards(
     filtros = {
         "q": q, "periodo": periodo, "responsavel_id": responsavel_id,
         "destino": destino, "tag_ids": tag_ids, "viajantes_min": viajantes_min,
+        "viajantes_exato": viajantes_exato,
         "chegada_de": chegada_de, "chegada_ate": chegada_ate,
     }
+    if viajantes_min is not None and viajantes_exato is not None:
+        raise HTTPException(
+            status_code=422,
+            detail=("Envie `viajantes_min` OU `viajantes_exato`, nunca os dois — "
+                    "sao perguntas diferentes e a combinacao seria ambigua."),
+        )
     base = _stage_query(db, funnel_id, etapa_id, filtros)
     total = base.count()
 
