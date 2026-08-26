@@ -4,6 +4,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy import func, or_, tuple_, String
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.database import get_db, IS_SQLITE
@@ -660,7 +661,23 @@ def add_lead_to_funnel(
                f"Entrou no funil '{funnel.nome}' na etapa '{stage_name}'",
                funnel_id=funnel_id, etapa_destino=data.etapa_id)
 
-    db.commit()
+    # AUDIT-2026-08-WF2: o SELECT acima ("existing") e o INSERT deste commit
+    # nao sao atomicos — entre os dois cabe outra requisicao concorrente
+    # inserindo a MESMA (lead_id, funnel_id). uq_funnel_entries_lead_funnel
+    # (app/models/pipeline.py) barra a segunda no banco, mas sem este catch o
+    # IntegrityError subia cru e virava 500 — nao o 409 que o workflow n8n do
+    # formulario do site espera (neverError: true, decide pelo corpo). Mesma
+    # corrida de app/services/lead_creation.py:garantir_entrada_no_funil, mas
+    # SEM SAVEPOINT: ali o SAVEPOINT protege o Lead ja adicionado ANTES na
+    # mesma transacao; aqui nao ha nenhuma escrita anterior desta chamada que
+    # precise sobreviver a colisao — um db.rollback() puro so descarta a
+    # entry e o log event desta mesma requisicao, que nao devem mesmo ser
+    # persistidos se a entrada ja existe.
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Lead já está neste funil")
     db.refresh(entry)
     return FunnelEntryResponse.model_validate(entry)
 

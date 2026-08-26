@@ -213,6 +213,44 @@ finally:
     tags_router.crm_service.get_lead_tags = _orig_get
 
 
+# ==== 3c. AUDIT-2026-08-WF2 — simetrico para apply_tag ====
+print()
+print("SYNC — apply_tag: recusa quando o espelho apagaria, permite quando nao apaga")
+# Mesmo raciocinio do bloco 3b, na direcao oposta: sync_lead_tags_to_conversation
+# reespelha o CRM a cada abertura, entao aplicar SO localmente (sem propagar ao
+# CRM) faz a tag sumir sozinha no proximo reabrir. TAG_ORC saiu de conv_linked
+# no cenario (b) do bloco anterior — ponto de partida limpo para testar a
+# aplicacao.
+_orig_add = tags_router.crm_service.add_tag_to_lead
+_orig_get2 = tags_router.crm_service.get_lead_tags
+
+try:
+    # (a) CRM ALCANCAVEL e a aplicacao falhou -> 502, tag NAO fica local
+    tags_router.crm_service.add_tag_to_lead = lambda *a, **k: False
+    tags_router.crm_service.get_lead_tags = lambda *a, **k: []      # alcancavel
+    r_502b = client.post(f"/api/conversations/{CID_L}/tags/{TAG_ORC}")
+    check(r_502b.status_code == 502,
+          f"CRM alcancavel + aplicacao falhou -> 502 (obteve {r_502b.status_code})")
+    # ?opening=false pelo mesmo motivo do bloco 3b: um GET normal aqui dispara
+    # o espelho, que com get_lead_tags -> [] esvaziaria TODAS as tags locais
+    # (nao so a Orcamento) e o teste mediria o espelho, nao a rota.
+    ainda2 = client.get(f"/api/conversations/{CID_L}?opening=false").json()["tags"]
+    check(not any(t["nome"] == "Orcamento" for t in ainda2),
+          "a tag NAO foi aplicada localmente — nao ia sumir sozinha no proximo reabrir")
+
+    # (b) CRM INACESSIVEL -> 200, aplica local (o espelho tambem nao roda)
+    tags_router.crm_service.get_lead_tags = lambda *a, **k: None    # inacessivel
+    r_okb = client.post(f"/api/conversations/{CID_L}/tags/{TAG_ORC}")
+    check(r_okb.status_code == 200,
+          f"CRM inacessivel -> aplicacao local permitida (obteve {r_okb.status_code})")
+    depois2 = client.get(f"/api/conversations/{CID_L}").json()["tags"]
+    check(any(t["nome"] == "Orcamento" for t in depois2),
+          "a tag entrou localmente mesmo com o CRM fora — o inbox nao trava")
+finally:
+    tags_router.crm_service.add_tag_to_lead = _orig_add
+    tags_router.crm_service.get_lead_tags = _orig_get2
+
+
 # ============ 4. CONVERSA SEM LEAD = LOCAL PURO ============
 print("\nSYNC — conversa sem lead nao toca o CRM")
 crm_count_before = crm_exec("SELECT COUNT(*) AS c FROM lead_tags")[0].c
