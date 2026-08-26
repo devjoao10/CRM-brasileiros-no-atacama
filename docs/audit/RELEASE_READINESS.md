@@ -837,10 +837,13 @@ por relato, com causa raiz, teste e commit por linha:
 | `BLOCKED_OPERATOR` | 5 |
 | `OPEN` | 1 |
 
-Os 110 sintomas colapsam em **cerca de 30 causas raiz**. Os 16
-`DUPLICATE_ROOT_CAUSE` são a medida disso: metade da Wave 1 inteira — fila
-vazia, Bia misturando cliente pronto, "meus atendimentos" vazio, lead que
-continua aguardando — era **um** defeito visto de sete ângulos.
+Os 16 `DUPLICATE_ROOT_CAUSE` medem o quanto os relatos colapsaram: sete
+sintomas da Wave 1 — fila vazia, Bia misturando cliente pronto, "meus
+atendimentos" vazio, lead que continua aguardando, conversa atribuída que some —
+eram **um** defeito visto de ângulos diferentes. Não implementei sete correções.
+
+Os 55 `RESOLVED` foram fechados em **19 commits**; vários commits fecham mais de
+um sintoma pela mesma causa.
 
 ## As três causas que explicavam mais
 
