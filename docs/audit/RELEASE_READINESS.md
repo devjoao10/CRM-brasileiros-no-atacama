@@ -945,7 +945,7 @@ multi-tabela para um chamador que não a conhece.
 
 A revisão de segurança auditou adversarialmente o renderizador de marcação do
 WhatsApp — texto de cliente chegando ao `innerHTML` do atendente — testando
-breakout do `<code>`, o placeholder ` MONO`, sobreposição de marcadores e
+breakout do `<code>`, o placeholder `\u0000MONO`, sobreposição de marcadores e
 injeção de atributo. Sem XSS: o pior caso é HTML mal aninhado que o parser
 conserta.
 

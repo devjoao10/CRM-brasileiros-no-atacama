@@ -10,6 +10,16 @@ marcados `DUPLICATE_ROOT_CAUSE` e apontam para o ID que carrega a correção.
 `FIXED_PENDING_PRODUCTION_VALIDATION` · `BLOCKED_OPERATOR` ·
 `NOT_REPRODUCED_WITH_EVIDENCE` · `DUPLICATE_ROOT_CAUSE`
 
+Acrescentados na rodada de fechamento (2026-08-26), para não esconder atrás de
+um `RESOLVED` genérico coisas que dependem de um ato humano específico:
+
+| Status | Significa | O que falta |
+|---|---|---|
+| `FIXED_PENDING_PRODUCTION_CONFIG` | código pronto e testado; inerte até uma variável de ambiente ser definida | definir a env em produção |
+| `FIXED_PENDING_SYNCHRONIZED_DEPLOY` | código pronto; a ativação do outro lado (n8n) tem de vir **depois** do deploy, ou quebra | subir o código, depois ligar no n8n |
+| `READY_PENDING_PRODUCTION_MIGRATION` | migration escrita, idempotente e validada em PostgreSQL descartável | rodar em produção, com backup e aprovação |
+| `DEFERRED` | real, mas adiado por decisão do operador | decisão de priorização, não trabalho técnico |
+
 > Estado inicial deste documento: todos `OPEN`. As colunas Root cause / Teste /
 > Commit são preenchidas conforme cada wave fecha.
 
@@ -24,10 +34,15 @@ Quatro exports frescos chegaram durante a execução e estão versionados em
 - **M1, M2, M3, M4, M5, D1, D3, D7 — todos aplicados e verificados no export.**
   Nenhum foi revertido nem re-proposto.
 - **D2** (`/webhook/agent-bia` sem autenticação) continua pendente.
-- **M6 — regressão nova**, introduzida pela D3: o `jsonBody` do nó
-  `Atualizar lead existente` do formulário começa com **dois** `=`. Mesmo
-  mecanismo do M1. O corpo enviado deixa de ser JSON válido e o `PUT` falha em
-  silêncio (`neverError: true`). Instrução completa na reconciliação.
+- **~~M6~~ — não procedia. Erro meu de leitura, corrigido em `f468829`.**
+  Eu li `"jsonBody": "=={{ ... }}"` no export e, por analogia com o M1, afirmei
+  que o formulário tinha parado de atualizar leads existentes. O operador
+  conferiu no editor visual: o campo mostra `{{`, e o `=` extra é apenas como o
+  n8n serializa um campo em modo expressão. No M1 os dois sinais estavam dentro
+  do *valor* de um parâmetro; no M6, no marcador do *campo*. O nó irmão
+  `Criar novo lead` tem o mesmo formato e funciona — eu tinha esse
+  contra-exemplo à vista e o usei como evidência *a favor* da tese errada.
+  Detalhe em `docs/audit/N8N_RECONCILIACAO_20260826.md` § 2.
 - **A base de conhecimento da Bia não é `bna_agent_context/`.** O subworkflow
   `BIA — Consultar Knowledge Base` lê a Data Table n8n `bia_knowledge_base`.
   Editar o markdown não muda o comportamento em produção — por isso a Wave H
@@ -75,8 +90,8 @@ Quatro exports frescos chegaram durante a execução e estão versionados em
 | W2-02 | Operador | Tags somem após reload | DUPLICATE de W2-01 (o save descartava o que outro ator tinha mudado) | CRM + Conversas |  | test_tags_delta | DUPLICATE_ROOT_CAUSE | 14ac45f |
 | W2-03 | Operador | Precisa tentar várias vezes para a tag colar | DUPLICATE de W2-01 | CRM UI |  | test_tags_delta | DUPLICATE_ROOT_CAUSE | 14ac45f |
 | W2-04 | F-529 | Apagar tag no Conversas é desfeito ao reabrir a conversa | F-529 — a rota descartava o bool do CRM e o espelho ressuscitava a tag na proxima abertura | Conversas |  | test_conversas_tags_sync 3b (recusa quando o espelho volta; permite quando o CRM esta fora) | RESOLVED | 14ac45f + 3f7df5a |
-| W2-05 | Operador | Data salva desaparece | O contrato `""` vs `null` esta correto e travado por teste; a causa em producao e a regressao M6 do formulario | CRM |  | test_n8n_contract_lead_update | FIXED_PENDING_MANUAL_N8N | 1047aec |
-| W2-06 | Operador | Dado fornecido pelo cliente desaparece | DUPLICATE de W2-05 (M6: o `PUT` do formulario falha em silencio) | CRM + n8n |  | reconciliacao 26/08 secao 2 | DUPLICATE_ROOT_CAUSE | 1047aec |
+| W2-05 | Operador | Data salva desaparece | O contrato `""` vs `null` esta correto e travado por teste. A causa que eu atribuira ao M6 NAO EXISTE (f468829): o `jsonBody` do formulario esta correto. Com a D3 aplicada, o campo nao vazio e preservado | CRM + n8n (D3) |  | test_n8n_contract_lead_update | RESOLVED | 1047aec + f468829 |
+| W2-06 | Operador | Dado fornecido pelo cliente desaparece | DUPLICATE de W2-05. O `PUT` do formulario NAO falha — ver a correcao do M6 | CRM + n8n |  | reconciliacao 26/08 secao 2 | DUPLICATE_ROOT_CAUSE | 1047aec + f468829 |
 | W2-07 | Operador | Edição humana sobrescrita por update automático vazio | DUPLICATE de W2-05; o guard de string vazia ja existe desde a Fase 2 | CRM |  | test_n8n_contract_lead_update | DUPLICATE_ROOT_CAUSE | 1047aec |
 | W2-08 | F-239 | Anotações: read-modify-write em JSON sem lock (IA + humano) | F-239 — read-modify-write num JSON sem lock; a Tool Adicionar Nota escreve a cada processamento | CRM |  | PostgreSQL real: 5/5 rodadas com espera medida pelo lock, as duas notas sobrevivem | RESOLVED | 14ac45f |
 | W2-09 | F-056 | `LeadUpdate` copia NULL explícito sobre coluna NOT NULL | F-056 — o guard `_nao_anulaveis` derivado do model ja impede NULL em coluna NOT NULL | CRM |  | test_n8n_contract_lead_update (guard derivado do model, nao escrito a mao) | NOT_REPRODUCED_WITH_EVIDENCE | — |
@@ -152,7 +167,7 @@ Quatro exports frescos chegaram durante a execução e estão versionados em
 | W5-02 | Operador | Leads de formulário chegam sem tags | `POST /api/leads` nao aplicava tag nenhuma (o caminho do WhatsApp aplicava) | n8n + CRM |  | test_lead_funnel_entry | RESOLVED | d211d61 |
 | W5-03 | Operador | Segundo formulário (rodapé do site) não integrado | O segundo formulario nunca foi integrado a nenhum workflow | n8n |  | — | BLOCKED_OPERATOR | — |
 | W5-04 | Operador | Campos do formulário inconsistentes com o CRM | O contrato do corpo do formulario e replayado a partir do export real e travado por teste | CRM |  | test_n8n_contract_lead_update | NOT_REPRODUCED_WITH_EVIDENCE | — |
-| W5-05 | Operador | Formulário sobrescreve dado existente | D3 aplicada pelo operador — e introduziu a regressao M6 (`==` no jsonBody) | CRM + n8n (D3) |  | reconciliacao 26/08 secao 2 | FIXED_PENDING_MANUAL_N8N | 1047aec |
+| W5-05 | Operador | Formulário sobrescreve dado existente | D3 aplicada pelo operador e verificada no export: `preservarOuPreencher` presente e correta. A regressao M6 que eu levantei contra ela nao procedia | CRM + n8n (D3) |  | reconciliacao 26/08 secao 2 | RESOLVED | 1047aec + f468829 |
 | W5-06 | Operador | Lead de formulário sem `FunnelEntry` adequado | DUPLICATE de W2-13 | CRM |  | test_lead_funnel_entry | DUPLICATE_ROOT_CAUSE | d211d61 |
 | W5-07 | Operador | Contato automático da Bia não inicia após formulário | O disparo depende de um no do n8n que nao existe | n8n |  | — | BLOCKED_OPERATOR | — |
 | W5-08 | Derivado | Formulário precisa respeitar janela/template Meta | A janela ja e imposta pelo backend em todo envio free-form | Conversas |  | test_conversas_service_window | NOT_REPRODUCED_WITH_EVIDENCE | — |
@@ -179,6 +194,6 @@ Quatro exports frescos chegaram durante a execução e estão versionados em
 | W7-06 | Operador | Usuários que acessavam deixam de acessar | DUPLICATE de W7-05 | CRM |  | test_conversas_auth_hardening | DUPLICATE_ROOT_CAUSE | 7173d44 |
 | W7-07 | Operador | Safari em loop de login | O Conversas nao tinha o quebra-loop de um salto que o CRM ja tem | CRM |  | test_conversas_login_loop_guard (executa o script no Node) | RESOLVED | b510ce7 |
 | W7-08 | Operador | Frontend antigo após atualização (precisa hard refresh) | JS compartilhado sem `?v=`; tokens manuais ja divergentes entre telas | Ambos |  | test_asset_cache_busting | RESOLVED | b510ce7 + 1047aec |
-| W7-09 | F-043 | Filtro de campo personalizado 500 permanente com ` ` no Postgres | F-043 — reproduzido no PostgreSQL 16: `json` aceita o escape de NUL, `jsonb` nao | CRM |  | PostgreSQL real (5 linhas, uma envenenada) + travamento da forma na suite | RESOLVED | 23a6f76 |
+| W7-09 | F-043 | Filtro de campo personalizado 500 permanente com `\u0000` no Postgres | F-043 — reproduzido no PostgreSQL 16: `json` aceita o escape de NUL, `jsonb` nao | CRM |  | PostgreSQL real (5 linhas, uma envenenada) + travamento da forma na suite | RESOLVED | 23a6f76 |
 | W7-10 | F-440 | Debounce só nos campos de texto; 14 `onchange` sem sequenciamento | DUPLICATE de W7-03 | CRM UI |  | test_segmentacao_ui_fix | DUPLICATE_ROOT_CAUSE | b510ce7 |
 | W7-11 | F-495 | Só uma página protegida preserva `?next=` no redirect de login | F-495 — o default certo do `next` mora em `page_login_redirect`, nao nos call sites | CRM |  | test_todas_as_paginas_protegidas_preservam_o_next (percorre as rotas registradas) | RESOLVED | 1129841 |

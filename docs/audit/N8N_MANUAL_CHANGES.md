@@ -515,6 +515,19 @@ Gerenciador um nó HTTP `POST http://conversas:8001/api/conversations/by-lead/{{
 com header `X-API-Key`, disparado no mesmo ramo do `Tool Alterar Responsavel`.
 As duas soluções são idempotentes e podem coexistir sem duplicar efeito.
 
+**COBERTURA:** `tests/test_leads_handoff_bridge.py` e o smoke e2e contra
+PostgreSQL (`docs/audit/POSTGRES_VALIDATION.md`) — incluindo o caso do
+**segundo repasse do mesmo lead**, que a primeira versão da ponte pulava.
+
+**NÃO FAÇA:** não gere, não regenere e não me mande a `CONVERSAS_API_KEY`. Ela
+é uma API key de usuário ativo do CRM, criada pelo próprio CRM, e não existe em
+lugar nenhum deste repositório — é isso que mantém a ponte desligada por
+default. Sem ela o comportamento é o de hoje, no-op silencioso.
+
+**STATUS:** `FIXED_PENDING_PRODUCTION_CONFIG` — o código está pronto e testado;
+o que falta é **só** definir `CONVERSAS_BASE_URL` e `CONVERSAS_API_KEY` no
+ambiente do CRM. Nenhuma alteração de n8n é necessária.
+
 ---
 
 ## M8 — follow-up por inatividade (~8 h)
