@@ -677,7 +677,40 @@ def add_lead_to_funnel(
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status_code=409, detail="Lead já está neste funil")
+        # AUDIT-2026-08-WF2 (revisao adversarial): o except acima cobria so a
+        # corrida do indice unico, mas capturava QUALQUER IntegrityError como
+        # se fosse ela. Entre o SELECT de `existing` e este commit, o FUNIL ou
+        # o LEAD tambem podem ter sido apagados por outra requisicao — FK
+        # violation, nao unique. Devolver 409 aqui faria o chamador concluir
+        # que o lead esta no Kanban quando nada foi inserido: o node
+        # "Adicionar ao funil Vendas Formulário" do workflow n8n do
+        # formulario (n8n/workflows/live_exports/20260826_wa/formulario_site.json)
+        # le so `statusCode === 409` para decidir "etapa preservada", sem
+        # olhar o corpo — entao 409 so pode sair daqui quando a corrida for
+        # CONFIRMADA.
+        #
+        # Confirma por re-SELECT, nao por tipo de excecao do driver: psycopg2
+        # tem classes distintas (UniqueViolation/ForeignKeyViolation), sqlite3
+        # devolve o MESMO IntegrityError pros dois — introspeccao por tipo
+        # exigiria ramo IS_SQLITE so pra isto. O re-SELECT responde a pergunta
+        # que importa igual nos dois dialetos. Mesmo padrao de
+        # app/services/lead_creation.py:garantir_entrada_no_funil.
+        ganhador = db.query(FunnelEntry).filter(
+            FunnelEntry.lead_id == data.lead_id,
+            FunnelEntry.funnel_id == funnel_id,
+        ).first()
+        if ganhador is not None:
+            raise HTTPException(status_code=409, detail="Lead já está neste funil")
+        # Nao foi a corrida esperada — mesmo contrato de erro inesperado ja
+        # usado neste arquivo (list_funnels/get_kanban_board): loga a causa
+        # real e devolve 500, nunca 409.
+        logging.exception(
+            "add_lead_to_funnel: IntegrityError que nao e a corrida do indice "
+            "unico (lead_id=%s, funnel_id=%s) — funil ou lead pode ter sido "
+            "apagado por outra requisicao entre a validacao e o commit",
+            data.lead_id, funnel_id,
+        )
+        raise HTTPException(status_code=500, detail="Erro interno do servidor")
     db.refresh(entry)
     return FunnelEntryResponse.model_validate(entry)
 

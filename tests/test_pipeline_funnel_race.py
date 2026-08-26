@@ -62,6 +62,7 @@ os.environ.setdefault("SEED_INITIAL_ADMIN", "false")
 os.environ.pop("DEFAULT_FUNNEL_ID", None)
 
 from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import event  # noqa: E402
 
 import app.main as main  # noqa: E402
 from app.auth import get_current_user  # noqa: E402
@@ -218,6 +219,62 @@ try:
             FunnelEntry.lead_id == lead_par, FunnelEntry.funnel_id == funil_par,
         ).count()
     check(count_par == 1, f"so 1 FunnelEntry sobrevive a corrida (tem {count_par})")
+
+    # ─── 3. FK violada: funil apagado ENTRE o SELECT e o commit ───
+    # AUDIT-2026-08-WF2 (revisao adversarial): o except IntegrityError de
+    # add_lead_to_funnel tratava QUALQUER violacao como a corrida do indice
+    # unico. Esta prova cobre a OUTRA violacao possivel na mesma janela: o
+    # funil e apagado por outra requisicao depois que este request ja o
+    # validou (checagem no inicio da funcao) mas antes do commit. Sem
+    # threads: a ordem entre elas nao seria garantida (a corrida podia nao
+    # cair dentro da janela e o teste passaria sem provar nada). Em vez
+    # disso, um hook `before_commit` no SessionLocal apaga o funil de forma
+    # SINCRONA no exato instante em que o commit do router esta prestes a
+    # rodar — deterministico, e nao depende de concorrencia real, entao
+    # funciona identico nos dois dialetos (sem SKIP).
+    print("\n3) FK violada: funil apagado entre o SELECT e o commit -> NUNCA pode virar "
+          f"409 'ja esta neste funil' (DATABASE_URL={os.environ['DATABASE_URL'].split('@')[-1]})")
+
+    _fk_trigger = {"armado": False, "funnel_id": None}
+
+    def _apagar_funil_antes_do_commit(session):
+        if not _fk_trigger["armado"]:
+            return
+        _fk_trigger["armado"] = False  # dispara uma unica vez
+        outro = SessionLocal()
+        try:
+            outro.query(Funnel).filter(Funnel.id == _fk_trigger["funnel_id"]).delete()
+            outro.commit()
+        finally:
+            outro.close()
+
+    event.listen(SessionLocal, "before_commit", _apagar_funil_antes_do_commit)
+    try:
+        db = SessionLocal()
+        funil_fk = _criar_funil(db, "Race FK")
+        lead_fk = _criar_lead(db, "Lead FK")
+        db.close()
+
+        _fk_trigger["funnel_id"] = funil_fk
+        _fk_trigger["armado"] = True
+        r3 = client.post(f"/api/pipeline/funnels/{funil_fk}/leads",
+                          json={"lead_id": lead_fk, "etapa_id": "novo"})
+
+        check(not _fk_trigger["armado"],
+              "o hook disparou (o funil foi apagado durante a janela do commit)")
+        check(r3.status_code != 409,
+              f"FK violada NUNCA volta 409 'ja esta no funil' (obteve {r3.status_code}: {r3.text})")
+        check(r3.status_code == 500,
+              f"FK violada volta 500 — contrato de erro inesperado deste arquivo "
+              f"(obteve {r3.status_code}: {r3.text})")
+
+        with SessionLocal() as db:
+            count_fk = db.query(FunnelEntry).filter(
+                FunnelEntry.lead_id == lead_fk, FunnelEntry.funnel_id == funil_fk,
+            ).count()
+        check(count_fk == 0, f"nenhuma FunnelEntry foi inserida (tem {count_fk})")
+    finally:
+        event.remove(SessionLocal, "before_commit", _apagar_funil_antes_do_commit)
 
 finally:
     main.app.dependency_overrides.clear()
