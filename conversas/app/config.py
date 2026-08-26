@@ -54,6 +54,24 @@ META_APP_SECRET = os.getenv("META_APP_SECRET", "")  # App Secret — valida X-Hu
 N8N_BASE_URL = os.getenv("N8N_BASE_URL", "http://127.0.0.1:5678")
 N8N_AGENT_ENABLED = os.getenv("N8N_AGENT_ENABLED", "false").lower() == "true"
 
+# AUDIT-2026-08-WF2 (D2) — cabecalho de autenticacao do webhook da Bia.
+#
+# `/webhook/agent-bia` esta aberto na internet, publicado pelo Traefik. O
+# webhook irmao (`/webhook/gerenciador-leads`) ja recebeu Header Auth (D1), mas
+# este NAO podia receber: o Conversas nao mandava cabecalho nenhum, entao ligar
+# a autenticacao no n8n derrubaria a Bia no mesmo instante.
+#
+# Com estas duas variaveis o Conversas passa a enviar o cabecalho. Ambas vazias
+# (default) = nenhum cabecalho, exatamente o comportamento de hoje — nenhum
+# ambiente regride por nao configurar. O nome e configuravel porque a credencial
+# "Header Auth" do n8n deixa quem cria escolher o nome do cabecalho; tem de
+# bater com o que estiver la.
+#
+# ORDEM OBRIGATORIA no deploy: configurar aqui e subir o Conversas PRIMEIRO;
+# so depois ligar a autenticacao no n8n. O inverso corta a Bia.
+N8N_WEBHOOK_AUTH_HEADER = os.getenv("N8N_WEBHOOK_AUTH_HEADER", "").strip()
+N8N_WEBHOOK_AUTH_VALUE = os.getenv("N8N_WEBHOOK_AUTH_VALUE", "").strip()
+
 # ─── Media storage (CONV-02) ─────────────────────
 # Espelho local dos binarios de midia (media_assets.local_path e RELATIVO a este dir).
 # Default fica sob conversas/uploads/ (ja coberto pelo .gitignore). Em producao:

@@ -116,6 +116,9 @@ class _FakeResp:
         return self._payload
 
 
+post_kwargs = {}
+
+
 class _FakeAsyncClient:
     def __init__(self, *a, **k):
         client_kwargs.clear()
@@ -129,6 +132,8 @@ class _FakeAsyncClient:
 
     async def post(self, url, json=None, **k):
         posts["n"] += 1
+        post_kwargs.clear()
+        post_kwargs.update(k)
         mode = agent_mode["mode"]
         if mode == "timeout":
             raise httpx.ReadTimeout("simulado: n8n passou de 240s")
@@ -238,6 +243,51 @@ check((probe.connect, probe.read, probe.write, probe.pool) == (10.0, 240.0, 240.
 run_agent(make_conv(), "ok")
 check(client_kwargs.get("timeout") is wh.AGENT_TIMEOUT,
       f"AsyncClient recebe o AGENT_TIMEOUT (got {client_kwargs.get('timeout')!r})")
+
+
+# ============ D2 — cabecalho de auth do webhook da Bia ============
+# AUDIT-2026-08-WF2 — `/webhook/agent-bia` esta aberto na internet. O webhook
+# irmao (`/webhook/gerenciador-leads`) ja ganhou Header Auth na D1, mas este NAO
+# podia ganhar: o Conversas nao mandava cabecalho nenhum, entao ligar a
+# autenticacao no n8n derrubaria a Bia no mesmo instante. O lado-repo agora
+# manda o cabecalho quando configurado.
+#
+# A ordem importa e esta travada aqui: SEM configuracao o comportamento e
+# IDENTICO ao de hoje (nenhum cabecalho), o que torna seguro subir o Conversas
+# antes de mexer no n8n. O contrario — ligar no n8n primeiro — corta a Bia.
+print()
+print("D2 — cabecalho de autenticacao no POST para o agente")
+
+run_agent(make_conv(), "ok")
+check(post_kwargs.get("headers") == {},
+      f"SEM configuracao: nenhum cabecalho de auth (got {post_kwargs.get('headers')!r}) — "
+      f"e o comportamento de hoje, byte a byte")
+
+_orig_nome = wh.N8N_WEBHOOK_AUTH_HEADER
+_orig_valor = wh.N8N_WEBHOOK_AUTH_VALUE
+try:
+    wh.N8N_WEBHOOK_AUTH_HEADER = "X-BnA-Webhook-Token"
+    wh.N8N_WEBHOOK_AUTH_VALUE = "segredo-de-teste"
+    run_agent(make_conv(), "ok")
+    check(post_kwargs.get("headers") == {"X-BnA-Webhook-Token": "segredo-de-teste"},
+          f"COM configuracao: o cabecalho chega ao POST (got {post_kwargs.get('headers')!r})")
+
+    # Meio-configurado nao vale: mandar um cabecalho com valor vazio seria pior
+    # que nao mandar — o n8n recusaria e a Bia cairia, com a configuracao
+    # parecendo feita.
+    wh.N8N_WEBHOOK_AUTH_VALUE = ""
+    run_agent(make_conv(), "ok")
+    check(post_kwargs.get("headers") == {},
+          f"nome sem valor -> NENHUM cabecalho (got {post_kwargs.get('headers')!r})")
+
+    wh.N8N_WEBHOOK_AUTH_HEADER = ""
+    wh.N8N_WEBHOOK_AUTH_VALUE = "segredo-de-teste"
+    run_agent(make_conv(), "ok")
+    check(post_kwargs.get("headers") == {},
+          f"valor sem nome -> NENHUM cabecalho (got {post_kwargs.get('headers')!r})")
+finally:
+    wh.N8N_WEBHOOK_AUTH_HEADER = _orig_nome
+    wh.N8N_WEBHOOK_AUTH_VALUE = _orig_valor
 
 
 # ============ A. Resposta lenta (>60s, <240s) e ACEITA ============

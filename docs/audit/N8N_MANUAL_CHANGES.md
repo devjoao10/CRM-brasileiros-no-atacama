@@ -304,10 +304,55 @@ agente. Opções, da mais simples à mais completa: header secreto no webhook
 (*Authentication: Header Auth*); restringir no Traefik por IP/rede; ou HMAC como
 o webhook da Meta já usa.
 
-### D2 — `/webhook/agent-bia` idem
+### D2 — `/webhook/agent-bia` idem — **exige deploy sincronizado, nesta ordem**
 
 Mesmo raciocínio, superfície menor (a Bia tem 3 ferramentas), mas
 `enviar_ao_gerenciador` encadeia no D1.
+
+**Por que este não pôde ser resolvido junto com o D1:** o Conversas chamava
+`/webhook/agent-bia` **sem cabeçalho nenhum**
+(`await client.post(agent_url, json=payload)`). Ligar *Header Auth* nesse
+webhook antes de mexer no código derrubaria a Bia no mesmo instante — toda
+mensagem de cliente passaria a receber 401 do n8n.
+
+**Lado repositório: pronto.** `conversas/app/routers/webhook.py` agora envia o
+cabeçalho quando ele estiver configurado, via duas variáveis de ambiente:
+
+| Variável | Valor |
+|---|---|
+| `N8N_WEBHOOK_AUTH_HEADER` | o **nome** do cabeçalho — o mesmo que você escolher na credencial *Header Auth* do n8n |
+| `N8N_WEBHOOK_AUTH_VALUE` | o **segredo** — gere você mesmo, não está em lugar nenhum deste repositório |
+
+Ambas vazias (o default) = **nenhum cabeçalho**, byte a byte o comportamento de
+hoje. Nenhum ambiente regride por não configurar. É só o nome e o valor
+precisarem casar exatamente com a credencial do n8n; um sem o outro também não
+envia nada (meio-configurado seria pior que não configurado — o n8n recusaria
+com a configuração *parecendo* feita).
+
+**Ordem obrigatória — inverter corta a Bia:**
+
+1. Gere o segredo (`openssl rand -hex 32`, ou equivalente). **Não** escreva em
+   arquivo versionado.
+2. Ponha as duas variáveis no ambiente do container do Conversas e **suba o
+   Conversas**. Com o n8n ainda aberto, um cabeçalho a mais é simplesmente
+   ignorado — este passo é seguro sozinho.
+3. Confirme que a Bia continua respondendo (mande uma mensagem de teste no
+   WhatsApp).
+4. **Só então** crie a credencial *Header Auth* no n8n com o mesmo nome/valor e
+   ative `authentication: headerAuth` no nó de webhook de
+   `/webhook/agent-bia`.
+5. Mande outra mensagem de teste. Se falhar, desligue a autenticação no n8n
+   (passo 4) — o passo 2 não precisa ser desfeito.
+
+**ROLLBACK:** desligar `authentication` no nó do n8n. As variáveis podem ficar
+configuradas sem efeito.
+
+**COBERTURA:** `tests/test_conversas_agent_timeout.py`, bloco *"D2 — cabecalho
+de autenticacao no POST para o agente"* — trava que sem configuração nenhum
+cabeçalho é enviado (é o que torna o passo 2 seguro), que com as duas
+configuradas o cabeçalho chega ao POST, e que meio-configurado não envia nada.
+
+**STATUS:** `FIXED_PENDING_SYNCHRONIZED_DEPLOY`
 
 ### D3 — o formulário público pode sobrescrever cadastro de cliente real
 
@@ -406,7 +451,7 @@ Preencha ao aplicar. Enquanto uma linha estiver vazia, o item segue
 | M5 ramo de erro do Gerenciador | 2026-08-26 | operador | ✅ export | nó `Fallback — erro Gerenciador` na 2ª saída |
 | **M6 `jsonBody` do formulário** | 2026-08-26 | operador | ✅ verificado no editor | ✅ **RESOLVED** — não era o defeito do M1; ver a correção da minha leitura abaixo |
 | D1 autenticar gerenciador-leads | 2026-08-26 | operador | ✅ export | `authentication: "headerAuth"` |
-| D2 autenticar agent-bia | — | — | — | continua sem `authentication` |
+| D2 autenticar agent-bia | — | — | — | repo pronto; ativar no n8n **depois** de subir o Conversas com `N8N_WEBHOOK_AUTH_*` |
 | D3 decisão do formulário | 2026-08-26 | operador | ✅ | lógica de preservação e CORS corretos; o M6 que eu havia levantado não procedia |
 | D4 verificar nome do modelo | 2026-08-26 | operador | ℹ️ | Bia agora em `Gemini 3.5-flash-lite`; Gerenciador em `Gemini 2.5 Flash` |
 | D5 rotação da API key | — | — | — | continua pendente |
@@ -545,8 +590,18 @@ Numa conversa que nunca teve **nenhuma** outbound — ninguém respondeu, nem a 
 um loop. Marcar "já perguntei" exigiria uma coluna nova, e o teto não justifica
 o preço. Se na prática incomodar, avise: aí sim vale a coluna.
 
-**STATUS:** repo-side implementado nesta rodada; disparo
-`FIXED_PENDING_MANUAL_N8N`.
+**STATUS:** ⏸️ **DEFERRED — projeto futuro.** Decisão do operador, registrada
+em 2026-08-26.
+
+O endpoint `GET /api/conversations/inativas` **fica** no repositório: é seguro
+(somente leitura, autenticado, sem efeito colateral) e está testado. Mas
+**nenhuma automação deve ser criada ou ativada agora.**
+
+Motivo: a lógica de follow-up precisa distinguir corretamente os três estados
+que esta rodada acabou de separar — Bia conduzindo, fila aguardando humano, e
+atendimento humano efetivamente iniciado. Ligar o disparo antes de essa
+distinção estar validada em produção arriscaria perguntar "quer continuar?" a um
+cliente que já está sendo atendido.
 
 ---
 
@@ -570,7 +625,7 @@ e-mail, WhatsApp e as duas datas. Um formulário mais curto será rejeitado com
 400. Nesse caso a decisão é de produto (relaxar a validação para essa origem, ou
 completar o formulário), e não é minha.
 
-**STATUS:** `BLOCKED_OPERATOR`.
+**STATUS:** ⏸️ **DEFERRED — baixa prioridade.** Decisão do operador. Não implementar nesta rodada.
 
 ---
 
@@ -609,5 +664,85 @@ ambiguidade em si continua sendo um problema de DADO que só você pode resolver
 funil, histórico e tag (corrigido nesta rodada), em vez de sobrescrever o
 cliente errado.
 
-**STATUS:** `FIXED_PENDING_PRODUCTION_VALIDATION` — a correção está no
-repositório; a consolidação dos duplicados existentes é sua.
+**STATUS:** ⏸️ **DEFERRED — limpeza de dados.** Decisão do operador.
+
+A correção que impede novos casos está no repositório e vale a partir do deploy.
+A consolidação dos duplicados **já existentes** é alteração de dado de produção,
+não é feita por esta rodada e não deve ser automatizada sem revisão humana caso
+a caso.
+
+---
+
+## M11 — o formulário precisa dizer em qual funil o lead entra
+
+**Consequência direta de uma correção desta rodada. Sem esta mudança, todo lead
+do formulário ganha DUAS entradas de funil.**
+
+### O que mudou no repositório
+
+Antes do F-341, `POST /api/leads` criava só a linha em `leads` — nenhuma
+`FunnelEntry`. O workflow do formulário compensava chamando, logo depois,
+`POST /api/pipeline/funnels/3/leads`. Resultado: uma entrada, no funil certo.
+
+Agora `POST /api/leads` **sempre** coloca o lead no funil comercial padrão
+(`Vendas: Principal`), porque era exatamente isso que faltava para os leads da
+Bia/Gerenciador — o modelo esquecia de chamar a ferramenta de funil e o lead
+nascia fora do Kanban.
+
+Efeito colateral no formulário: o lead entra em **Vendas: Principal** (pelo
+`POST /api/leads`) **e** em **Vendas: Formulário** (pela chamada seguinte).
+
+O sistema suporta multi-funil por desenho, então isso não corrompe nada — mas
+contraria o contrato que o próprio workflow declara: o nó de sucesso responde
+`funil: 'Vendas: Formulário'`, no singular, e a nota do workflow diz
+*"Funil configurado: Vendas: Formulário (ID 3)"*.
+
+### A mudança
+
+**WORKFLOW:** Formulário do Site → CRM BnA
+**NÓ:** `Criar novo lead`
+**TIPO:** `n8n-nodes-base.httpRequest`
+
+Acrescentar **dois parâmetros de query** ao nó (mesmo mecanismo que você já usou
+no M4 — *Send Query Parameters*, que o n8n codifica corretamente; não escreva na
+URL à mão, por causa do espaço e do `:` no nome do funil):
+
+| Nome | Valor |
+|---|---|
+| `funnel_nome` | `Vendas: Formulário` |
+| `etapa_id` | `nova_oportunidade` |
+
+**Alternativa, se preferir fixar por id:** use `funnel_id` = `3` no lugar de
+`funnel_nome`. Funciona igual. Prefira o **nome**: `funnels.nome` é UNIQUE e
+estável, enquanto o `3` não está versionado em lugar nenhum e muda entre
+ambientes — se um dia o funil for recriado, o id muda e ninguém percebe.
+
+**CONEXÕES / NÓS:** nenhuma alteração. O nó
+`Adicionar ao funil Vendas Formulário` **continua como está** — ele passará a
+receber `409` (lead já está neste funil), que o workflow já trata como sucesso.
+
+### Confira antes o nome exato
+
+O repositório é **inconsistente** sobre a grafia: o rótulo do nó diz
+`Vendas Formulário` (sem dois-pontos) e a nota/resposta dizem
+`Vendas: Formulário` (com). Abra o CRM, veja como o funil está gravado, e use
+**exatamente** essa grafia. Se errar, a rota devolve **404 e não cria o lead** —
+falha alta e visível, de propósito: criar no funil errado seria pior que recusar.
+
+### Teste manual
+
+1. Envie o formulário com um WhatsApp que **não** exista no CRM.
+2. No CRM, abra o lead criado e confira o funil: deve estar **só** em
+   `Vendas: Formulário`, na etapa `Nova Oportunidade`.
+3. Em *Executions* → nó `Adicionar ao funil Vendas Formulário` → *Output*:
+   `statusCode` 409 é o esperado agora (era 201).
+4. Envie de novo com o mesmo número: o lead existente deve ser **atualizado**,
+   sem duplicar entrada de funil.
+
+**ROLLBACK:** remover os dois parâmetros de query. O lead volta a entrar nos dois
+funis — recuperável, não destrutivo.
+
+**DEPENDÊNCIA REPO-SIDE:** nenhuma — `funnel_nome`/`funnel_id`/`etapa_id` já
+estão implementados e testados em `tests/test_lead_funnel_entry.py`.
+
+**STATUS:** `FIXED_PENDING_MANUAL_N8N`

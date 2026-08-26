@@ -18,7 +18,7 @@ from fastapi import APIRouter, Request, HTTPException, Query, Depends
 from sqlalchemy import exc as sa_exc, or_
 from sqlalchemy.orm import Session
 
-from app.config import META_VERIFY_TOKEN, N8N_BASE_URL, N8N_AGENT_ENABLED, META_APP_SECRET, ENVIRONMENT
+from app.config import ENVIRONMENT, META_APP_SECRET, META_VERIFY_TOKEN, N8N_AGENT_ENABLED, N8N_BASE_URL, N8N_WEBHOOK_AUTH_HEADER, N8N_WEBHOOK_AUTH_VALUE
 from app.database import get_db, SessionLocal
 from app.models.conversation import Conversation, Message, service_window_open
 from app.models.auto_reply import AutoReply, BusinessHours
@@ -838,6 +838,25 @@ def _split_agent_reply(resposta: str) -> list:
     return partes
 
 
+def _agent_auth_headers() -> dict:
+    """
+    Cabecalho de autenticacao do webhook da Bia, se configurado.
+
+    AUDIT-2026-08-WF2 (D2) — `/webhook/agent-bia` esta aberto na internet. O
+    irmao dele (`/webhook/gerenciador-leads`) ja ganhou Header Auth na D1, mas
+    este nao podia: o Conversas nao mandava cabecalho nenhum, entao ligar a
+    autenticacao no n8n derrubaria a Bia no mesmo instante.
+
+    Dicionario VAZIO quando nao configurado — e o comportamento de hoje, byte a
+    byte. Configurar aqui e seguro com o n8n ainda aberto (um cabecalho a mais
+    e ignorado); o contrario nao e. Por isso a ordem no deploy e: Conversas
+    primeiro, n8n depois.
+    """
+    if N8N_WEBHOOK_AUTH_HEADER and N8N_WEBHOOK_AUTH_VALUE:
+        return {N8N_WEBHOOK_AUTH_HEADER: N8N_WEBHOOK_AUTH_VALUE}
+    return {}
+
+
 async def _fetch_agent_parts(agent_url: str, payload: dict, conversation_id):
     """
     CONV-AGENT-01 — devolve `(partes, silencio)`.
@@ -872,7 +891,7 @@ async def _fetch_agent_parts(agent_url: str, payload: dict, conversation_id):
     """
     try:
         async with httpx.AsyncClient(timeout=AGENT_TIMEOUT) as client:
-            resp = await client.post(agent_url, json=payload)
+            resp = await client.post(agent_url, json=payload, headers=_agent_auth_headers())
 
             # 204/205 = "recebi e nao ha o que responder". E a resposta certa
             # para o portao de emoji, e NAO e degradacao.
