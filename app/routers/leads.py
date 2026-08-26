@@ -93,6 +93,35 @@ def _only_digits(value: Optional[str]) -> str:
     return "".join(ch for ch in (value or "") if ch.isdigit())
 
 
+def _digitos_no_banco(coluna):
+    """
+    AUDIT-2026-08-WF2: o mesmo `_only_digits`, so que do LADO DO BANCO.
+
+    Sem isto, qualquer filtro sobre `leads.whatsapp` compara um numero ja
+    normalizado contra a coluna CRUA — e a coluna guarda o que o formulario do
+    site grava (`+55 11 98765-4322`, com `+`, espaco e hifen). Comparar os dois
+    lados normalizados e o unico jeito de o pre-filtro devolver TODOS os leads
+    com aquele numero, em qualquer formato.
+
+    PostgreSQL: `regexp_replace(whatsapp, '[^0-9]', '', 'g')` — DE PROPOSITO a
+    mesma expressao de conversas/app/services/crm.py::lookup_lead_by_whatsapp,
+    para que um unico indice de expressao (migration, fora deste arquivo) sirva
+    as duas rotas.
+
+    SQLite (dev e a suite): `regexp_replace` nao existe e nao da para registrar
+    funcao aqui, entao a normalizacao e uma cadeia de `replace()` sobre os
+    simbolos que o `_only_digits` remove. E menos abrangente que o regex de
+    proposito: quem DECIDE identidade continua sendo o `_only_digits` em
+    Python, sobre os candidatos; este SQL e so pre-filtro.
+    """
+    if IS_SQLITE:
+        expr = coluna
+        for simbolo in ("+", " ", "(", ")", "-", "."):
+            expr = func.replace(expr, simbolo, "", type_=String)
+        return expr
+    return func.regexp_replace(coluna, "[^0-9]", "", "g", type_=String)
+
+
 def _json_list_contains(column, value: str):
     """Filtra coluna JSON list que contenha um valor. Compatível com SQLite e PostgreSQL."""
     if IS_SQLITE:
@@ -952,22 +981,57 @@ def get_lead_by_whatsapp(
     """
     Busca um lead pelo número de WhatsApp.
     Usado pela plataforma Conversas para vincular conversas a leads automaticamente.
+
+    Contrato (inalterado): casamento por IDENTIDADE de dígitos, tolerante a
+    DDI presente de um lado só (sufixo compatível), e AMBIGUIDADE É RECUSADA
+    com 409 — nunca resolvida escolhendo um lead arbitrário.
     """
-    # Normalize: remove +, spaces, dashes
-    normalized = whatsapp.replace("+", "").replace(" ", "").replace("-", "").strip()
+    # AUDIT-2026-08-WF2 — os dois lados normalizados, no banco.
+    #
+    # Os tres passos antigos consultavam a coluna CRUA: igualdade com o numero
+    # sem "+", igualdade com "+" na frente, e `ilike('%' || 11 ultimos
+    # digitos)`. Um lead gravado como `+55 11 98765-4322` nao casava em NENHUM
+    # dos tres — a string crua nao termina em `11987654322` (tem espaco e hifen
+    # no meio) e tampouco e igual ao numero so-digitos. Resultado: 404.
+    #
+    # Isto se alimenta: esta e a rota do no `Buscar lead pelo WhatsApp` do
+    # formulario do site e da Tool Buscar Lead WhatsApp do Gerenciador, e e o
+    # PROPRIO formulario que grava o numero formatado. O 404 fazia o fluxo
+    # criar um lead NOVO em vez de atualizar o existente, e o proximo lookup do
+    # mesmo cliente voltava a nao achar nenhum dos dois. Medido em PostgreSQL
+    # 16 com 19.001 leads: os 6 formatos do corpus davam 404, inclusive a busca
+    # pela string EXATA que estava gravada.
+    #
+    # `_digitos_no_banco` aplica a mesma normalizacao do `_only_digits` na
+    # coluna, entao os dois passos abaixo enxergam o lead em qualquer formato.
+    normalized = _only_digits(whatsapp)
+    if not normalized:
+        # Sem digitos nao ha numero para identificar: buscar por `''` casaria
+        # com qualquer lead cujo whatsapp so tenha simbolos.
+        raise HTTPException(status_code=404, detail="Nenhum lead encontrado com este WhatsApp")
 
-    # 1. Exact match (normalized vs normalized stored)
-    lead = db.query(Lead).filter(
-        Lead.whatsapp == normalized
-    ).first()
+    digitos_col = _digitos_no_banco(Lead.whatsapp)
 
-    # 2. Exact match with + prefix
-    if not lead:
-        lead = db.query(Lead).filter(
-            Lead.whatsapp == f"+{normalized}"
-        ).first()
+    # 1. Igualdade EXATA de digitos — cobre os passos 1 e 2 antigos (com e sem
+    # "+") e, agora, tambem qualquer formatacao guardada na coluna.
+    #
+    # O `.first()` antigo virou dicionario porque a normalizacao FAZ APARECER
+    # ambiguidade onde a coluna crua escondia: o par duplicado
+    # `+55 11 98765-4322` / `5511987654322` — exatamente o que o 404 vinha
+    # fabricando — passa a casar nos DOIS leads. A resposta para isso e o 409
+    # que ja existia no passo de sufixo, nao um `.first()` arbitrario: aqui
+    # tambem um casamento errado atualiza o LEAD DO OUTRO CLIENTE.
+    #
+    # O `_only_digits` em Python decide de novo, sobre os <= 50 candidatos:
+    # `[^0-9]` do PostgreSQL e ASCII e `str.isdigit()` nao e, entao quem afirma
+    # identidade e sempre o Python (mesma regra do modulo do Conversas).
+    compativeis = {
+        c.id: c
+        for c in db.query(Lead).filter(digitos_col == normalized).limit(50).all()
+        if _only_digits(c.whatsapp) == normalized
+    }
 
-    # 3. AUDIT-2026-08-WC (C6/W2-12): o ilike de sufixo era resolvido por
+    # 2. AUDIT-2026-08-WC (C6/W2-12): o ilike de sufixo era resolvido por
     # .first() SEM order_by — com mais de um lead terminando nos mesmos
     # digitos, quem vencia era indefinido pelo banco e podia mudar entre
     # execucoes ("localizar lead esta intermitente"). Esta rota e o primeiro
@@ -975,42 +1039,45 @@ def get_lead_by_whatsapp(
     # um casamento errado atualiza o LEAD DO OUTRO CLIENTE.
     #
     # Mesma regra de conversas/app/services/crm.py::lookup_lead_by_whatsapp
-    # (AUDIT-2026-08-W2F/F10): o ilike serve so de PRE-FILTRO barato. A
+    # (AUDIT-2026-08-W2F/F10): o LIKE serve so de PRE-FILTRO barato. A
     # decisao e por compatibilidade EXATA de digitos, feita em Python — um
     # numero e "compativel" com o outro quando um e sufixo do outro (cobre o
     # caso de DDI presente de um lado e ausente do outro, que e o motivo deste
     # passo existir: "handles country code variations"). Se mais de UM lead
     # DISTINTO for compativel, a ambiguidade e RECUSADA (409), nunca resolvida
     # por ORDER BY/LIMIT 1 arbitrario.
-    if not lead and len(normalized) >= 11:
+    #
+    # So roda quando o passo 1 nao achou nada: casamento exato continua tendo
+    # precedencia sobre sufixo, senao buscar `5511987654321` com um lead
+    # `11987654321` e outro `5511987654321` no banco viraria 409 onde antes
+    # havia resposta.
+    if not compativeis and len(normalized) >= 11:
         suffix = normalized[-11:]
         candidatos = (
             db.query(Lead)
-            .filter(Lead.whatsapp.ilike(f"%{suffix}"))
+            .filter(digitos_col.like(f"%{suffix}"))
             .limit(50)
             .all()
         )
-        compativeis = {}
         for c in candidatos:
             digitos = _only_digits(c.whatsapp)
             if digitos and (digitos.endswith(normalized) or normalized.endswith(digitos)):
                 compativeis[c.id] = c
-        if len(compativeis) > 1:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Mais de um lead tem um WhatsApp compatível com este número "
-                    f"(ids: {sorted(compativeis)}). Desambigue manualmente — "
-                    "nenhum foi escolhido automaticamente."
-                ),
-            )
-        if compativeis:
-            lead = next(iter(compativeis.values()))
 
-    if not lead:
+    if len(compativeis) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Mais de um lead tem um WhatsApp compatível com este número "
+                f"(ids: {sorted(compativeis)}). Desambigue manualmente — "
+                "nenhum foi escolhido automaticamente."
+            ),
+        )
+
+    if not compativeis:
         raise HTTPException(status_code=404, detail="Nenhum lead encontrado com este WhatsApp")
 
-    return _build_lead_response(lead)
+    return _build_lead_response(next(iter(compativeis.values())))
 
 
 @router.put("/{lead_id}/responsavel", response_model=LeadResponse,

@@ -16,13 +16,23 @@ Cobre:
   5. m011 roda DUAS vezes contra SQLite novo com --allow-sqlite; a 2a e no-op.
   6. m011 RECUSA SQLite sem a flag, e recusa DATABASE_URL ausente.
   7. m011 detecta duplicata, NAO cria o indice, NAO apaga nada, sai com 2.
-  8. F7 — trava a forma PERSISTIDA de users.role ("ADMIN", o NOME do membro).
+  8. AUDIT-2026-08-WF2 — m011 RECUSA alvo que nao tem NENHUMA das tabelas
+     (base recem-provisionada / nome errado / replica vazia), em vez de dizer
+     "NO-OP, ja estava tudo aplicado" sobre um estado que nunca verificou; e o
+     abort por duplicata bloqueia SO o indice daquela tabela — o F5 (puro DDL)
+     e os indices das tabelas limpas continuam sendo aplicados.
+  9. AUDIT-2026-08-WF2 — m012 deixa o banco no estado que
+     `aplicar_estado_humano` declara UNICO possivel:
+     primeira_resposta_humana_at NOT NULL => queued_at NULL.
+ 10. F7 — trava a forma PERSISTIDA de users.role ("ADMIN", o NOME do membro).
      Nao foi corrigida de proposito (exigiria reescrever dados + ALTER TYPE no
      enum nativo do PostgreSQL); ver comentario em app/models/user.py.
 
 O Conversas roda em SUBPROCESSO: `app.*` do CRM e `app.*` do Conversas sao dois
 pacotes com o mesmo nome — nao cabem no mesmo interpretador. Mesma tecnica que
-as migrations do conversas usam ("processo proprio").
+as migrations do conversas usam ("processo proprio"). A m012 e a excecao: ela
+nao importa `app.*` (so sqlalchemy), entao roda em processo, e a insercao que
+ela faz de `conversas/` no sys.path e desfeita logo apos o import.
 
 Rodar:  python tests/test_data_integrity_constraints.py
 """
@@ -410,6 +420,186 @@ check(not unique_index_present(dup_engine, "funnel_entries", "uq_funnel_entries_
 # prova da transacao-por-objeto — o objeto que passou fica aplicado.
 check(unique_index_present(dup_engine, "conversations", "uq_conversations_whatsapp"),
       "m011: objeto aplicado antes do abort permanece (transacao por objeto)")
+
+
+# 7f - AUDIT-2026-08-WF2: alvo com tabelas, mas NENHUMA das quatro.
+# `DATABASE_URL` para outra base (nome errado, replica vazia, banco recem
+# provisionado) fazia a m011 imprimir "OK - NO-OP (ja estava tudo aplicado)" e
+# sair 0. O operador marcava o runbook como feito e producao seguia sem os
+# quatro indices unicos. "table-absent" so e verdade quando a base E a nossa.
+_, outro_url = fresh("data_integrity_m011_outro_banco.db")
+outro_eng = create_engine(outro_url)
+with outro_eng.begin() as conn:
+    conn.execute(text("CREATE TABLE alguma_outra_coisa (id INTEGER PRIMARY KEY)"))
+outro_eng.dispose()
+res = run_m011(outro_url, "--allow-sqlite")
+check(res.returncode != 0,
+      f"m011 RECUSA alvo sem nenhuma das 4 tabelas (exit={res.returncode})")
+check("RECUSADO" in res.stdout, "m011 diz RECUSADO no alvo errado, nao 'NO-OP'")
+check("OK" not in res.stdout, "m011 nao imprime OK sobre um estado que nao verificou")
+
+# 7g - banco COMPLETAMENTE vazio: mesmo veredito.
+_, vazio_url = fresh("data_integrity_m011_vazio.db")
+create_engine(vazio_url).connect().close()
+res = run_m011(vazio_url, "--allow-sqlite")
+check(res.returncode != 0 and "RECUSADO" in res.stdout,
+      f"m011 RECUSA banco vazio (exit={res.returncode})")
+
+# 7h - nao-regressao: um alvo com ALGUMA das quatro continua rodando. Em dev o
+# CRM e o Conversas sao dois arquivos SQLite distintos e cada um tem so uma
+# parte das tabelas; a recusa nao pode pegar esse caso legitimo.
+_, parcial_url = fresh("data_integrity_m011_parcial.db")
+parcial_eng = create_engine(parcial_url)
+with parcial_eng.begin() as conn:
+    conn.execute(text(_LEGACY_DDL[0]))  # so `conversations`, como o arquivo do Conversas
+parcial_eng.dispose()
+res = run_m011(parcial_url, "--allow-sqlite")
+check(res.returncode == 0, f"m011 AINDA roda com so uma das tabelas presente (exit={res.returncode})")
+check(unique_index_present(create_engine(parcial_url), "conversations", "uq_conversations_whatsapp"),
+      "m011: alvo parcial (so conversations) aplica o indice que da para aplicar")
+
+# 7i - AUDIT-2026-08-WF2: duplicata numa tabela nao pode bloquear o resto.
+# O F5 e puro DDL (ALTER COLUMN SET DEFAULT: nao le nem escreve uma linha) e
+# rodava DEPOIS de quatro verificacoes dependentes de dado. Uma duplicata em
+# funnel_entries abortava a run inteira e producao ficava sem os DEFAULT - com
+# todo INSERT vindo de psql/n8n/COPY ainda sendo rejeitado.
+_, blk_url, _ = legacy_db(
+    "data_integrity_m011_bloqueio.db",
+    extra_rows=[
+        "INSERT INTO funnel_entries (id, lead_id, funnel_id, etapa_id) VALUES (41, 7, 3, 'a')",
+        "INSERT INTO funnel_entries (id, lead_id, funnel_id, etapa_id) VALUES (42, 7, 3, 'b')",
+        "INSERT INTO conversations (id, lead_id, whatsapp) VALUES (61, 1, '5511777770000')",
+        "INSERT INTO conversations (id, lead_id, whatsapp) VALUES (62, 2, '5511777770000')",
+    ],
+)
+res = run_m011(blk_url, "--allow-sqlite")
+check(res.returncode == 2, f"m011 continua saindo 2 com duplicata (exit={res.returncode})")
+check("F5 server-defaults" in res.stdout,
+      "m011: o passo F5 (puro DDL) e alcancado mesmo com duplicata em outra tabela")
+blk_eng = create_engine(blk_url)
+for _table, _name in (("operational_card_assignees", "uq_operational_card_assignees_card_user"),
+                      ("operational_card_field_values", "uq_operational_card_field_values_card_definition")):
+    check(unique_index_present(blk_eng, _table, _name),
+          f"m011: {_name} (tabela LIMPA) e criado apesar do abort em outra tabela")
+check("funnel_entries" in res.stdout and "conversations" in res.stdout,
+      "m011: uma rodada so reporta AS DUAS tabelas sujas (nao uma por vez)")
+check(not unique_index_present(blk_eng, "funnel_entries", "uq_funnel_entries_lead_funnel"),
+      "m011: nenhum indice criado sobre tabela suja")
+
+
+# ---------------------------------------------------------------------
+# Parte 4 - m012: o invariante de fila que `aplicar_estado_humano` declara
+# ---------------------------------------------------------------------
+print("\n[8] AUDIT-2026-08-WF2 - m012 respeita 'prh NOT NULL => queued_at NULL'")
+
+# `conversas/app/services/atendimento.py:aplicar_estado_humano` declara este
+# invariante como o UNICO estado possivel. O backfill da m012 gravava
+# primeira_resposta_humana_at e deixava queued_at intacto, produzindo em massa
+# exatamente o estado que o codigo trata como impossivel: conversa "ja atendida"
+# que continua ocupando lugar na fila de espera.
+_m012_syspath = list(sys.path)
+_spec012 = importlib.util.spec_from_file_location(
+    "m012_wf2", ROOT / "migrations" / "m012_conversas_primeira_resposta_humana.py")
+m012 = importlib.util.module_from_spec(_spec012)
+_spec012.loader.exec_module(m012)
+# O modulo insere `conversas/` no sys.path (ele espera rodar em processo
+# proprio). Aqui o processo e o do CRM e `app.*` ja esta resolvido para o CRM -
+# desfazer a insercao impede que um import posterior caia no pacote errado.
+sys.path[:] = _m012_syspath
+
+_CONV_LEGACY_DDL = (
+    "CREATE TABLE conversations ("
+    "id INTEGER PRIMARY KEY, lead_id INTEGER NOT NULL, whatsapp VARCHAR(30) NOT NULL, "
+    "nome VARCHAR(200), status VARCHAR(20) NOT NULL DEFAULT 'aberta', "
+    "atendente_id INTEGER, is_bot_active BOOLEAN NOT NULL DEFAULT 1, "
+    "queued_at TIMESTAMP, created_at TIMESTAMP{extra})",
+    "CREATE TABLE messages (id INTEGER PRIMARY KEY, conversation_id INTEGER NOT NULL, "
+    "direction VARCHAR(10) NOT NULL, content TEXT, created_at TIMESTAMP)",
+)
+
+
+def conv_db(name, extra_col="", rows=()):
+    """Banco do Conversas no estado PRE-m012 (ja pos-m008: tem queued_at)."""
+    _, url = fresh(name)
+    eng = create_engine(url)
+    with eng.begin() as conn:
+        conn.execute(text(_CONV_LEGACY_DDL[0].format(extra=extra_col)))
+        conn.execute(text(_CONV_LEGACY_DDL[1]))
+        for row in rows:
+            conn.execute(text(row))
+    return eng
+
+
+def fila(engine):
+    """{id: (tem_queued_at, tem_prh)} - a forma do invariante, sem os valores."""
+    with engine.connect() as conn:
+        return {
+            r[0]: (bool(r[1]), bool(r[2]))
+            for r in conn.execute(text(
+                "SELECT id, queued_at IS NOT NULL, primeira_resposta_humana_at IS NOT NULL "
+                "FROM conversations ORDER BY id"))
+        }
+
+
+# 8a - banco legado (pre-m012): quem o backfill marca sai da fila DE VERDADE.
+eng_8a = conv_db(
+    "data_integrity_m012_backfill.db",
+    rows=[
+        "INSERT INTO conversations (id, lead_id, whatsapp, status, atendente_id, is_bot_active, "
+        "queued_at, created_at) VALUES "
+        "(1, 30, '551190020', 'aberta', 5, 0, '2026-01-01 09:00:00', '2026-01-01 10:00:00'),"
+        "(2, 31, '551190021', 'aberta', NULL, 0, '2026-01-01 09:00:00', '2026-01-01 10:00:00')",
+        "INSERT INTO messages (id, conversation_id, direction, content, created_at) "
+        "VALUES (1, 1, 'outbound', 'oi', '2026-01-01 10:05:00')",
+    ],
+)
+m012.run(engine=eng_8a)
+estado_8a = fila(eng_8a)
+check(estado_8a[1] == (False, True),
+      f"m012: conversa backfillada sai da fila (queued_at NULL) - veio {estado_8a[1]}")
+check(estado_8a[2] == (True, False),
+      f"m012: conversa AINDA na fila mantem queued_at e continua sem prh - veio {estado_8a[2]}")
+
+# 8b - banco onde a m012 ANTIGA ja rodou e deixou o estado impossivel.
+# `WHERE primeira_resposta_humana_at IS NULL` (a clausula que torna o backfill
+# idempotente) exclui essas linhas: sem um passo que enderece o invariante
+# diretamente, rodar de novo nao conserta nada.
+eng_8b = conv_db(
+    "data_integrity_m012_reparo.db",
+    extra_col=", primeira_resposta_humana_at TIMESTAMP",
+    rows=[
+        "INSERT INTO conversations (id, lead_id, whatsapp, status, atendente_id, is_bot_active, "
+        "queued_at, created_at, primeira_resposta_humana_at) VALUES "
+        "(1, 30, '551190020', 'aberta', 5, 0, '2026-01-01 09:00:00', '2026-01-01 10:00:00', "
+        " '2026-01-01 10:00:00')",
+    ],
+)
+m012.run(engine=eng_8b)
+estado_8b = fila(eng_8b)
+check(estado_8b[1] == (False, True),
+      f"m012: REPARA linha ja marcada que ficou com queued_at (estado impossivel) - veio {estado_8b[1]}")
+with eng_8b.connect() as conn:
+    prh_8b = conn.execute(text(
+        "SELECT primeira_resposta_humana_at FROM conversations WHERE id = 1")).scalar()
+check(str(prh_8b) == "2026-01-01 10:00:00",
+      f"m012: o reparo NAO reescreve primeira_resposta_humana_at (veio {prh_8b!r})")
+
+# 8c - idempotencia: a 2a rodada nao tem mais nada a fazer.
+acoes_8a2 = m012.run(engine=eng_8a)
+check("backfill-em-atendimento:0" in acoes_8a2, f"m012: 2a rodada nao backfilla nada ({acoes_8a2})")
+check(fila(eng_8a) == estado_8a, "m012: 2a rodada nao muda o estado da fila (idempotente)")
+
+# 8d - alvo errado: sem `conversations` nao ha o que verificar, e a m012
+# imprimia "OK - NO-OP (ja estava aplicada)" mesmo assim.
+eng_8d = create_engine(fresh("data_integrity_m012_alvo_errado.db")[1])
+with eng_8d.begin() as conn:
+    conn.execute(text("CREATE TABLE alguma_outra_coisa (id INTEGER PRIMARY KEY)"))
+try:
+    m012.run(engine=eng_8d)
+    recusou = False
+except RuntimeError:
+    recusou = True
+check(recusou, "m012 RECUSA alvo sem a tabela conversations em vez de dizer NO-OP")
 
 
 print("\n" + "=" * 60)

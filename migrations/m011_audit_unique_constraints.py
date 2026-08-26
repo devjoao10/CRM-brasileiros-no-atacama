@@ -40,6 +40,13 @@ O QUE ESTA MIGRATION SE RECUSA A FAZER
    apaga nada: imprime os ids e a chave que colidem e sai com codigo 2. Decidir
    qual das duas conversas do cliente e a boa e decisao de operador, nao de
    script. Reconcilie na mao e rode de novo.
+   AUDIT-2026-08-WF2: a duplicata bloqueia O SEU indice e mais nada. Antes ela
+   levantava na hora e arrastava junto tudo que vinha depois — os indices das
+   tabelas LIMPAS e, pior, o F5, que e puro DDL e nao le uma linha sequer.
+   Uma duplicata em `funnel_entries` deixava producao sem os `SET DEFAULT` e,
+   com eles, com todo INSERT vindo de psql/n8n/COPY ainda sendo rejeitado. Hoje
+   o relatorio sai COMPLETO numa rodada so: o operador reconcilia as tabelas
+   sujas de uma vez, em vez de descobrir uma por execucao.
 2. **Rodar as cegas.** Recusa a rodar com DATABASE_URL ausente ou apontando
    para SQLite, a menos que venha `--allow-sqlite` explicito. As migrations
    m005/m008/m009 resolvem a URL pelo config do CONVERSAS, cujo default e um
@@ -55,6 +62,12 @@ O QUE ESTA MIGRATION SE RECUSA A FAZER
 4. **Fingir que verificou.** m009/m010 detectam UNIQUE ausente, concatenam a
    string ":AUSENTE (verificar manualmente)" na lista de acoes e saem com 0.
    Aqui uma verificacao que falha e falha.
+5. **Dizer "NO-OP" sobre um banco que nao e este** (AUDIT-2026-08-WF2). "Tabela
+   ausente" so e informacao inocente quando o alvo E o banco deste sistema.
+   Apontada para uma base recem-provisionada, um nome de banco errado ou uma
+   replica vazia, a migration reportava TODAS as tabelas como ausentes e
+   imprimia "OK — NO-OP (ja estava tudo aplicado)" com exit 0 — a mesma mentira
+   do item 4, so que sobre o alvo. Se nao reconhece NENHUMA das tabelas, recusa.
 
 POR QUE INDICE UNICO E NAO `ADD CONSTRAINT UNIQUE`
 -------------------------------------------------
@@ -121,8 +134,19 @@ _DEFAULT_TARGETS = [
 ]
 
 
+# AUDIT-2026-08-WF2 — reconhecer UMA destas ja prova que o alvo e o banco
+# deste sistema. Em dev o CRM e o Conversas sao dois arquivos SQLite distintos
+# e cada um tem so uma parte delas, entao exigir todas recusaria caso legitimo.
+_TABELAS_ALVO = ({t for _, t, _, _ in _UNIQUE_TARGETS}
+                 | {t for t, _, _ in _DEFAULT_TARGETS})
+
+
 class DuplicateRowsError(RuntimeError):
     """Chave duplicada encontrada: o indice unico NAO pode ser criado."""
+
+
+class WrongTargetError(RuntimeError):
+    """O alvo nao tem nenhuma das tabelas desta migration: banco errado."""
 
 
 def _index_present(insp, table, index_name):
@@ -173,6 +197,7 @@ def _report_duplicates(table, cols, rows):
 def _apply_unique_indexes(engine, actions):
     dialect = engine.dialect.name
     tables = set(inspect(engine).get_table_names())
+    bloqueados = []
 
     for index_name, table, cols, finding in _UNIQUE_TARGETS:
         if table not in tables:
@@ -191,7 +216,13 @@ def _apply_unique_indexes(engine, actions):
         with engine.connect() as conn:
             dupes = _find_duplicates(conn, table, cols)
         if dupes:
-            raise DuplicateRowsError(_report_duplicates(table, cols, dupes))
+            # AUDIT-2026-08-WF2 — acumula e SEGUE. Levantar aqui bloqueava os
+            # objetos seguintes, que nao tem relacao nenhuma com esta duplicata.
+            # O contrato nao muda: nada e apagado, nenhum indice nasce sobre
+            # dado inconsistente e a run termina em exit 2.
+            bloqueados.append(_report_duplicates(table, cols, dupes))
+            actions.append(f"{finding} {index_name}:BLOQUEADO ({len(dupes)} linhas duplicadas)")
+            continue
 
         # Transacao POR OBJETO (ver docstring): falha aqui nao desfaz os
         # indices ja criados nem mascara os proximos.
@@ -208,6 +239,9 @@ def _apply_unique_indexes(engine, actions):
                 f"(dialeto={dialect}). Nada foi revertido; investigue antes de repetir."
             )
         actions.append(f"{finding} {index_name}:created ({table}.{'+'.join(cols)})")
+
+    if bloqueados:
+        raise DuplicateRowsError("\n".join(bloqueados))
 
 
 def _apply_server_defaults(engine, actions):
@@ -232,18 +266,49 @@ def _apply_server_defaults(engine, actions):
         actions.append(f"F5 {table}.{column}:default-set ({default_sql})")
 
 
+def _exigir_alvo_conhecido(engine):
+    """
+    AUDIT-2026-08-WF2 — o gate de `_resolve_target` so olha a STRING da URL:
+    recusa URL ausente e SQLite, e nunca abriu o banco para conferir que o alvo
+    e este sistema. Apontada para um PostgreSQL vazio (base recem-provisionada,
+    nome de banco trocado, replica vazia), a migration reportava as seis tabelas
+    como ausentes e imprimia "OK — NO-OP (ja estava tudo aplicado)", exit 0. O
+    operador marcava o runbook como feito e producao seguia sem os quatro
+    indices unicos e sem os DEFAULT do F5.
+
+    Banco NOVO nao passa por aqui de proposito: ele nasce completo pelo
+    `create_all()` e nao precisa deste script (migrations/README.md).
+    """
+    if not set(inspect(engine).get_table_names()) & _TABELAS_ALVO:
+        raise WrongTargetError(
+            "[m011] RECUSADO — o alvo nao tem NENHUMA das tabelas desta migration:\n"
+            f"[m011]   {', '.join(sorted(_TABELAS_ALVO))}\n"
+            "[m011] Banco NOVO nasce completo pelo create_all() e nao precisa deste\n"
+            "[m011] script. Banco EXISTENTE sem essas tabelas quer dizer ALVO ERRADO\n"
+            "[m011] (DATABASE_URL para outra base, nome trocado, replica vazia).\n"
+            "[m011] Confira DATABASE_URL: aqui nao existe 'NO-OP' honesto."
+        )
+
+
 def run(engine, actions=None):
     """
-    Devolve a lista de acoes. Levanta DuplicateRowsError (dados a reconciliar)
-    ou RuntimeError (o mundo nao esta como deveria) — nunca engole nada.
+    Devolve a lista de acoes. Levanta WrongTargetError (alvo nao e este banco),
+    DuplicateRowsError (dados a reconciliar) ou RuntimeError (o mundo nao esta
+    como deveria) — nunca engole nada.
 
     `actions` e recebida de fora de proposito: quando isto levanta no meio, o
     chamador ainda precisa saber QUAIS objetos ja foram aplicados. Um script que
     falha sem dizer o que ja fez obriga o operador a descobrir na mao.
     """
     actions = [] if actions is None else actions
-    _apply_unique_indexes(engine, actions)
+    _exigir_alvo_conhecido(engine)
+    # AUDIT-2026-08-WF2 — F5 ANTES dos indices. `ALTER COLUMN ... SET DEFAULT`
+    # nao le nem escreve uma linha: nao ha dado capaz de faze-lo falhar, entao
+    # nao ha razao para ele ficar atras de quatro verificacoes que dependem de
+    # dado. Na ordem antiga, uma duplicata em qualquer das quatro tabelas
+    # deixava producao com o schema meio migrado E sem os DEFAULT.
     _apply_server_defaults(engine, actions)
+    _apply_unique_indexes(engine, actions)
     return actions
 
 
@@ -289,6 +354,10 @@ def main(argv):
 
     try:
         run(create_engine(url), actions)
+    except WrongTargetError as exc:
+        report()
+        print(str(exc))
+        return 1
     except DuplicateRowsError as exc:
         report()  # o que ja passou fica aplicado — o operador precisa saber o que e
         print(str(exc))

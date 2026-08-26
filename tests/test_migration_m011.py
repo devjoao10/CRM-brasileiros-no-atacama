@@ -22,12 +22,18 @@ se vier de ter LIDO o script. A migration e a unica peca desta entrega feita
 para rodar contra dado de producao, entao ela e a que menos pode ser aceita de
 palavra.
 
-Dois cenarios:
+Quatro cenarios:
   A) banco LIMPO  -> os quatro indices unicos nascem, exit 0, e rodar de novo
                      continua exit 0 (idempotente).
   B) banco SUJO   -> com duas conversas do MESMO numero, tem que ABORTAR com
                      exit 2, listar os ids, NAO criar o indice e NAO apagar
                      linha nenhuma.
+  C) banco SUJO em DUAS tabelas (AUDIT-2026-08-WF2) -> o abort por dado nao
+                     pode arrastar junto o que nao depende de dado: o F5 e os
+                     indices das tabelas limpas continuam sendo aplicados, e o
+                     relatorio lista as DUAS tabelas sujas numa rodada so.
+  D) alvo ERRADO (AUDIT-2026-08-WF2) -> banco sem nenhuma das tabelas nao e
+                     "NO-OP": e RECUSA, exit != 0, sem imprimir OK.
 """
 import io
 import os
@@ -52,7 +58,7 @@ def check(cond, msg):
         falhas.append(msg)
 
 
-def cria_banco(caminho, com_duplicata):
+def cria_banco(caminho, com_duplicata, dupe_funnel=False):
     """Sobe o schema real dos DOIS servicos e semeia dados."""
     env = dict(os.environ)
     env.update(ENVIRONMENT="development", SEED_INITIAL_ADMIN="false",
@@ -86,6 +92,13 @@ def cria_banco(caminho, com_duplicata):
         # exatamente o defeito que o indice existe para impedir
         con.execute("INSERT INTO conversations (lead_id, whatsapp, nome, status, unread_count, is_bot_active) "
                     "VALUES (0, '5511900000001', 'A duplicada', 'aberta', 0, 0)")
+    if dupe_funnel:
+        # AUDIT-2026-08-WF2 — segunda tabela suja, para provar que o relatorio
+        # nao para na primeira: o operador precisa das DUAS numa rodada so.
+        con.execute("INSERT INTO funnel_entries (id, lead_id, funnel_id, etapa_id, posicao) "
+                    "VALUES (41, 7, 3, 'a', 0)")
+        con.execute("INSERT INTO funnel_entries (id, lead_id, funnel_id, etapa_id, posicao) "
+                    "VALUES (42, 7, 3, 'b', 1)")
     con.commit()
     con.close()
 
@@ -145,6 +158,47 @@ check(linhas(sujo, "conversations") == antes_linhas,
       "NAO apagou nem deduplicou linha nenhuma")
 check("5511900000001" in saida or "conversations" in saida,
       "a saida diz QUAL tabela/valor precisa de reconciliacao")
+
+print()
+print("C) AUDIT-2026-08-WF2 — o abort por dado NAO bloqueia o que independe de dado")
+# Antes: `run()` levantava no PRIMEIRO objeto sujo, entao (a) o F5, que e puro
+# DDL e nao le uma linha sequer, ficava sem aplicar por causa de uma duplicata
+# que nao tem nada a ver com ele, e (b) os indices das tabelas LIMPAS tambem
+# morriam junto. Uma duplicata em funnel_entries deixava producao sem os
+# DEFAULT do F5 — ou seja, com todo INSERT vindo de psql/n8n/COPY ainda sendo
+# rejeitado — e sem os indices de F3/F4.
+duplo = TMP / "duplo.db"
+cria_banco(duplo, com_duplicata=True, dupe_funnel=True)
+r4 = roda(duplo)
+saida_c = (r4.stdout or "") + (r4.stderr or "")
+check(r4.returncode == 2, f"exit 2 (ha duplicata) — veio {r4.returncode}")
+check("F5 server-defaults" in saida_c,
+      "F5 (puro DDL) e ALCANCADO mesmo com duplicata em outra tabela")
+idx_c = indices(duplo)
+check("uq_operational_card_assignees_card_user" in idx_c,
+      "F3: indice da tabela LIMPA e criado apesar do abort em outra tabela")
+check("uq_operational_card_field_values_card_definition" in idx_c,
+      "F4: indice da tabela LIMPA e criado apesar do abort em outra tabela")
+check("uq_conversations_whatsapp" not in idx_c and "uq_funnel_entries_lead_funnel" not in idx_c,
+      "nenhum indice criado sobre tabela suja")
+check("conversations" in saida_c and "funnel_entries" in saida_c,
+      "o relatorio lista AS DUAS tabelas sujas numa rodada so")
+check(linhas(duplo, "conversations") == 2 and linhas(duplo, "funnel_entries") == 2,
+      "continua sem apagar nada")
+check("OK" not in saida_c, "nao imprime OK depois de abortar")
+
+print()
+print("D) AUDIT-2026-08-WF2 — alvo sem NENHUMA das tabelas: RECUSA, nao 'NO-OP'")
+# Um DATABASE_URL apontado para base recem-provisionada / nome errado / replica
+# vazia fazia a m011 imprimir "OK — NO-OP (ja estava tudo aplicado)" e sair 0,
+# afirmando um estado que ela nunca verificou.
+vazio = TMP / "vazio.db"
+sqlite3.connect(vazio).close()
+r5 = roda(vazio)
+saida_d = (r5.stdout or "") + (r5.stderr or "")
+check(r5.returncode != 0, f"exit != 0 num alvo sem as tabelas (veio {r5.returncode})")
+check("RECUSADO" in saida_d, "diz RECUSADO em vez de fingir NO-OP")
+check("OK" not in saida_d, "nao imprime OK sobre um estado que nao verificou")
 
 print()
 if falhas:

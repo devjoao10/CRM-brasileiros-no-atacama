@@ -42,6 +42,27 @@ IS NULL` torna o backfill idempotente.
 
 Conversas na fila ficam com NULL — que e exatamente o que a nova regra quer.
 
+E o backfill ZERA `queued_at` nas linhas que marca (AUDIT-2026-08-WF2).
+`aplicar_estado_humano` (conversas/app/services/atendimento.py) declara um
+invariante unico: `primeira_resposta_humana_at NOT NULL` => `queued_at NULL`.
+Gravar so a primeira metade produzia em massa o estado que o codigo trata como
+impossivel — conversa "ja atendida" ocupando lugar na FILA DE ESPERA. A
+reconciliacao e um UPDATE SEPARADO, e nao um `SET` a mais no backfill, porque
+tambem precisa consertar as linhas que uma rodada ANTERIOR desta migration ja
+deixou assim: o `WHERE primeira_resposta_humana_at IS NULL` que torna o backfill
+idempotente e exatamente o que as excluiria.
+
+O QUE ESTA MIGRATION SE RECUSA A FAZER
+--------------------------------------
+**Dizer "NO-OP" sobre um banco que nao e este** (AUDIT-2026-08-WF2). O gate de
+`_resolve_target` so olha a STRING da URL — recusa URL ausente e SQLite, e nunca
+abriu o banco para conferir o alvo. Apontada para um PostgreSQL vazio (base
+recem-provisionada, nome de banco trocado, replica vazia), ela imprimia
+"conversations:table-absent" seguido de "OK — NO-OP (ja estava aplicada)" e
+saia 0. O operador marcava o runbook como feito e producao seguia sem
+`primeira_resposta_humana_at` — com o inbox classificando TODA conversa como
+"na fila". Sem a tabela `conversations` nao ha o que verificar: recusa.
+
 Migration MANUAL e IDEMPOTENTE — **nao roda no startup**. Bancos novos ja
 nascem completos via `Base.metadata.create_all()` no lifespan do Conversas.
 
@@ -70,6 +91,11 @@ from sqlalchemy import create_engine, inspect, text  # noqa: E402
 
 logger = logging.getLogger("migrations.m012")
 
+
+class WrongTargetError(RuntimeError):
+    """O alvo nao tem a tabela `conversations`: banco errado, nao 'NO-OP'."""
+
+
 _COLUMN = "primeira_resposta_humana_at"
 _TYPE_BY_DIALECT = {"postgresql": "TIMESTAMP WITH TIME ZONE", "default": "TIMESTAMP"}
 _INDEX = "ix_conversations_primeira_resposta_humana_at"
@@ -97,9 +123,16 @@ def run(engine=None, actions=None):
     insp = inspect(engine)
 
     if "conversations" not in insp.get_table_names():
-        # Banco novo: create_all() do app cria a tabela ja completa.
-        actions.append("conversations:table-absent (sera criada completa pelo create_all)")
-        return actions
+        # AUDIT-2026-08-WF2 — ver docstring. Banco NOVO nasce completo pelo
+        # create_all() e nao precisa deste script; banco EXISTENTE sem
+        # `conversations` quer dizer ALVO ERRADO, e nao "nada a fazer".
+        raise WrongTargetError(
+            "[m012] RECUSADO — o alvo nao tem a tabela `conversations`.\n"
+            "[m012] Banco NOVO nasce completo pelo create_all() do Conversas e nao\n"
+            "[m012] precisa deste script. Banco EXISTENTE sem essa tabela quer dizer\n"
+            "[m012] ALVO ERRADO (DATABASE_URL para outra base, nome trocado, replica\n"
+            "[m012] vazia). Confira DATABASE_URL: aqui nao existe 'NO-OP' honesto."
+        )
 
     dialect = engine.dialect.name
     existing = {c["name"] for c in insp.get_columns("conversations")}
@@ -133,6 +166,21 @@ def run(engine=None, actions=None):
             {"off": False},
         )
         actions.append(f"backfill-em-atendimento:{result.rowcount}")
+
+        # AUDIT-2026-08-WF2 — segunda metade do invariante (ver docstring):
+        # quem ja tem `primeira_resposta_humana_at` NAO espera mais na fila.
+        # Separado do backfill de proposito: tambem conserta o que a versao
+        # anterior desta migration deixou no estado impossivel.
+        if "queued_at" in existing:
+            fila = conn.execute(text(
+                f"UPDATE conversations SET queued_at = NULL "
+                f"WHERE {_COLUMN} IS NOT NULL AND queued_at IS NOT NULL"
+            ))
+            actions.append(f"fila-consistente:{fila.rowcount}")
+        else:
+            # m008 e pre-requisito declarado. Dizer isso e melhor do que
+            # abortar o ALTER inteiro com "no such column: queued_at".
+            actions.append("fila-consistente:PULADO (queued_at ausente; rode a m008 antes)")
 
     # GATE pos-DDL: nao basta o ALTER nao ter levantado. Reinspeciona.
     insp_pos = inspect(engine)
@@ -192,6 +240,10 @@ def main(argv):
 
     try:
         run(create_engine(url), actions)
+    except WrongTargetError as exc:
+        report()
+        print(str(exc))
+        return 1
     except Exception as exc:  # noqa: BLE001 — qualquer coisa inesperada e falha RUIDOSA
         report()
         logger.exception("[m012] falha inesperada")
@@ -199,9 +251,14 @@ def main(argv):
         return 1
 
     report()
-    changed = [a for a in actions if ":added" in a or a.startswith("backfill-")]
-    if any(":added" in a for a in changed):
+    # AUDIT-2026-08-WF2 — "NO-OP" so pode ser impresso quando NADA mudou: uma
+    # rodada que backfillou ou reconciliou a fila escreveu dado, mesmo com a
+    # coluna ja presente. Toda acao termina em ":<n>" quando mexeu em linhas.
+    escritas = sum(int(v) for _, _, v in (a.rpartition(":") for a in actions) if v.isdigit())
+    if any(":added" in a for a in actions):
         print("[m012] OK — coluna aplicada (idempotente)")
+    elif escritas:
+        print(f"[m012] OK — {escritas} linha(s) reconciliada(s) (idempotente)")
     else:
         print("[m012] OK — NO-OP (ja estava aplicada)")
     return 0
