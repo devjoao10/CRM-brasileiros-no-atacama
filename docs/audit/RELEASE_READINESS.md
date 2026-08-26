@@ -918,6 +918,35 @@ forçada: virou parâmetro novo convivendo com o antigo.
 | **D2** | autenticar `/webhook/agent-bia` |
 | **Decisões de negócio** | preços 2026 `[PENDENTE_VALIDACAO]`, altitude para menores de 7, resposta sobre visto, sazonalidade do roteiro combinado |
 
+## Revisão de código — o que ela achou nas correções desta rodada
+
+Quatro revisores independentes (correção/design, segurança, FastAPI, Python) sobre
+o diff inteiro. Acharam **quatro defeitos reais nas próprias correções**, todos
+corrigidos com prova:
+
+| Achado | Gravidade | Como foi verificado |
+|---|---|---|
+| A ponte de handoff era no-op no **segundo** handoff do mesmo lead — cliente que volta ficava preso na Bia | alta | RED no smoke e2e com os dois serviços |
+| `retry_message` prendia a mensagem em `retrying` para sempre num `OSError` | alta | RED em `test_conversas_meta_resiliencia` D4b |
+| `LIKE` consome a barra como escape: o guard de NUL barrava dado legítimo | média | reproduzido no PostgreSQL com 3 linhas |
+| `AND` não tem curto-circuito garantido no PostgreSQL; virou `CASE` aninhado | média | comparadas as duas formas no banco real |
+
+Dois deles estavam **protegidos por testes meus** que afirmavam o comportamento
+errado como correto. As asserções foram invertidas, com o motivo escrito ao lado.
+
+Três apontamentos foram avaliados e **não** alterados, com razão registrada: o 409
+do `by-whatsapp` expondo ids a um chamador que já lista todos os leads;
+`/inativas` truncando em Python dentro de uma query já limitada por status e
+janela; e `criar_lead` commitando da camada de serviço — cruza a fronteira
+documentada, mas tirar o commit de lá passaria a atomicidade de uma criação
+multi-tabela para um chamador que não a conhece.
+
+A revisão de segurança auditou adversarialmente o renderizador de marcação do
+WhatsApp — texto de cliente chegando ao `innerHTML` do atendente — testando
+breakout do `<code>`, o placeholder ` MONO`, sobreposição de marcadores e
+injeção de atributo. Sem XSS: o pior caso é HTML mal aninhado que o parser
+conserta.
+
 ## Veredito
 
 **Não é "release ready".** Nada foi validado em produção, e o item mais urgente
