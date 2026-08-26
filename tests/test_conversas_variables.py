@@ -1035,6 +1035,50 @@ check("innerHTML" not in qr_section and "sendMessage" not in qr_section,
       "secao da paleta '/' segue sem innerHTML e sem sendMessage")
 
 
+print()
+print("AUDIT-2026-08-WD (F-348) — parametro de template sanitizado para a Meta")
+# A Meta RECUSA parametro com quebra de linha, tabulacao ou 4+ espacos, e trunca
+# acima de 1024 chars. Ate aqui o valor resolvido so levava .strip(): um nome
+# colado do Excel com tabulacao, ou uma anotacao com quebra de linha, faziam a
+# Meta devolver 132000 — e o operador via "falha no envio" sem pista nenhuma de
+# que a causa era um caractere invisivel num valor que ele nao digitou.
+from app.services.variables import sanitizar_parametro  # noqa: E402
+
+NL = chr(10)
+TAB = chr(9)
+CR = chr(13)
+RETICENCIA = chr(8230)
+
+for entrada, esperado, descricao in [
+    ("Joao  Silva", "Joao Silva", "espaco duplo colapsa"),
+    ("Atacama    e    Uyuni", "Atacama e Uyuni", "corrida de espacos colapsa"),
+    ("linha1" + NL + "linha2", "linha1 linha2", "quebra de linha vira espaco"),
+    ("linha1" + CR + NL + "linha2", "linha1 linha2", "CRLF vira UM espaco"),
+    ("a" + TAB + "b", "a b", "tabulacao vira espaco"),
+    ("  x  ", "x", "bordas saem"),
+    ("", "", "vazio continua vazio"),
+    ("normal", "normal", "valor limpo passa intacto"),
+    ("acento ç ã é 😀", "acento ç ã é 😀", "acento e emoji NAO sao tocados"),
+    ("R$ 1.200,00 (2 pax)", "R$ 1.200,00 (2 pax)", "pontuacao e simbolo intactos"),
+]:
+    obtido = sanitizar_parametro(entrada)
+    check(obtido == esperado, f"{descricao}: {entrada!r} -> {obtido!r}")
+
+longo = sanitizar_parametro("x" * 1100)
+check(len(longo) == 1024, f"trunca no teto da Meta (obteve {len(longo)})")
+check(longo.endswith(RETICENCIA),
+      "o truncamento e VISIVEL — o atendente precisa perceber que faltou texto")
+
+# O caminho de resolucao inteiro precisa usar a sanitizacao, nao so a funcao
+# solta: um valor sujo tem de sair limpo do render, senao a correcao nao chega
+# ao payload da Meta.
+fonte_var = (CONVERSAS_DIR / "app" / "services" / "variables.py").read_text(encoding="utf-8")
+check(fonte_var.count("sanitizar_parametro(") >= 3,
+      "sanitizar_parametro e usado na resolucao (fixa e dinamica), nao so definido")
+check('str(resolved).strip()' not in fonte_var,
+      "o .strip() cru foi substituido no caminho dinamico")
+
+
 # --- Resultado ---
 main.app.dependency_overrides.clear()
 if failures:
