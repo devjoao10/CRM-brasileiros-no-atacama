@@ -95,11 +95,29 @@ def campo_personalizado_match(coluna, chave: str, valor: str):
         # certa: uma linha some de um filtro, em vez de a funcionalidade sumir
         # para todo mundo. Dado NOVO nao entra assim — `_rejeita_nul` em
         # `app/schemas/lead.py` ja recusa na borda; isto e para o legado.
+        # AUDIT-2026-08-WG (revisao) — CASE ANINHADO, e nao `AND`.
+        #
+        # A primeira versao usava `sem_nul & (jsonb_typeof(...) == 'object')`
+        # dentro de UM `WHEN`. Isso compila para um `AND` simples, e o
+        # PostgreSQL NAO garante curto-circuito de `AND`: a ordem de avaliacao
+        # de subexpressoes e livre para o planner (manual, secao "Expression
+        # Evaluation Rules"). Ou seja, ele PODE avaliar o cast para jsonb antes
+        # do guard e reproduzir exatamente a queda que este codigo existe para
+        # evitar. Nos meus testes o plano escolhido avaliava na ordem certa —
+        # mas "nao consegui provocar" nao e "nao acontece", e depende de
+        # estatistica, volume e indice.
+        #
+        # `CASE` E garantido: o manual diz explicitamente que ele nao avalia
+        # subexpressao de ramo nao escolhido. Aninhar custa nada e troca sorte
+        # de planner por contrato.
         texto = cast(coluna, String)
         sem_nul = texto.notlike(_LIKE_ESCAPE_NUL)
         jb = cast(coluna, JSONB)
-        seguro = case((sem_nul & (func.jsonb_typeof(jb) == "object"), jb),
-                      else_=cast(literal("{}"), JSONB))
+        vazio = cast(literal("{}"), JSONB)
+        seguro = case(
+            (sem_nul, case((func.jsonb_typeof(jb) == "object", jb), else_=vazio)),
+            else_=vazio,
+        )
         pares = func.jsonb_each_text(seguro).table_valued("key", "value")
         chave_col = func.lower(func.btrim(pares.c.key, _ESPACOS))
         valor_col = pares.c.value

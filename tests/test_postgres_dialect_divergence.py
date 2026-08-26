@@ -651,6 +651,19 @@ check(-1 < _pos_guard < _pos_cast,
       f"o guard vem ANTES do primeiro cast para jsonb "
       f"(guard@{_pos_guard}, cast@{_pos_cast}) — se o cast voltar para fora do "
       f"CASE, uma unica linha legada derruba o filtro para todos")
+
+# AUDIT-2026-08-WG (revisao) — o guard precisa estar num CASE PROPRIO, nao
+# num `AND` dentro do mesmo WHEN. O PostgreSQL nao garante curto-circuito de
+# `AND` (a ordem de avaliacao e livre para o planner), so de `CASE`. Com o
+# `AND`, o cast para jsonb PODE ser avaliado antes do guard e reproduzir a
+# queda — e isso depende de estatistica e volume, entao passa em teste pequeno
+# e falha em producao. Este check mata o retorno para a forma `AND`.
+_prefixo_ate_cast = _up[:_pos_cast]
+check(_prefixo_ate_cast.count("CASE WHEN") >= 2,
+      "o guard esta num CASE proprio (aninhado), nao num AND dentro do mesmo WHEN — "
+      "so CASE tem curto-circuito garantido no PostgreSQL")
+check(" AND " not in _up[_pos_guard:_pos_cast],
+      "nao ha `AND` entre o guard e o cast — seria exatamente a forma sem garantia")
 check(_qf._ESCAPE_NUL == chr(92) + "u0000",
       "o padrao procurado sao os SEIS caracteres do escape, nao um byte NUL")
 
