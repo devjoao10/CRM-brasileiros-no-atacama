@@ -294,6 +294,60 @@ def test_filtro_viajantes_minimo():
     assert ctx["l4"] not in ids, "lead sem num_viajantes nao pode casar >= N"
 
 
+def test_remover_etapa_com_lead_e_recusado():
+    """
+    AUDIT-2026-08-WC (F-246) — trocar a lista de etapas orfanava leads em silencio.
+
+    `Funnel.etapas` e uma coluna JSON substituida inteira, e
+    `funnel_entries.etapa_id` aponta para essas strings sem nenhuma FK por tras.
+    Remover uma etapa deixava todo lead dela com um `etapa_id` inexistente — e o
+    board so renderiza entries cujo `etapa_id` esta na lista atual. Os leads nao
+    eram apagados: ficavam INVISIVEIS, sem erro e sem caminho de volta pela
+    interface.
+
+    Recusar e melhor que migrar em silencio: para onde vai um lead que estava em
+    "Proposta enviada" e uma decisao de negocio, e adivinhar perderia informacao
+    sem ninguem ficar sabendo.
+    """
+    client, ctx = _setup()
+    funnel_id = ctx["f1"]
+
+    atual = client.get(f"/api/pipeline/funnels/{funnel_id}").json()
+    etapas = list(atual["etapas"])
+    # A fixture nasce com UMA etapa. Acrescentamos uma vazia para poder testar
+    # os dois lados da regra: remover a ocupada e recusado, remover a vazia nao.
+    if len(etapas) < 2:
+        etapas = etapas + [{"id": "e2_vazia", "nome": "Etapa vazia"}]
+        r_add = client.put(f"/api/pipeline/funnels/{funnel_id}", json={"etapas": etapas})
+        assert r_add.status_code == 200, f"nao consegui preparar a fixture: {r_add.status_code}"
+        etapas = client.get(f"/api/pipeline/funnels/{funnel_id}").json()["etapas"]
+
+    ocupada = next(e for e in etapas if e["id"] == "e1")
+    restantes = [e for e in etapas if e["id"] != ocupada["id"]]
+
+    r = client.put(f"/api/pipeline/funnels/{funnel_id}", json={"etapas": restantes})
+    assert r.status_code == 409,         f"remover etapa com lead deve ser recusado com 409, veio {r.status_code}"
+    corpo = r.json().get("detail", "")
+    assert ocupada["id"] in corpo, f"o 409 precisa NOMEAR a etapa: {corpo}"
+    assert "lead" in corpo.lower(), f"o 409 precisa dizer quantos leads: {corpo}"
+
+    # E o funil NAO pode ter sido alterado pela tentativa recusada.
+    depois = client.get(f"/api/pipeline/funnels/{funnel_id}").json()
+    assert [e["id"] for e in depois["etapas"]] == [e["id"] for e in etapas],         "a recusa nao pode ter alterado as etapas"
+
+    # Renomear/reordenar SEM remover continua permitido.
+    reordenado = list(reversed(etapas))
+    r2 = client.put(f"/api/pipeline/funnels/{funnel_id}", json={"etapas": reordenado})
+    assert r2.status_code == 200,         f"reordenar sem remover deve continuar funcionando, veio {r2.status_code}"
+
+    # E remover uma etapa VAZIA continua permitido.
+    vazias = [e for e in etapas if e["id"] != "e1"]
+    assert vazias, "a fixture precisa de ao menos uma etapa vazia para este caso"
+    sem_a_vazia = [e for e in etapas if e["id"] != vazias[0]["id"]]
+    r3 = client.put(f"/api/pipeline/funnels/{funnel_id}", json={"etapas": sem_a_vazia})
+    assert r3.status_code == 200,         f"remover etapa VAZIA deve continuar permitido, veio {r3.status_code}"
+
+
 def test_filtro_viajantes_exato():
     """
     AUDIT-2026-08-WC5 — "pelo menos X" e "exatamente X" sao perguntas diferentes.

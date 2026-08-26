@@ -182,6 +182,48 @@ def update_funnel(
         stage_ids = [s["id"] if isinstance(s, dict) else s.id for s in update_data["etapas"]]
         if len(stage_ids) != len(set(stage_ids)):
             raise HTTPException(status_code=400, detail="IDs de etapas devem ser únicos")
+
+        # AUDIT-2026-08-WC (F-246) — trocar a lista de etapas ORFANAVA leads.
+        #
+        # `etapas` e uma coluna JSON e era substituida inteira, sem olhar para
+        # `funnel_entries.etapa_id`, que aponta para essas mesmas strings sem
+        # nenhuma FK por tras. Remover ou renomear uma etapa deixava todo lead
+        # que estava nela com um `etapa_id` que nao existe mais — e o board so
+        # renderiza entries cujo `etapa_id` esta em `funnel.etapas`
+        # (`get_kanban`). Os leads nao eram apagados: ficavam INVISIVEIS, sem
+        # erro, sem aviso e sem caminho de volta pela interface.
+        #
+        # Recusar e melhor que migrar em silencio: para onde mover um lead que
+        # estava em "Proposta enviada" quando essa etapa deixa de existir e uma
+        # decisao de negocio, e adivinha-la aqui perderia informacao sem que
+        # ninguem ficasse sabendo. O 409 nomeia as etapas e quantos leads ha em
+        # cada uma, para o admin mover antes.
+        etapas_removidas = {
+            e["id"] for e in (funnel.etapas or [])
+            if isinstance(e, dict) and e.get("id") not in set(stage_ids)
+        }
+        if etapas_removidas:
+            ocupadas = (
+                db.query(FunnelEntry.etapa_id, func.count(FunnelEntry.id))
+                .filter(
+                    FunnelEntry.funnel_id == funnel_id,
+                    FunnelEntry.etapa_id.in_(sorted(etapas_removidas)),
+                )
+                .group_by(FunnelEntry.etapa_id)
+                .all()
+            )
+            if ocupadas:
+                detalhe = ", ".join(f"'{eid}' ({n} lead{'s' if n > 1 else ''})"
+                                    for eid, n in sorted(ocupadas))
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Não é possível remover etapa que ainda tem lead: {detalhe}. "
+                        "Mova os leads para outra etapa antes de alterar o funil — "
+                        "removê-la aqui os deixaria invisíveis no quadro."
+                    ),
+                )
+
         update_data["etapas"] = [s if isinstance(s, dict) else s.model_dump() for s in update_data["etapas"]]
 
     for field, value in update_data.items():
