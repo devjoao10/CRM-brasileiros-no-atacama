@@ -759,3 +759,79 @@ funis — recuperável, não destrutivo.
 estão implementados e testados em `tests/test_lead_funnel_entry.py`.
 
 **STATUS:** `FIXED_PENDING_MANUAL_N8N`
+
+---
+
+## M12 — o formulário trata `409` como "lead não existe" e cria uma terceira linha
+
+**Consequência de uma correção desta rodada. Não é regressão — o comportamento
+antigo era pior —, mas agora existe um sinal que o workflow ignora.**
+
+### O que mudou no repositório
+
+`GET /api/leads/by-whatsapp/{n}` consultava a coluna `whatsapp` **crua**. Um
+lead gravado como `+55 11 98765-4322` — que é exatamente o formato que o próprio
+formulário grava — não casava em nenhum dos três passos, nem quando a busca era
+pela string idêntica à gravada. A rota devolvia **404**, o workflow concluía
+"lead não existe" e criava um lead novo. O defeito se alimentava: cada envio do
+formulário produzia mais uma duplicata.
+
+Agora o pré-filtro normaliza os dois lados, e os seis formatos do corpus de
+teste encontram o lead. Mas a normalização também faz aparecer uma ambiguidade
+que a coluna crua escondia: quando **dois** leads compartilham o mesmo número em
+formatos diferentes (as duplicatas que já existem em produção, criadas por este
+mesmo defeito), a rota devolve **409** com os ids no corpo, em vez de escolher um
+arbitrariamente.
+
+### O problema
+
+**WORKFLOW:** Formulário do Site → CRM BnA
+**NÓ:** `Lead existe?`
+
+A condição é `statusCode === 200 && !!body?.id`. O `409` cai no ramo falso —
+o mesmo ramo do `404` — e segue para `Criar novo lead`. Ou seja: no caso em que
+o CRM diz *"existem dois leads com este número, decida"*, o formulário cria um
+**terceiro**.
+
+### A mudança
+
+Fazer o ramo falso distinguir os dois casos. `404` continua significando "pode
+criar"; `409` significa **"não crie"**, e a resposta ao site deve dizer que o
+cadastro precisa de conferência manual.
+
+O desenho exato (nó IF adicional, `Switch`, ou uma condição no `jsCode` que já
+existe) fica a seu critério — o que não pode continuar é `409` e `404` seguirem
+pelo mesmo caminho.
+
+**CONEXÕES / NÓS:** nenhuma alteração nos nós de criação. Só o roteamento do
+ramo falso.
+
+### Por que isso não é uma regressão
+
+Antes, o mesmo cenário também criava lead novo — só que **sempre**, inclusive
+quando havia UM único lead. O 409 aparece agora porque a rota passou a enxergar
+as duplicatas; ele é o diagnóstico, não a causa. Enquanto esta mudança não for
+feita, o comportamento no caso ambíguo é idêntico ao de antes.
+
+### Teste manual
+
+1. No CRM, garanta dois leads com o mesmo número em formatos diferentes
+   (`+55 11 98765-4322` e `5511987654322`) — ou use um par de duplicatas que já
+   exista.
+2. Envie o formulário com esse número.
+3. Em *Executions* → nó `Buscar lead pelo WhatsApp` → *Output*: `statusCode` 409
+   e um `detail` com os dois ids.
+4. Depois da mudança: nenhum lead novo é criado, e a resposta ao site diz que o
+   cadastro precisa de conferência.
+
+**ROLLBACK:** voltar o roteamento do ramo falso. Volta a criar a terceira linha
+— recuperável, não destrutivo.
+
+**DEPENDÊNCIA REPO-SIDE:** nenhuma — o `409` e o corpo com os ids já estão
+implementados e testados em `tests/test_leads_lookup_whatsapp.py`.
+
+**PENDÊNCIA DE DADOS, SEPARADA:** as duplicatas que já existem em produção
+continuam lá. Consolidá-las é alteração de dado de produção, caso a caso, e não
+foi feita por esta rodada (mesma classificação do M10).
+
+**STATUS:** `FIXED_PENDING_MANUAL_N8N`
