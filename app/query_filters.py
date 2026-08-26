@@ -39,7 +39,6 @@ _ESPACOS = (
 # Escrever `\u0000` literal num .py produziria um byte NUL de verdade no
 # fonte; o que precisamos e dos SEIS caracteres que o texto JSON guarda.
 _ESCAPE_NUL = chr(92) + "u0000"
-_LIKE_ESCAPE_NUL = "%" + _ESCAPE_NUL + "%"
 
 
 def campo_personalizado_match(coluna, chave: str, valor: str):
@@ -110,8 +109,26 @@ def campo_personalizado_match(coluna, chave: str, valor: str):
         # `CASE` E garantido: o manual diz explicitamente que ele nao avalia
         # subexpressao de ramo nao escolhido. Aninhar custa nada e troca sorte
         # de planner por contrato.
+        # AUDIT-2026-08-WG (revisao 2) — `strpos`, e nao `LIKE`.
+        #
+        # A versao anterior usava `notlike("%" + BARRA + "u0000%")`. No
+        # PostgreSQL a BARRA e o caractere de escape DEFAULT do LIKE: dentro do
+        # padrao ela e consumida como marcador e `u` vira literal. Ou seja, o
+        # guard significava `NOT LIKE '%u0000%'` — e barrava qualquer valor com
+        # a substring `u0000` SEM barra nenhuma (um codigo de referencia
+        # `ref-u0000-alpha`, por exemplo), que casta para jsonb sem problema
+        # nenhum. Errava para o lado seguro (a queda continuava prevenida), mas
+        # sumia com linha legitima do filtro em silencio — que e a mesma
+        # classe de defeito que esta rodada esta corrigindo.
+        #
+        # Verificado no PostgreSQL 16 real: com `LIKE`, a linha inocente era
+        # excluida junto; com `strpos`, so a envenenada e.
+        #
+        # `strpos` procura a substring LITERAL, sem semantica de escape para
+        # errar. E funcao do PostgreSQL — o que e correto: este e o ramo
+        # PostgreSQL, e o SQLite nem tem o defeito.
         texto = cast(coluna, String)
-        sem_nul = texto.notlike(_LIKE_ESCAPE_NUL)
+        sem_nul = func.strpos(texto, _ESCAPE_NUL) == 0
         jb = cast(coluna, JSONB)
         vazio = cast(literal("{}"), JSONB)
         seguro = case(

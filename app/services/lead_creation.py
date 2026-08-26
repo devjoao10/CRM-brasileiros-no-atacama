@@ -117,10 +117,19 @@ def garantir_entrada_no_funil(
             db.add(entry)
             db.flush()
     except IntegrityError:
+        # A UNICA violacao esperada aqui e `uq_funnel_entries_lead_funnel`: o
+        # outro inserinte ganhou a corrida. No PostgreSQL o indice unico BLOQUEIA
+        # o segundo ate o primeiro commitar, entao o re-SELECT enxerga a linha.
         entry = db.query(FunnelEntry).filter(
             FunnelEntry.lead_id == lead_id,
             FunnelEntry.funnel_id == funnel.id,
         ).first()
+        if entry is None:
+            # AUDIT-2026-08-WB (revisao) — nao era essa a violacao. Engolir aqui
+            # devolveria None e o chamador quebraria com AttributeError em
+            # `entry.etapa_id`, escondendo o erro real do banco atras de um
+            # crash confuso. Levanta o original.
+            raise
     return entry
 
 
@@ -142,7 +151,14 @@ def _obter_ou_criar_tag(db: Session, nome: str) -> Tag:
             db.add(tag)
             db.flush()
     except IntegrityError:
+        # Mesma logica de `garantir_entrada_no_funil`: a violacao esperada e
+        # `tags.nome`, e o re-SELECT tem de encontrar a tag que o outro criou.
         tag = db.query(Tag).filter(func.lower(Tag.nome) == nome.lower()).first()
+        if tag is None:
+            # AUDIT-2026-08-WB (revisao) — outra violacao. Sem isto o chamador
+            # faria `lead.tags.append(None)` e quebraria o relacionamento com um
+            # erro que nao aponta para a causa.
+            raise
     return tag
 
 

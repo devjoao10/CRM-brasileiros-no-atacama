@@ -324,7 +324,24 @@ POST conversas:8101/api/conversations/by-lead/{id}/handoff
   PASS: retry NAO manda a conversa para o fim da fila
 ```
 
-17/17, zero falhas. Usuários, lead e conversa do smoke removidos ao final.
+```
+7 — cliente ENCERRA, volta a escrever, e o handoff acontece DE NOVO
+  PASS: cliente que volta cai de novo com a Bia
+  PASS: e fora da fila
+  PASS: segundo handoff aceito (got 200)
+  PASS: SEGUNDO handoff com o MESMO responsavel tambem desliga a Bia
+  PASS: e a conversa entra na fila DE NOVO — sem isto o cliente que volta fica preso
+```
+
+22/22, zero falhas. Usuários, lead e conversa do smoke removidos ao final.
+
+A seção 7 foi acrescentada depois da revisão de código, que apontou um defeito
+real na primeira versão da ponte: ela só disparava quando `responsavel_id`
+**mudava**. Como o n8n manda o id FIXO e nada devolve `lead.responsavel_id` a
+NULL no encerramento, o segundo handoff do mesmo lead era pulado — e o
+Conversas, que reseta a conversa para a Bia quando um cliente encerrado volta a
+escrever, deixava esse cliente preso ali. RED confirmado: restaurando o guard
+antigo, as duas últimas asserções falham.
 
 É a prova de que o defeito principal desta rodada acabou: antes, a Bia dizia ao
 cliente que ele estava na fila e **nada** acontecia do lado do inbox, porque

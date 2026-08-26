@@ -20,7 +20,10 @@ O QUE ESTE ARQUIVO PROVA
      credencial certa.
   2. Devolver o lead ao Agente IA (`responsavel_id` ausente/null) NAO dispara —
      mover a conversa para a fila humana ali seria o oposto da intencao.
-  3. Reatribuir para o MESMO responsavel nao dispara (nada mudou).
+  3. Reatribuir para o MESMO responsavel AINDA dispara. O n8n manda o id FIXO e
+     nada devolve `lead.responsavel_id` a NULL quando a conversa encerra, mas o
+     Conversas reseta a conversa para a Bia quando o cliente volta a escrever —
+     entao pular por "nada mudou" prendia o cliente que retorna na Bia.
   4. Sem `CONVERSAS_API_KEY` a ponte e no-op e nao faz requisicao nenhuma — o
      comportamento de hoje, para que nenhum ambiente regrida por nao configurar.
   5. Conversas fora do ar / timeout / 500: o `PUT` continua 200 e o responsavel
@@ -178,14 +181,30 @@ check(len(chamadas) == 0,
       f"a ponte NAO e chamada (got {len(chamadas)}) — devolver a IA nao e entrar na fila humana")
 
 
-# ============ 3. reatribuir para o mesmo nao dispara ============
-print("\n3 — reatribuicao sem mudanca")
+# ======= 3. reatribuir para o MESMO responsavel AINDA dispara =======
+# AUDIT-2026-08-WA (revisao) — ESTA ASSERCAO ESTAVA INVERTIDA, e era o defeito.
+#
+# A versao anterior condicionava a ponte a `old_responsavel != responsavel_id`, e
+# este teste afirmava "nada mudou -> ponte nao e chamada". Parecia economia. Na
+# pratica desligava a ponte em quase todo handoff real:
+#
+#   - o n8n manda `?responsavel_id=5` FIXO;
+#   - nada no CRM devolve `lead.responsavel_id` para NULL quando a conversa encerra;
+#   - mas o Conversas RESETA a conversa para a Bia quando um cliente encerrado
+#     volta a escrever.
+#
+# Logo, no SEGUNDO handoff do mesmo lead o CRM via `5 == 5`, pulava a ponte, e a
+# conversa ficava presa em ATENDIMENTOS BIA — o defeito original de volta, e em
+# silencio. Cliente que volta a escrever nao e caso raro: e o caso comum.
+print()
+print("3 — reatribuicao para o mesmo responsavel")
 
-trocar_responsavel(BETO_ID)          # muda de verdade (dispara)
-r = trocar_responsavel(BETO_ID)      # mesmo valor
+trocar_responsavel(BETO_ID)          # primeira atribuicao
+r = trocar_responsavel(BETO_ID)      # MESMO valor: a conversa pode ter voltado para a Bia
 check(r.status_code == 200, "PUT devolve 200")
-check(len(chamadas) == 0,
-      f"nada mudou -> ponte nao e chamada (got {len(chamadas)})")
+check(len(chamadas) == 1,
+      f"mesmo responsavel -> a ponte AINDA e chamada (got {len(chamadas)}); "
+      f"o handoff do outro lado e idempotente, e pular aqui prendia o cliente na Bia")
 
 
 # ============ 4. sem credencial: no-op de verdade ============

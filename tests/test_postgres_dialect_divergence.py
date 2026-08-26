@@ -642,10 +642,17 @@ finally:
     _qf.IS_SQLITE = _qf_sqlite_original
 
 _up = _sql_pg.upper()
-_pos_guard = _up.find("NOT LIKE")
+# AUDIT-2026-08-WG (revisao 2) — o guard e `strpos`, nao `LIKE`. No PostgreSQL a
+# BARRA e o caractere de escape default do LIKE, entao `LIKE '%BARRAu0000%'`
+# significava `LIKE '%u0000%'` e barrava valor legitimo com essa substring sem
+# barra. `strpos` procura a substring literal, sem semantica de escape.
+_pos_guard = _up.find("STRPOS")
 _pos_cast = _up.find("AS JSONB")
+check("NOT LIKE" not in _up,
+      "o guard NAO usa LIKE — a barra seria consumida como escape e o padrao "
+      "casaria texto sem barra nenhuma")
 check(_pos_guard != -1,
-      "ramo PostgreSQL tem o guard de texto contra o escape de NUL")
+      "ramo PostgreSQL tem o guard de texto contra o escape de NUL (via strpos)")
 check(_pos_cast != -1, "ramo PostgreSQL ainda faz o cast para jsonb")
 check(-1 < _pos_guard < _pos_cast,
       f"o guard vem ANTES do primeiro cast para jsonb "

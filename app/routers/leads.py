@@ -990,8 +990,23 @@ async def update_lead_responsavel(
     #
     # Best-effort: o resultado vai na resposta, mas uma falha aqui nao desfaz a
     # troca de responsavel nem devolve erro ao n8n.
+    # AUDIT-2026-08-WA (revisao) — NAO condicionar a `old_responsavel !=
+    # responsavel_id`. Era assim, e desligava a ponte em quase todo handoff.
+    #
+    # O n8n manda `?responsavel_id=5` FIXO, e nada no CRM devolve
+    # `lead.responsavel_id` para NULL quando a conversa encerra. Mas o Conversas
+    # reseta a conversa para a Bia toda vez que um cliente encerrado volta a
+    # escrever (webhook.py, ramo de reabertura). Entao, no SEGUNDO handoff do
+    # mesmo lead, o CRM via `5 == 5`, pulava a ponte, e a conversa ficava presa
+    # em ATENDIMENTOS BIA — o defeito original de volta, e em silencio, porque
+    # `conversa_notificada` continuava None e nem log saia. Cliente que volta
+    # nao e caso raro: e o caso comum.
+    #
+    # Reenviar quando nada mudou custa UMA chamada best-effort. O handoff do
+    # lado do Conversas e idempotente por construcao (`keep_queue_position`),
+    # entao reaplicar sobre uma conversa ja atendida nao mexe em nada.
     conversa_notificada = None
-    if responsavel_id is not None and old_responsavel != responsavel_id:
+    if responsavel_id is not None:
         from app.services import conversas_bridge
 
         conversa_notificada = await conversas_bridge.notificar_handoff(lead_id)
