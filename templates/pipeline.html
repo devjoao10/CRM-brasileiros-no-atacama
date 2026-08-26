@@ -179,7 +179,7 @@
                 <div class="filter-bar" id="filterBar" style="display:none;">
                     <div class="filter-group">
                         <label>Buscar</label>
-                        <input type="text" class="filter-search" id="pipeFilterSearch" placeholder="Nome, email..." oninput="applyFilters()">
+                        <input type="text" class="filter-search" id="pipeFilterSearch" placeholder="Nome, email..." oninput="debounceApplyFilters()">
                     </div>
                     <div class="filter-group">
                         <label>Destino</label>
@@ -543,7 +543,7 @@
 
     function stageInit(id) {
         stageState[id] = { items: [], cursor: null, hasMore: false, total: 0,
-                           filtrado: 0, q: '', periodo: '', reqId: 0, loading: false };
+                           filtrado: 0, q: '', periodo: '', reqId: 0 };
     }
 
     // Params da barra global (server-side) + do filtro da propria coluna.
@@ -558,6 +558,20 @@
         if (g('pipeFilterDestino')) p.set('destino', g('pipeFilterDestino'));
         if (g('pipeFilterResponsavel') !== '') p.set('responsavel_id', g('pipeFilterResponsavel'));
         if (g('pipeFilterViajantes')) p.set('viajantes_min', g('pipeFilterViajantes'));
+        // AUDIT-2026-08-WC (F-430): pipeFilterDays era lido por hasActiveFilters()
+        // e limpo por clearPipeFilters(), mas nunca virava parametro de request —
+        // o filtro parecia ativo e nao fazia nada. Reaproveita chegada_de/
+        // chegada_ate, que ja existem no backend, em vez de um parametro novo.
+        // Os campos "Chegada de/até" explícitos, se preenchidos, têm prioridade
+        // (rodam depois e sobrescrevem a mesma chave).
+        if (g('pipeFilterDays')) {
+            const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+            const limite = new Date(hoje);
+            limite.setDate(limite.getDate() + parseInt(g('pipeFilterDays'), 10));
+            const fmt = d => d.toISOString().slice(0, 10);
+            p.set('chegada_de', fmt(hoje));
+            p.set('chegada_ate', fmt(limite));
+        }
         if (g('pipeFilterDateFrom')) p.set('chegada_de', g('pipeFilterDateFrom'));
         if (g('pipeFilterDateTo')) p.set('chegada_ate', g('pipeFilterDateTo'));
         selectedFilterTags.forEach(t => p.append('tag_ids', t));
@@ -627,16 +641,22 @@
     // Busca UMA pagina de UMA etapa. reset=true recomeca do cursor zero.
     async function loadStage(stageId, reset, extra) {
         const st = stageState[stageId];
-        if (!st || st.loading) return;
-        st.loading = true;
-        const meuReq = ++st.reqId;   // guarda de corrida: so a resposta mais nova vale
+        if (!st) return;
+        // AUDIT-2026-08-WC (F-165): a guarda antiga (`if (st.loading) return`)
+        // DESCARTAVA a chamada inteira quando uma requisicao da mesma coluna ja
+        // estava em voo — nao so a resposta, o PEDIDO. Um onDrop recarregando a
+        // coluna de origem enquanto ela ainda respondia a um filtro anterior
+        // nunca chegava a pedir nada, e o card ficava fantasma ate um F5
+        // (C4.2). O reqId abaixo (mesmo idioma de previewRequestSeq em
+        // segmentacao.html) ja garante que so a resposta mais nova e aplicada —
+        // bloquear a CHAMADA em cima disso so causava recarga perdida.
+        const meuReq = ++st.reqId;
 
         const params = Object.assign({}, extra || {});
         if (!reset && st.cursor) params.cursor = st.cursor;
         const qs = stageParams(stageId, params);
         const resp = await Auth.apiRequest(
             '/api/pipeline/board/' + currentFunnelId + '/stage/' + encodeURIComponent(stageId) + '?' + qs);
-        st.loading = false;
         if (!resp || !resp.ok) return;
         const data = await resp.json();
         if (meuReq !== st.reqId) return;   // chegou resposta mais nova: descarta esta
@@ -701,7 +721,16 @@
         const lid = parseInt(urlLeadId);
         const resp = await Auth.apiRequest('/api/pipeline/locate/' + lid +
             (currentFunnelId ? '?prefer_funnel_id=' + currentFunnelId : ''));
-        if (!resp || !resp.ok) return;
+        if (!resp || !resp.ok) {
+            // AUDIT-2026-08-WC (C4.1): antes era um no-op silencioso — o board
+            // ficava parado sem nenhum sinal de que o "Ver no Funil" falhou
+            // (ex: lead sem nenhuma FunnelEntry, 404).
+            if (resp) {
+                const err = await resp.json().catch(() => ({}));
+                alert(err.detail || 'Não foi possível localizar este lead no funil.');
+            }
+            return;
+        }
         const loc = await resp.json();
 
         if (loc.funnel_id !== currentFunnelId) {   // lead esta em outro funil
@@ -790,6 +819,15 @@
         });
         const countEl = document.getElementById('filterCount');
         if (countEl) countEl.textContent = hasActiveFilters() ? 'filtro ativo' : '';
+    }
+
+    // AUDIT-2026-08-WC (F-165): a busca global disparava applyFilters() — que
+    // recarrega TODAS as colunas — a cada tecla digitada. Mesmo idioma de
+    // debouncePreview() em templates/segmentacao.html.
+    let applyFiltersTimer = null;
+    function debounceApplyFilters() {
+        clearTimeout(applyFiltersTimer);
+        applyFiltersTimer = setTimeout(applyFilters, 300);
     }
 
     function clearPipeFilters() {
@@ -897,11 +935,20 @@
         if (resp && resp.ok) {
             // So as duas colunas envolvidas. O destino pode ter filtro ativo,
             // entao refazer a 1a pagina das duas e mais confiavel do que
-            // duplicar a logica de filtro no JavaScript.
+            // duplicar a logica de filtro no JavaScript. Fonte de verdade e
+            // SEMPRE a resposta persistida, nunca uma edicao otimista do DOM.
             const origem = e.dataTransfer.getData('stage-origem');
             await loadStage(stageId, true);
             if (origem && origem !== stageId) await loadStage(origem, true);
             await atualizarTotais();
+        } else if (resp) {
+            // AUDIT-2026-08-WC (C4.2): o card nunca sai do DOM de forma
+            // otimista (so loadStage() o faz, com dado do servidor) — mas ate
+            // aqui uma falha na persistencia nao dizia nada ao usuario, que via
+            // o card continuar na coluna de origem sem saber se foi por erro
+            // ou porque o drop nao fez nada.
+            const err = await resp.json().catch(() => ({}));
+            alert(err.detail || 'Não foi possível mover o lead. Tente novamente.');
         }
     }
 

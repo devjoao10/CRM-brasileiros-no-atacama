@@ -133,10 +133,27 @@ async def remove_tag(
     current_user: User = Depends(get_current_user),
 ):
     conv, tag = _get_conv_and_tag(conversation_id, tag_id, db)
+    # AUDIT-2026-08-WC (F-529): o CRM e sincronizado ANTES do commit local, e
+    # nao depois. Antes disto o commit local acontecia primeiro e o resultado
+    # de crm_service.remove_tag_from_lead era descartado (a funcao ja fazia o
+    # DELETE e o commit de verdade — so o retorno True/False era ignorado
+    # aqui). Se essa chamada falhasse, a tag reaparecia sozinha na proxima
+    # abertura da conversa, porque sync_lead_tags_to_conversation espelha o
+    # conjunto de tags do lead a cada abertura (fonte de verdade = CRM).
+    # Sincronizando primeiro e falhando a request se nao der certo, a remocao
+    # local so acontece quando ela vai sobreviver ao proximo reabrir.
+    if conv.lead_id and conv.lead_id > 0:
+        removida_no_crm = crm_service.remove_tag_from_lead(conv.lead_id, tag.nome, db)
+        if not removida_no_crm:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Não foi possível remover a tag no CRM. A remoção foi "
+                    "cancelada para evitar que a tag reaparecesse sozinha ao "
+                    "reabrir a conversa."
+                ),
+            )
     if tag in conv.tags:
         conv.tags.remove(tag)
         db.commit()
-    # CONV-TAGS-SYNC-01: conversa vinculada remove tambem do lead do CRM
-    if conv.lead_id and conv.lead_id > 0:
-        crm_service.remove_tag_from_lead(conv.lead_id, tag.nome, db)
     return conv.tags

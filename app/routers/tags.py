@@ -164,25 +164,54 @@ def set_lead_tags(
     db: Session = Depends(get_db),
 ):
     """
-    Define as tags de um lead (substitui todas as tags existentes).
-    
-    **N8N**: Envie a lista completa de tag_ids para associar ao lead.
-    
+    Define as tags de um lead. Dois modos (a validação do payload recusa a
+    mistura dos dois na mesma chamada — ver `LeadTagsUpdate`):
+
+    **Full-replace** — substitui TODAS as tags do lead pela lista enviada.
+    **N8N**: `Tool Definir Tags Lead` usa este modo e continua funcionando.
     ```json
     {"tag_ids": [1, 3, 5]}
+    ```
+
+    **Incremental** — altera só os IDs informados, sem tocar no resto.
+    AUDIT-2026-08-WC (C1): é o modo que o editor de lead do CRM usa hoje.
+    Full-replace a partir de um snapshot tirado quando o editor abriu apagava
+    em silêncio qualquer tag aplicada por outra origem (outro operador,
+    Conversas, n8n) enquanto o editor estava aberto.
+    ```json
+    {"adicionar": [2], "remover": [5]}
     ```
     """
     lead = db.query(Lead).filter(Lead.id == lead_id).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead não encontrado")
 
-    tags = db.query(Tag).filter(Tag.id.in_(data.tag_ids)).all()
-    if len(tags) != len(data.tag_ids):
-        found_ids = {t.id for t in tags}
-        missing = [tid for tid in data.tag_ids if tid not in found_ids]
-        raise HTTPException(status_code=404, detail=f"Tags não encontradas: {missing}")
+    if data.tag_ids is not None:
+        tags = db.query(Tag).filter(Tag.id.in_(data.tag_ids)).all()
+        if len(tags) != len(data.tag_ids):
+            found_ids = {t.id for t in tags}
+            missing = [tid for tid in data.tag_ids if tid not in found_ids]
+            raise HTTPException(status_code=404, detail=f"Tags não encontradas: {missing}")
+        lead.tags = tags
+    else:
+        ids_envolvidos = list({*(data.adicionar or []), *(data.remover or [])})
+        if ids_envolvidos:
+            encontradas = db.query(Tag).filter(Tag.id.in_(ids_envolvidos)).all()
+            found_ids = {t.id for t in encontradas}
+            missing = [tid for tid in ids_envolvidos if tid not in found_ids]
+            if missing:
+                raise HTTPException(status_code=404, detail=f"Tags não encontradas: {missing}")
 
-    lead.tags = tags
+            por_id = {t.id: t for t in encontradas}
+            atuais = {t.id for t in lead.tags}
+            for tid in (data.adicionar or []):
+                if tid not in atuais:
+                    lead.tags.append(por_id[tid])
+                    atuais.add(tid)
+            remover_ids = set(data.remover or [])
+            if remover_ids:
+                lead.tags = [t for t in lead.tags if t.id not in remover_ids]
+
     db.commit()
 
     return {

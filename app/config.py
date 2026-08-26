@@ -55,6 +55,12 @@ INTERNAL_AI_AUTH_MAX_SKEW_SECONDS = int(os.getenv("INTERNAL_AI_AUTH_MAX_SKEW_SEC
 # Application
 APP_DOMAIN = os.getenv("APP_DOMAIN", "http://127.0.0.1:8000")
 CONVERSAS_BASE_URL = os.getenv("CONVERSAS_BASE_URL", "http://127.0.0.1:8001")
+# AUDIT-2026-08-WA — credencial da ponte CRM -> Conversas.
+# Vazia (default) = ponte desligada, no-op silencioso: e exatamente o
+# comportamento de hoje, entao nenhum ambiente regride por nao a configurar.
+# Deve ser a API key de um usuario do CRM (o Conversas le a MESMA tabela
+# `users`), nunca um segredo novo — ver app/services/conversas_bridge.py.
+CONVERSAS_API_KEY = os.getenv("CONVERSAS_API_KEY", "")
 
 # ─── Seed do Admin Inicial ────────────────────────────────────────────
 # SEED_INITIAL_ADMIN controla se o admin inicial é criado no startup.

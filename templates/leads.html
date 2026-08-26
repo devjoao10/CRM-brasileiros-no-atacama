@@ -472,13 +472,18 @@
             }
         });
 
-        loadAllTags();
+        const tagsProntas = loadAllTags();
         loadUsersForFilter();
         reloadLeads();
         // Deep-link ?open=ID: busca DIRETA por id (GET /api/leads/{id}), sem
         // depender de o lead estar na primeira pagina nem varrer a lista.
         const openId = new URLSearchParams(window.location.search).get('open');
-        if (openId) editLead(parseInt(openId)).then(lead => { if (lead) fixarLead(lead); });
+        if (openId) {
+            // AUDIT-2026-08-WC (F-419): loadAllTags() e assincrono; abrir o
+            // editor sem esperar por ele fazia renderTagCheckboxes desenhar
+            // zero checkboxes quando o fetch ainda nao tinha resolvido.
+            tagsProntas.then(() => editLead(parseInt(openId)).then(lead => { if (lead) fixarLead(lead); }));
+        }
     });
 
     // Load users for responsavel filter

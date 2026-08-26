@@ -1,9 +1,10 @@
 import base64
 import io
+import logging
 import csv
 import os
 from typing import Optional, List
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from app.config import MAX_UPLOAD_SIZE_BYTES
@@ -31,6 +32,8 @@ from app.config import LEAD_TAG_ORIGEM_API
 from app.services.lead_creation import criar_lead
 
 router = APIRouter(prefix="/api/leads", tags=["Leads"])
+
+logger = logging.getLogger(__name__)
 
 
 # ─── Paginacao keyset ────────────────────────────────────────────────
@@ -76,6 +79,18 @@ def _tem_telefone():
     (trim() remove espacos; tabulacao em telefone nao e caso real aqui.)
     """
     return and_(Lead.whatsapp.isnot(None), func.trim(Lead.whatsapp) != "")
+
+
+def _only_digits(value: Optional[str]) -> str:
+    """
+    Normalizacao unica de telefone: so digitos (+, espacos, (), - e . somem).
+
+    AUDIT-2026-08-WC (C6): mesmo helper de
+    conversas/app/services/crm.py::_only_digits, definido de novo aqui em vez
+    de importado — os dois pacotes se chamam `app` e nao podem coexistir no
+    mesmo processo.
+    """
+    return "".join(ch for ch in (value or "") if ch.isdigit())
 
 
 def _json_list_contains(column, value: str):
@@ -572,6 +587,28 @@ def delete_lead(
 
 # ─── ANOTAÇÕES ────────────────────────────────────────────────────────
 
+def _lock_lead(db: Session, lead_id: int) -> Optional[Lead]:
+    """
+    Carrega o lead com a linha TRAVADA até o fim da transação.
+
+    AUDIT-2026-08-WC (C3): append_anotacao fazia read-modify-write sem lock —
+    duas anotações concorrentes (a `Tool Adicionar Nota` do n8n roda ao fim de
+    TODO processamento do Gerenciador, e colide de verdade com uma nota
+    humana no mesmo lead) liam o mesmo `campos_personalizados`, e o commit que
+    terminava por último apagava silenciosamente a nota do outro.
+
+    Mesmo padrão de `conversas/app/routers/conversations.py::_lock_conversation`:
+    no PostgreSQL o FOR UPDATE serializa a segunda transação até a primeira
+    commitar, então ela lê o estado já atualizado. No SQLite `with_for_update()`
+    não é suportado e não é necessário — o banco inteiro já é serializado por
+    lock de arquivo.
+    """
+    query = db.query(Lead).filter(Lead.id == lead_id)
+    if not IS_SQLITE:
+        query = query.with_for_update()
+    return query.first()
+
+
 @router.put("/{lead_id}/anotacoes", summary="Adicionar anotação ao lead")
 async def append_anotacao(
     lead_id: int,
@@ -585,12 +622,13 @@ async def append_anotacao(
 
     **N8N**: Use para registrar resumos de conversa e ações do Gerenciador.
     """
-    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    lead = _lock_lead(db, lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead não encontrado")
 
-    from datetime import datetime as dt
-    timestamp = dt.now().strftime("%d/%m/%Y %H:%M")
+    # AUDIT-2026-08-WC (C3): era datetime.now() naive/local — todo o resto do
+    # sistema usa UTC-aware. O formato exibido (dd/mm/aaaa hh:mm) não muda.
+    timestamp = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M")
 
     campos = lead.campos_personalizados or {}
     existing = campos.get("anotacoes", "")
@@ -848,12 +886,45 @@ def get_lead_by_whatsapp(
             Lead.whatsapp == f"+{normalized}"
         ).first()
 
-    # 3. Stored number ends with last 11 digits of searched number (handles country code variations)
+    # 3. AUDIT-2026-08-WC (C6/W2-12): o ilike de sufixo era resolvido por
+    # .first() SEM order_by — com mais de um lead terminando nos mesmos
+    # digitos, quem vencia era indefinido pelo banco e podia mudar entre
+    # execucoes ("localizar lead esta intermitente"). Esta rota e o primeiro
+    # no do fluxo do Formulario e a Tool Buscar Lead WhatsApp do Gerenciador:
+    # um casamento errado atualiza o LEAD DO OUTRO CLIENTE.
+    #
+    # Mesma regra de conversas/app/services/crm.py::lookup_lead_by_whatsapp
+    # (AUDIT-2026-08-W2F/F10): o ilike serve so de PRE-FILTRO barato. A
+    # decisao e por compatibilidade EXATA de digitos, feita em Python — um
+    # numero e "compativel" com o outro quando um e sufixo do outro (cobre o
+    # caso de DDI presente de um lado e ausente do outro, que e o motivo deste
+    # passo existir: "handles country code variations"). Se mais de UM lead
+    # DISTINTO for compativel, a ambiguidade e RECUSADA (409), nunca resolvida
+    # por ORDER BY/LIMIT 1 arbitrario.
     if not lead and len(normalized) >= 11:
         suffix = normalized[-11:]
-        lead = db.query(Lead).filter(
-            Lead.whatsapp.ilike(f"%{suffix}")
-        ).first()
+        candidatos = (
+            db.query(Lead)
+            .filter(Lead.whatsapp.ilike(f"%{suffix}"))
+            .limit(50)
+            .all()
+        )
+        compativeis = {}
+        for c in candidatos:
+            digitos = _only_digits(c.whatsapp)
+            if digitos and (digitos.endswith(normalized) or normalized.endswith(digitos)):
+                compativeis[c.id] = c
+        if len(compativeis) > 1:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Mais de um lead tem um WhatsApp compatível com este número "
+                    f"(ids: {sorted(compativeis)}). Desambigue manualmente — "
+                    "nenhum foi escolhido automaticamente."
+                ),
+            )
+        if compativeis:
+            lead = next(iter(compativeis.values()))
 
     if not lead:
         raise HTTPException(status_code=404, detail="Nenhum lead encontrado com este WhatsApp")
@@ -863,7 +934,7 @@ def get_lead_by_whatsapp(
 
 @router.put("/{lead_id}/responsavel", response_model=LeadResponse,
             summary="Alterar responsável do lead")
-def update_lead_responsavel(
+async def update_lead_responsavel(
     lead_id: int,
     responsavel_id: Optional[int] = Query(None, description="ID do novo responsável (null = Agente IA)"),
     current_user: User = Depends(get_current_user),
@@ -904,5 +975,35 @@ def update_lead_responsavel(
     db.commit()
     db.refresh(lead)
 
-    return _build_lead_response(lead)
+    # AUDIT-2026-08-WA — propaga o handoff para o inbox.
+    #
+    # Esta rota e o UNICO sinal deterministico que o repositorio recebe quando o
+    # Gerenciador decide encaminhar para humano (`Tool Alterar Responsavel`).
+    # Ate aqui ela mexia so em `leads.responsavel_id`: a conversa do WhatsApp
+    # continuava com a Bia ligada e fora da fila, e o cliente ouvia que estava
+    # na fila sem estar. `POST /api/conversations/{id}/handoff` existia e nao
+    # tinha chamador — este e o chamador.
+    #
+    # So propaga quando o novo responsavel e uma PESSOA. `responsavel_id=null`
+    # significa devolver o lead ao Agente IA; mover a conversa para a fila
+    # humana nesse caso seria o oposto da intencao.
+    #
+    # Best-effort: o resultado vai na resposta, mas uma falha aqui nao desfaz a
+    # troca de responsavel nem devolve erro ao n8n.
+    conversa_notificada = None
+    if responsavel_id is not None and old_responsavel != responsavel_id:
+        from app.services import conversas_bridge
+
+        conversa_notificada = await conversas_bridge.notificar_handoff(lead_id)
+
+    resposta = _build_lead_response(lead)
+    # `conversa_notificada` e informativo e NAO faz parte de LeadResponse: um
+    # None aqui significa "a ponte nao rodou ou nao respondeu", e o operador
+    # precisa conseguir distinguir isso de "moveu" sem ler log.
+    if conversa_notificada is not None:
+        logger.info(
+            "Lead %s: responsavel alterado e conversa %s movida para a fila humana.",
+            lead_id, "" if conversa_notificada else "NAO",
+        )
+    return resposta
 

@@ -745,8 +745,19 @@
         if (allTags.length > 0) {
             const selectedTagIds = [];
             document.querySelectorAll('#leadTagsContainer input:checked').forEach(cb => selectedTagIds.push(parseInt(cb.value)));
+            // AUDIT-2026-08-WC (C1): tag_ids e SUBSTITUICAO TOTAL a partir do
+            // snapshot tirado quando o modal ABRIU (currentLeadTags, ver
+            // openLeadModal). Qualquer tag aplicada/removida por outra origem
+            // (outro operador, Conversas, n8n) enquanto o modal estava aberto
+            // era apagada em silencio no save. Envia so o DELTA que o usuario
+            // realmente fez nesta sessao — o backend aplica adicionar/remover
+            // sem tocar no que ele nao viu (ver app/routers/tags.py).
+            const tagsAntes = new Set(currentLeadTags);
+            const tagsDepois = new Set(selectedTagIds);
+            const adicionar = selectedTagIds.filter(tid => !tagsAntes.has(tid));
+            const remover = currentLeadTags.filter(tid => !tagsDepois.has(tid));
             const tagsResp = await Auth.apiRequest(`/api/tags/lead/${leadId}`,
-                { method: 'PUT', body: JSON.stringify({ tag_ids: selectedTagIds }) });
+                { method: 'PUT', body: JSON.stringify({ adicionar, remover }) });
             // AUDIT-2026-08-W2B (F11): a resposta era descartada. Um 404 (tag apagada
             // por outro operador entre o render e o save) perdia a alteracao de tags
             // enquanto o modal fechava anunciando sucesso. Agora o operador ve o erro;
