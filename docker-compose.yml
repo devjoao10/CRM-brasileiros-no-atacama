@@ -67,6 +67,7 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - INTERNAL_AI_AUTH_SECRET=${INTERNAL_AI_AUTH_SECRET:-}
       - CONVERSAS_BASE_URL=http://conversas:8001
+      - CONVERSAS_API_KEY=${CONVERSAS_API_KEY:?Defina CONVERSAS_API_KEY no .env}
       # AUDIT-2026-08-W1E (F5): sem estas linhas o container ignorava o .env e
       # rodava com os defaults de app/config.py — APP_DOMAIN=127.0.0.1 (links de
       # reset de senha quebrados) e MAIL_PASSWORD com o placeholder do exemplo.
