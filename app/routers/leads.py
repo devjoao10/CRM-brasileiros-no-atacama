@@ -29,7 +29,7 @@ from app.schemas.lead import (
 from app.auth import get_current_user, require_admin
 from app.query_filters import campo_personalizado_match
 from app.config import LEAD_TAG_ORIGEM_API
-from app.services.lead_creation import criar_lead
+from app.services.lead_creation import criar_lead, resolver_funil_por_nome
 
 router = APIRouter(prefix="/api/leads", tags=["Leads"])
 
@@ -471,11 +471,18 @@ def get_lead(
 def create_lead(
     data: LeadCreate,
     funnel_id: Optional[int] = Query(
-        None, description="Funil onde o lead entra. Default: DEFAULT_FUNNEL_ID "
-                          "(config) ou o funil ativo de menor id."
+        None, description="Funil onde o lead entra, por id. Vence tudo. "
+                          "Default: DEFAULT_FUNNEL_ID ou o funil ativo chamado "
+                          "DEFAULT_FUNNEL_NOME ('Vendas: Principal')."
+    ),
+    funnel_nome: Optional[str] = Query(
+        None, description="Funil onde o lead entra, por NOME exato (alternativa "
+                          "estavel ao id, que nao e versionado). Ignorado se "
+                          "funnel_id vier junto."
     ),
     etapa_id: Optional[str] = Query(
-        None, description="Etapa inicial dentro do funil. Default: primeira etapa do funil."
+        None, description="Etapa inicial dentro do funil. Default: a etapa "
+                          "DEFAULT_ETAPA_NOME ('Sem Contato') do funil resolvido."
     ),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -497,9 +504,35 @@ def create_lead(
     n8n e não tem como distinguir a origem real; por isso a tag de origem é
     uma única config compartilhada, não uma por chamador.
 
-    `funnel_id`/`etapa_id` são opcionais — os callers existentes (n8n, site)
-    não os enviam e continuam recebendo o funil/etapa default.
+    `funnel_id`/`funnel_nome`/`etapa_id` são opcionais. Sem eles, o lead entra
+    no funil comercial padrão — resolvido por NOME (`DEFAULT_FUNNEL_NOME`,
+    "Vendas: Principal"), não por ordem de id — na etapa `DEFAULT_ETAPA_NOME`
+    ("Sem Contato"). É o contrato que o próprio system message do Gerenciador
+    declara.
+
+    AUDIT-2026-08-WF2 — `funnel_nome` existe para o **formulário do site**. O
+    workflow dele chama esta rota e, logo depois, `POST /api/pipeline/funnels/
+    {id}/leads` com o funil próprio de Formulário. Sem dizer aqui para onde o
+    lead vai, ele ganha DUAS entradas: a padrão (Principal) e a do formulário.
+    Passando `funnel_nome=Vendas: Formulário` (ou `funnel_id`), a entrada já
+    nasce no lugar certo e a chamada seguinte devolve 409 — que o workflow já
+    trata como sucesso. Ver M11 em `docs/audit/N8N_MANUAL_CHANGES.md`.
+
+    Prefira `funnel_nome` a `funnel_id`: `funnels.nome` é UNIQUE e estável; o
+    id não está versionado em lugar nenhum e muda entre ambientes.
     """
+    if funnel_id is None and funnel_nome:
+        alvo = resolver_funil_por_nome(db, funnel_nome)
+        if alvo is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Nenhum funil ativo chamado '{funnel_nome}'. O lead NÃO foi "
+                    "criado — criar no funil errado seria pior que recusar."
+                ),
+            )
+        funnel_id = alvo.id
+
     lead = criar_lead(
         db,
         dados=data.model_dump(),

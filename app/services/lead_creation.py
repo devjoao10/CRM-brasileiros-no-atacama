@@ -26,7 +26,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.config import DEFAULT_FUNNEL_ID
+from app.config import DEFAULT_ETAPA_NOME, DEFAULT_FUNNEL_ID, DEFAULT_FUNNEL_NOME
 from app.models.lead import Lead
 from app.models.pipeline import Funnel, FunnelEntry, LeadHistory
 from app.models.tag import Tag
@@ -38,22 +38,58 @@ logger = logging.getLogger(__name__)
 _ETAPA_FALLBACK = "nova_oportunidade"
 
 
+def _normalizar(valor) -> str:
+    """
+    Chave de comparacao para nome de funil e de etapa.
+
+    Minusculas, sem espaco nas bordas, e `_` tratado como espaco. Esse ultimo
+    detalhe existe por um motivo concreto: o `etapa_id` real gravado em
+    producao NAO e conhecivel a partir deste repositorio — nada aqui cria
+    funil, e app/schemas/pipeline.py documenta `sem_contato` e `Sem Contato`
+    como igualmente validos. Normalizar `_` faz as duas grafias resolverem para
+    a mesma etapa, sem que ninguem precise adivinhar qual e a real nem mexer em
+    dado de producao para descobrir.
+
+    NAO e busca por substring: e igualdade sobre a forma normalizada.
+    "Vendas WhatsApp" nunca casa com "Vendas: Principal".
+    """
+    return " ".join(str(valor or "").replace("_", " ").split()).lower()
+
+
 def resolver_funil_padrao(db: Session, funnel_id: Optional[int] = None) -> Optional[Funnel]:
     """
-    Resolve o funil onde um lead novo deve entrar. Precedencia:
+    Resolve o funil onde um lead novo deve entrar.
+
+    AUDIT-2026-08-WF2 — NAO existe mais fallback por ordem de id.
+
+    A versao anterior caia, na falta de `DEFAULT_FUNNEL_ID`, no "funil ATIVO de
+    MENOR id". Isso amarrava uma regra de negocio a um acidente de historico: o
+    funil certo so vencia porque tinha sido criado primeiro. Criar um funil novo
+    com id menor, ou desativar e recriar o principal, mandava silenciosamente
+    todo lead novo para o lugar errado — sem erro, sem log, sem sintoma ate
+    alguem reparar que o Kanban do time esvaziou.
+
+    Precedencia agora:
 
       1. `funnel_id` explicito — vence e NAO cai para os passos seguintes.
-         Se nao existir, devolve None: quem decide o que fazer (404, criar sem
-         funil, etc.) e o CALLER — este service nunca levanta HTTPException
-         (app/services/CLAUDE.md).
-      2. `DEFAULT_FUNNEL_ID` (app/config.py), se apontar para um funil ATIVO.
-      3. o funil ATIVO de MENOR id — deterministico, nao depende de nome.
+         Inexistente devolve None: quem decide o que fazer e o CALLER (este
+         service nunca levanta HTTPException — app/services/CLAUDE.md).
+      2. `DEFAULT_FUNNEL_ID`, se configurado. Configurado e apontando para funil
+         INEXISTENTE ou INATIVO devolve None e loga ERROR — NAO cai para o passo
+         3. Configuracao errada tem de doer, nao ser contornada em silencio por
+         um funil arbitrario.
+      3. `DEFAULT_FUNNEL_NOME` (default "Vendas: Principal"), por igualdade
+         EXATA sobre o nome normalizado, entre os funis ATIVOS. `funnels.nome` e
+         UNIQUE (app/models/pipeline.py), entao esse nome e um identificador
+         estavel do dominio — e e o mesmo contrato que o system message do
+         Gerenciador ja declara (gerenciador_leads.json: "o funil
+         'Vendas: Principal', sempre na etapa 'Sem Contato'").
 
-    NUNCA prefere um funil so porque o nome contem "whatsapp". Essa heuristica
-    existia em conversas/app/services/crm.py (`ORDER BY (LOWER(nome) LIKE
-    '%whatsapp%') DESC`) e mandava lead de qualquer origem para "Vendas
-    WhatsApp" em vez do funil principal (W2-10) — corrigida aqui e la, com a
-    MESMA regra dos tres itens acima.
+    Nao encontrado em nenhum passo: None + ERROR. O lead ainda e criado (nao ha
+    motivo de dominio para recusar o cadastro), mas o problema fica LOGADO e
+    registrado no historico do proprio lead — nunca escondido.
+
+    NUNCA por substring, NUNCA por ordem de id, NUNCA "o primeiro ativo".
     """
     if funnel_id is not None:
         return db.query(Funnel).filter(Funnel.id == funnel_id).first()
@@ -62,15 +98,110 @@ def resolver_funil_padrao(db: Session, funnel_id: Optional[int] = None) -> Optio
         funnel = db.query(Funnel).filter(
             Funnel.id == DEFAULT_FUNNEL_ID, Funnel.is_active == True,  # noqa: E712
         ).first()
-        if funnel is not None:
-            return funnel
+        if funnel is None:
+            logger.error(
+                "DEFAULT_FUNNEL_ID=%s nao aponta para nenhum funil ATIVO. O lead "
+                "sera criado SEM funil em vez de entrar num funil arbitrario — "
+                "corrija a configuracao.", DEFAULT_FUNNEL_ID,
+            )
+        return funnel
 
-    return (
-        db.query(Funnel)
-        .filter(Funnel.is_active == True)  # noqa: E712
-        .order_by(Funnel.id.asc())
-        .first()
+    alvo = _normalizar(DEFAULT_FUNNEL_NOME)
+    candidatos = [
+        f for f in db.query(Funnel).filter(Funnel.is_active == True).all()  # noqa: E712
+        if _normalizar(f.nome) == alvo
+    ]
+    if len(candidatos) == 1:
+        return candidatos[0]
+
+    if not candidatos:
+        logger.error(
+            "Nenhum funil ATIVO chamado %r. O lead sera criado SEM funil — "
+            "configure DEFAULT_FUNNEL_ID ou DEFAULT_FUNNEL_NOME, ou crie/reative "
+            "o funil.", DEFAULT_FUNNEL_NOME,
+        )
+    else:
+        # `funnels.nome` e UNIQUE, entao isto so acontece se dois nomes diferirem
+        # apenas por caixa/espaco/underscore. Escolher um deles seria exatamente
+        # o tipo de decisao silenciosa que esta correcao remove.
+        logger.error(
+            "AMBIGUIDADE: %s funis ATIVOS normalizam para %r (ids %s). O lead "
+            "sera criado SEM funil — renomeie para desambiguar.",
+            len(candidatos), DEFAULT_FUNNEL_NOME, sorted(f.id for f in candidatos),
+        )
+    return None
+
+
+def resolver_funil_por_nome(db: Session, nome: str) -> Optional[Funnel]:
+    """
+    Funil ATIVO cujo nome casa EXATAMENTE (na forma normalizada) com `nome`.
+
+    Existe para quem conhece o funil pelo nome e nao pelo id — o caso do
+    formulario do site, cujo id (`3`) so vive dentro do workflow do n8n e nao
+    esta versionado em lugar nenhum deste repositorio.
+
+    Devolve None quando nao ha exatamente um: zero (nao existe/inativo) ou mais
+    de um (nomes que so diferem por caixa/espaco/underscore). O caller decide o
+    que fazer — este service nao levanta HTTPException.
+    """
+    alvo = _normalizar(nome)
+    candidatos = [
+        f for f in db.query(Funnel).filter(Funnel.is_active == True).all()  # noqa: E712
+        if _normalizar(f.nome) == alvo
+    ]
+    if len(candidatos) == 1:
+        return candidatos[0]
+    if len(candidatos) > 1:
+        logger.error(
+            "AMBIGUIDADE: %s funis ATIVOS normalizam para %r (ids %s).",
+            len(candidatos), nome, sorted(f.id for f in candidatos),
+        )
+    return None
+
+
+def resolver_etapa_inicial(funnel: Funnel, etapa_id: Optional[str] = None) -> str:
+    """
+    Decide em qual etapa do funil o lead entra.
+
+    AUDIT-2026-08-WF2 — deixou de ser `etapas[0]`.
+
+    Antes, sem `etapa_id` explicito, a entrada ia para a PRIMEIRA etapa da
+    lista. "Primeira etapa" nao e um conceito do negocio: e a ordem em que
+    alguem arrastou os cartoes na tela de configuracao do funil. Reordenar as
+    etapas mudava, sem aviso, onde todo lead novo nasce.
+
+    Precedencia:
+      1. `etapa_id` explicito, se existir NESTE funil.
+      2. a etapa cujo `id` OU `nome` casa com `DEFAULT_ETAPA_NOME` (default
+         "Sem Contato") na forma normalizada — ver `_normalizar` para por que
+         `id` e `nome` sao os dois comparados.
+      3. `etapas[0]`, com WARNING. Continua sendo melhor que nao criar a
+         entrada, mas agora e ruidoso em vez de ser a regra.
+      4. sem etapas utilizaveis: `_ETAPA_FALLBACK`.
+    """
+    etapas = [e for e in (funnel.etapas or []) if isinstance(e, dict)]
+    if etapa_id and any(e.get("id") == etapa_id for e in etapas):
+        return etapa_id
+
+    alvo = _normalizar(DEFAULT_ETAPA_NOME)
+    for etapa in etapas:
+        if _normalizar(etapa.get("id")) == alvo or _normalizar(etapa.get("nome")) == alvo:
+            return etapa["id"]
+
+    if etapas and etapas[0].get("id"):
+        logger.warning(
+            "Funil %r (#%s) nao tem etapa %r — usando a primeira (%r). A posicao "
+            "na lista nao e contrato de negocio; renomeie a etapa ou ajuste "
+            "DEFAULT_ETAPA_NOME.",
+            funnel.nome, funnel.id, DEFAULT_ETAPA_NOME, etapas[0]["id"],
+        )
+        return etapas[0]["id"]
+
+    logger.warning(
+        "Funil %r (#%s) esta sem etapas utilizaveis — usando %r.",
+        funnel.nome, funnel.id, _ETAPA_FALLBACK,
     )
+    return _ETAPA_FALLBACK
 
 
 def garantir_entrada_no_funil(
@@ -94,15 +225,7 @@ def garantir_entrada_no_funil(
     ainda nao commitou. O SAVEPOINT desfaz SO o INSERT que colidiu; a
     transacao externa continua valida e `criar_lead` segue para o commit final.
     """
-    etapas = funnel.etapas or []
-    stage_ids = [s.get("id") for s in etapas if isinstance(s, dict)]
-
-    if etapa_id and etapa_id in stage_ids:
-        etapa_resolvida = etapa_id
-    elif etapas and isinstance(etapas[0], dict) and etapas[0].get("id"):
-        etapa_resolvida = etapas[0]["id"]
-    else:
-        etapa_resolvida = _ETAPA_FALLBACK
+    etapa_resolvida = resolver_etapa_inicial(funnel, etapa_id)
 
     posicao = db.query(FunnelEntry).filter(
         FunnelEntry.funnel_id == funnel.id,

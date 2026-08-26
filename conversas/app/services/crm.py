@@ -250,50 +250,113 @@ async def auto_create_lead_in_crm(
         # 2. Funil default — MESMA precedencia de
         #    app/services/lead_creation.py:resolver_funil_padrao (CRM, modulo
         #    irmao que nao da para importar daqui: processo e app FastAPI
-        #    separados). AUDIT-2026-08-WB (W2-10): a query antiga preferia
-        #    QUALQUER funil ativo com "whatsapp" no nome
-        #    (`ORDER BY (LOWER(nome) LIKE '%whatsapp%') DESC, id ASC`) e
-        #    mandava o lead para "Vendas WhatsApp" em vez do funil principal.
-        #    Precedencia agora: DEFAULT_FUNNEL_ID (env), se apontar para um
-        #    funil ativo; senao o funil ATIVO de MENOR id — nunca por nome.
+        #    separados, e os dois pacotes se chamam `app`).
         #
-        #    Le a env DIRETO com os.getenv, nao via conversas/app/config.py:
-        #    este modulo e do Conversas, que tem o proprio config.py, e a
-        #    tarefa que gerou esta correcao nao e dona dele para acrescentar a
-        #    variavel la. os.getenv aqui e o mesmo valor, sem precisar editar
-        #    um arquivo fora do escopo.
+        #    AUDIT-2026-08-WB (W2-10): a query original preferia QUALQUER funil
+        #    ativo com "whatsapp" no nome
+        #    (`ORDER BY (LOWER(nome) LIKE '%whatsapp%') DESC, id ASC`) e mandava
+        #    o lead para "Vendas WhatsApp" em vez do funil principal.
+        #
+        #    AUDIT-2026-08-WF2: a correcao daquela vez trocou por "funil ATIVO
+        #    de MENOR id", que era so um acidente de historico com outro nome —
+        #    o funil certo vencia porque tinha sido criado primeiro. Agora a
+        #    resolucao e por NOME, que e UNIQUE em `funnels` e e o mesmo
+        #    contrato que o system message do Gerenciador declara.
+        #
+        #    Precedencia: DEFAULT_FUNNEL_ID (env) se apontar para funil ATIVO —
+        #    e, se estiver configurado e NAO apontar, FALHA em vez de cair em
+        #    outro; senao DEFAULT_FUNNEL_NOME por igualdade normalizada. Sem
+        #    fallback por ordem de id.
+        #
+        #    A normalizacao roda em Python, nao em SQL: `funnels` tem dezenas de
+        #    linhas, e replicar `lower(btrim(replace(...)))` em dois dialetos
+        #    seria mais uma copia para divergir.
+        #
+        #    Le as envs DIRETO com os.getenv, nao via conversas/app/config.py:
+        #    este modulo e do Conversas, que tem o proprio config, e as tres
+        #    variaveis sao do dominio do CRM (app/config.py). O valor e o mesmo.
+        def _norm(valor):
+            return " ".join(str(valor or "").replace("_", " ").split()).lower()
+
         funnel_row = None
         default_funnel_id_raw = os.getenv("DEFAULT_FUNNEL_ID", "").strip()
         if default_funnel_id_raw.isdigit():
             funnel_row = db.execute(
                 text(
-                    "SELECT id, etapas FROM funnels "
+                    "SELECT id, nome, etapas FROM funnels "
                     "WHERE id = :fid AND is_active = true "
                     "LIMIT 1"
                 ),
                 {"fid": int(default_funnel_id_raw)},
             ).fetchone()
-
-        if not funnel_row:
-            funnel_row = db.execute(
-                text(
-                    "SELECT id, etapas FROM funnels "
-                    "WHERE is_active = true "
-                    "ORDER BY id ASC "
-                    "LIMIT 1"
+            if not funnel_row:
+                logger.error(
+                    "DEFAULT_FUNNEL_ID=%s nao aponta para nenhum funil ATIVO. O "
+                    "lead %s sera criado SEM funil em vez de entrar num funil "
+                    "arbitrario — corrija a configuracao.",
+                    default_funnel_id_raw, lead_id,
                 )
-            ).fetchone()
+        else:
+            alvo_nome = _norm(os.getenv("DEFAULT_FUNNEL_NOME", "Vendas: Principal"))
+            ativos = db.execute(
+                text("SELECT id, nome, etapas FROM funnels WHERE is_active = true")
+            ).fetchall()
+            candidatos = [f for f in ativos if _norm(f.nome) == alvo_nome]
+            if len(candidatos) == 1:
+                funnel_row = candidatos[0]
+            elif not candidatos:
+                logger.error(
+                    "Nenhum funil ATIVO chamado %r. O lead %s sera criado SEM "
+                    "funil — configure DEFAULT_FUNNEL_ID ou DEFAULT_FUNNEL_NOME.",
+                    os.getenv("DEFAULT_FUNNEL_NOME", "Vendas: Principal"), lead_id,
+                )
+            else:
+                logger.error(
+                    "AMBIGUIDADE: %s funis ATIVOS normalizam para o mesmo nome "
+                    "(ids %s). O lead %s sera criado SEM funil — renomeie para "
+                    "desambiguar.",
+                    len(candidatos), sorted(f.id for f in candidatos), lead_id,
+                )
 
         if funnel_row:
             funnel_id = funnel_row.id
             etapas = funnel_row.etapas
 
-            # Determine the first stage ID
+            # AUDIT-2026-08-WF2 — a etapa deixou de ser `stages[0]`.
+            #
+            # "Primeira etapa" nao e conceito do negocio: e a ordem em que
+            # alguem arrastou os cartoes na tela de configuracao do funil.
+            # Reordenar mudava, sem aviso, onde todo lead novo nasce. Agora
+            # procura a etapa cujo `id` OU `nome` casa com DEFAULT_ETAPA_NOME
+            # ("Sem Contato" por default), normalizando `_` e espaco — porque o
+            # `etapa_id` real de producao pode ser `sem_contato` ou
+            # `Sem Contato` e este repositorio nao tem como saber qual dos dois
+            # (nada aqui cria funil). Mesma regra de
+            # app/services/lead_creation.py:resolver_etapa_inicial.
             import json
             stages = etapas if isinstance(etapas, list) else json.loads(etapas)
-            first_stage_id = "nova_oportunidade"  # default
-            if stages and isinstance(stages[0], dict):
-                first_stage_id = stages[0].get("id", "nova_oportunidade")
+            stages = [e for e in stages if isinstance(e, dict)]
+            alvo_etapa = _norm(os.getenv("DEFAULT_ETAPA_NOME", "Sem Contato"))
+            first_stage_id = None
+            for etapa in stages:
+                if _norm(etapa.get("id")) == alvo_etapa or _norm(etapa.get("nome")) == alvo_etapa:
+                    first_stage_id = etapa.get("id")
+                    break
+            if first_stage_id is None:
+                if stages and stages[0].get("id"):
+                    first_stage_id = stages[0]["id"]
+                    logger.warning(
+                        "Funil #%s nao tem etapa %r — usando a primeira (%r). A "
+                        "posicao na lista nao e contrato de negocio.",
+                        funnel_id, os.getenv("DEFAULT_ETAPA_NOME", "Sem Contato"),
+                        first_stage_id,
+                    )
+                else:
+                    first_stage_id = "nova_oportunidade"
+                    logger.warning(
+                        "Funil #%s esta sem etapas utilizaveis — usando %r.",
+                        funnel_id, first_stage_id,
+                    )
 
             # Check if lead is already in this funnel (avoid duplicates)
             existing_entry = db.execute(

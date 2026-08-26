@@ -123,8 +123,11 @@ def get_database_schema() -> str:
     - tags (id, nome, cor, created_at)
     - lead_tags (lead_id, tag_id)
     - tasks (id, title, description, due_date, status [pending, in_progress, completed], lead_id, assigned_to_id)
-    - funnels (id, nome, descricao, is_default, is_active)
-    - funnel_entries (id, funnel_id, lead_id, etapa_id [nova_oportunidade, contato_feito, em_negociacao, proposta_enviada, follow_up, fechou_venda, perda])
+    - funnels (id, nome, etapas, is_active, created_at, updated_at)
+    - funnel_entries (id, funnel_id, lead_id, etapa_id, posicao, created_at, updated_at)
+      etapa_id e TEXTO LIVRE: corresponde a um `id` dentro do JSON `funnels.etapas`,
+      que cada funil define do seu jeito. NAO existe lista fixa de etapas — para
+      saber as de um funil, leia `funnels.etapas`.
     - segments (id, nome, rules [JSON])
 
     OBS (AUDIT-2026-08-W1C/F3): as tabelas `users` e `chat_messages` NÃO estão

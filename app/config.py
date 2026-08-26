@@ -80,11 +80,42 @@ if SEED_INITIAL_ADMIN and not ADMIN_INITIAL_PASSWORD:
     )
 
 # ─── Criacao de lead (AUDIT-2026-08-WB, F-341) — app/services/lead_creation.py
-# DEFAULT_FUNNEL_ID: funil onde um lead novo entra quando o caller nao pede um
-# especifico. Opcional — sem ele, resolver_funil_padrao usa o funil ATIVO de
-# MENOR id. Nunca vazio-string: "" nao e um id valido, vira None.
+#
+# AUDIT-2026-08-WF2 — o destino comercial padrao passou a ser resolvido por
+# NOME, nao por ordem de id.
+#
+# A versao anterior caia, na falta de DEFAULT_FUNNEL_ID, no "funil ATIVO de
+# MENOR id". Isso amarrava uma regra de negocio a um acidente de historico: o
+# funil certo so vencia porque tinha sido criado primeiro. Criar um funil novo
+# com id menor, ou desativar e recriar o principal, mandava silenciosamente
+# todo lead novo para o lugar errado — e nada no sistema acusaria.
+#
+# `funnels.nome` e UNIQUE (app/models/pipeline.py:15). E, portanto, um
+# identificador ESTAVEL do dominio, e e exatamente o que o system message do
+# Gerenciador ja usa como contrato:
+#
+#   "Todos os leads NOVOS devem ser adicionados ao funil "Vendas: Principal",
+#    sempre na etapa "Sem Contato"."
+#   (n8n/workflows/live_exports/20260826_wa/gerenciador_leads.json:610)
+#
+# DEFAULT_FUNNEL_ID continua existindo e continua tendo prioridade — e a
+# configuracao canonica de quem quer fixar por id. Mas ele agora FALHA ALTO se
+# apontar para funil inexistente ou inativo, em vez de cair em outro qualquer.
 _default_funnel_id_raw = os.getenv("DEFAULT_FUNNEL_ID", "").strip()
 DEFAULT_FUNNEL_ID = int(_default_funnel_id_raw) if _default_funnel_id_raw.isdigit() else None
+
+# Nome EXATO do funil comercial padrao. Usado quando DEFAULT_FUNNEL_ID nao esta
+# configurado. A comparacao e case-insensitive e ignora espaco nas bordas, mas
+# NAO e busca por substring: "Vendas WhatsApp" nunca casa com isto.
+DEFAULT_FUNNEL_NOME = os.getenv("DEFAULT_FUNNEL_NOME", "Vendas: Principal")
+
+# Nome (ou id) da etapa inicial dentro do funil comercial padrao. O `etapa_id`
+# real gravado em producao NAO e conhecivel a partir deste repositorio — nada
+# aqui cria funil, e o schema aceita tanto `sem_contato` quanto `Sem Contato`
+# (app/schemas/pipeline.py:44). Por isso a resolucao compara contra o `id` E
+# contra o `nome` da etapa, normalizando `_` e espaco: as duas grafias possiveis
+# resolvem para a mesma etapa sem que ninguem precise adivinhar qual e a real.
+DEFAULT_ETAPA_NOME = os.getenv("DEFAULT_ETAPA_NOME", "Sem Contato")
 
 # Tag aplicada a todo lead criado via POST /api/leads. Esse endpoint recebe
 # tanto o formulario do site quanto o agente n8n e nao tem como distinguir a
