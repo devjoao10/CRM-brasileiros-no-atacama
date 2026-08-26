@@ -239,6 +239,14 @@
 {% block scripts %}
     <script>
     let currentTab = 'minhas'; // minhas, equipe, automaticas
+    // AUDIT-2026-08-WG (F-442) — sequenciamento de requisicao.
+    // Trocar de aba dispara `fetchTasks()` sem cancelar a chamada anterior e
+    // sem conferir, na volta, se a aba ainda e a mesma. Duas trocas rapidas —
+    // ou uma aba lenta seguida de uma rapida — e a resposta ANTIGA chega
+    // depois e pinta a lista: o operador ve as tarefas da equipe sob o rotulo
+    // 'minhas', sem nenhum erro na tela. Mesmo idioma de `listRequestSeq` no
+    // inbox e de `previewRequestSeq` em segmentacao.html.
+    let tasksRequestSeq = 0;
     let dateFilter = 'all'; // all, overdue, today, tomorrow
     let allTasks = [];
     let calendar = null;
@@ -384,7 +392,12 @@
         }
         // Se for "equipe", não passamos user_filter, e o backend (sendo Admin) trará de todos.
 
+        const seq = ++tasksRequestSeq;
+        const tabDaRequisicao = currentTab;
         const resp = await Auth.apiRequest(url);
+        // Resposta obsoleta: chegou depois de o operador ja ter trocado de aba.
+        // Descartar em silencio e o certo — a requisicao vigente vai pintar.
+        if (seq !== tasksRequestSeq || tabDaRequisicao !== currentTab) return;
         // AUDIT-2026-08-W2A (F11): so `if (resp)` nao bastava. Num 403/500 o corpo
         // nao e a lista de tarefas, entao `.map()` estourava TypeError e a tela
         // ficava presa em "Carregando tarefas..." para sempre. E quando nao
@@ -396,6 +409,7 @@
             return;
         }
         allTasks = await resp.json();
+        if (seq !== tasksRequestSeq || tabDaRequisicao !== currentTab) return;
         renderTasks();
         updateCalendarEvents();
     }
