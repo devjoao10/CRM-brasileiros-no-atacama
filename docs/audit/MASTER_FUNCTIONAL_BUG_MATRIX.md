@@ -71,32 +71,32 @@ Quatro exports frescos chegaram durante a execução e estão versionados em
 
 | ID | Origem/relato | Sintoma | Root cause | Componente | Repo/N8N | Teste | Status | Commit |
 |---|---|---|---|---|---|---|---|---|
-| W2-01 | Operador | Adicionar uma tag apaga as outras | | CRM + Conversas | | | OPEN | |
-| W2-02 | Operador | Tags somem após reload | | CRM + Conversas | | | OPEN | |
-| W2-03 | Operador | Precisa tentar várias vezes para a tag colar | | CRM UI | | | OPEN | |
-| W2-04 | F-529 | Apagar tag no Conversas é desfeito ao reabrir a conversa | | Conversas | | | OPEN | |
-| W2-05 | Operador | Data salva desaparece | | CRM | | | OPEN | |
-| W2-06 | Operador | Dado fornecido pelo cliente desaparece | | CRM + n8n | | | OPEN | |
-| W2-07 | Operador | Edição humana sobrescrita por update automático vazio | | CRM | | | OPEN | |
-| W2-08 | F-239 | Anotações: read-modify-write em JSON sem lock (IA + humano) | | CRM | | | OPEN | |
-| W2-09 | F-056 | `LeadUpdate` copia NULL explícito sobre coluna NOT NULL | | CRM | | | OPEN | |
+| W2-01 | Operador | Adicionar uma tag apaga as outras | `PUT /api/tags/lead/{id}` era substituicao TOTAL a partir de um snapshot capturado quando o modal abriu | CRM + Conversas |  | test_tags_delta (21 asserts) | RESOLVED | 14ac45f |
+| W2-02 | Operador | Tags somem após reload | DUPLICATE de W2-01 (o save descartava o que outro ator tinha mudado) | CRM + Conversas |  | test_tags_delta | DUPLICATE_ROOT_CAUSE | 14ac45f |
+| W2-03 | Operador | Precisa tentar várias vezes para a tag colar | DUPLICATE de W2-01 | CRM UI |  | test_tags_delta | DUPLICATE_ROOT_CAUSE | 14ac45f |
+| W2-04 | F-529 | Apagar tag no Conversas é desfeito ao reabrir a conversa | F-529 — a rota descartava o bool do CRM e o espelho ressuscitava a tag na proxima abertura | Conversas |  | test_conversas_tags_sync 3b (recusa quando o espelho volta; permite quando o CRM esta fora) | RESOLVED | 14ac45f + 3f7df5a |
+| W2-05 | Operador | Data salva desaparece | O contrato `""` vs `null` esta correto e travado por teste; a causa em producao e a regressao M6 do formulario | CRM |  | test_n8n_contract_lead_update | FIXED_PENDING_MANUAL_N8N | 1047aec |
+| W2-06 | Operador | Dado fornecido pelo cliente desaparece | DUPLICATE de W2-05 (M6: o `PUT` do formulario falha em silencio) | CRM + n8n |  | reconciliacao 26/08 secao 2 | DUPLICATE_ROOT_CAUSE | 1047aec |
+| W2-07 | Operador | Edição humana sobrescrita por update automático vazio | DUPLICATE de W2-05; o guard de string vazia ja existe desde a Fase 2 | CRM |  | test_n8n_contract_lead_update | DUPLICATE_ROOT_CAUSE | 1047aec |
+| W2-08 | F-239 | Anotações: read-modify-write em JSON sem lock (IA + humano) | F-239 — read-modify-write num JSON sem lock; a Tool Adicionar Nota escreve a cada processamento | CRM |  | PostgreSQL real: 5/5 rodadas com espera medida pelo lock, as duas notas sobrevivem | RESOLVED | 14ac45f |
+| W2-09 | F-056 | `LeadUpdate` copia NULL explícito sobre coluna NOT NULL | F-056 — o guard `_nao_anulaveis` derivado do model ja impede NULL em coluna NOT NULL | CRM |  | test_n8n_contract_lead_update (guard derivado do model, nao escrito a mao) | NOT_REPRODUCED_WITH_EVIDENCE | — |
 | W2-10 | Operador | Lead aparece em "Vendas WhatsApp" quando deveria estar no Principal | O Conversas PREFERIA qualquer funil ativo com whatsapp no nome | CRM |  | test_lead_funnel_entry 5 | RESOLVED | d211d61 |
-| W2-11 | Operador | "Ver no Funil" não abre funil/etapa persistidos | | CRM UI | | | OPEN | |
-| W2-12 | Operador | Localizar lead é intermitente | | CRM UI | | | OPEN | |
+| W2-11 | Operador | "Ver no Funil" não abre funil/etapa persistidos | `aplicarDeepLink` fazia `return` mudo quando `/locate` falhava | CRM UI |  | test_pipeline_ui_fixes | RESOLVED | 14ac45f |
+| W2-12 | Operador | Localizar lead é intermitente | O passo 3 do lookup por WhatsApp era ENDS-WITH resolvido por `.first()` sem `order_by` | CRM UI |  | test_leads_lookup_whatsapp (12 asserts; ambiguidade vira 409 nomeando os ids) | RESOLVED | 14ac45f |
 | W2-13 | F-341 | Lead criado sem `FunnelEntry` (reproduzido em PostgreSQL real) | F-341 — `POST /api/leads` criava so a linha `leads` | CRM + Conversas |  | test_lead_funnel_entry 1-2 + concorrencia no PostgreSQL | RESOLVED | d211d61 |
-| W2-14 | Operador | Mover card no pipeline deixa cópia fantasma até o refresh | | CRM UI | | | OPEN | |
+| W2-14 | Operador | Mover card no pipeline deixa cópia fantasma até o refresh | `loadStage` DESCARTAVA chamadas concorrentes e engolia o reload da coluna de origem | CRM UI |  | test_pipeline_ui_fixes | RESOLVED | 14ac45f |
 | W2-15 | Operador | Responsável do lead e da conversa divergem | O handoff so mudava o lead; a conversa nunca era avisada | CRM + Conversas |  | test_leads_handoff_bridge | RESOLVED | 092a781 + ponte |
 | W2-16 | Operador | Conversa atribuída some da listagem | DUPLICATE de W1-03 | Conversas |  | test_conversas_inbox_filters | DUPLICATE_ROOT_CAUSE | 092a781 |
-| W2-17 | Operador | Botão "Editar Lead" / rota direta abre lead errado ou falha | | CRM UI | | | OPEN | |
-| W2-18 | Operador | Filtro de viajantes usa mínimo quando a regra pede quantidade exata | | CRM | | | OPEN | |
-| W2-19 | F-084 | Quatro regras incompatíveis de normalização de telefone | | Conversas | | | OPEN | |
-| W2-20 | F-312 / F-302 | Find-or-create de conversa por `whatsapp` sem UNIQUE nem lock | | Conversas | | | OPEN | |
-| W2-21 | F-236 | `responsavel_id` mutável por 5 caminhos com 3 conjuntos de regra | | CRM | | | OPEN | |
-| W2-22 | F-419 | `loadAllTags()` sem await + deep link `?open=` → checkboxes vazios | | CRM UI | | | OPEN | |
-| W2-23 | F-427 | `formatWhatsappInput` indefinido no partial usado pelo pipeline | | CRM UI | | | OPEN | |
-| W2-24 | F-430 | Filtro "Chegada em X dias" lido mas nunca enviado na request | | CRM UI | | | OPEN | |
-| W2-25 | F-165 | `loadStage` descarta chamadas concorrentes; busca sem debounce | | CRM UI | | | OPEN | |
-| W2-26 | F-246 | Substituir etapas órfã `FunnelEntry` das etapas removidas | | CRM | | | OPEN | |
+| W2-17 | Operador | Botão "Editar Lead" / rota direta abre lead errado ou falha | `formatWhatsappInput` ja morava no partial compartilhado desde AUDIT-2026-08-W2B/F10 | CRM UI |  | test_pipeline_inline_lead_edit | NOT_REPRODUCED_WITH_EVIDENCE | — |
+| W2-18 | Operador | Filtro de viajantes usa mínimo quando a regra pede quantidade exata | O filtro so sabia perguntar `>=`; a regra operacional precisa de igualdade | CRM |  | test_filtro_viajantes_exato + o de minimo intacto ao lado | RESOLVED | 06e3b77 |
+| W2-19 | F-084 | Quatro regras incompatíveis de normalização de telefone | F-084 — duas regras de sufixo divergentes (10 vs 11 digitos) entre CRM e Conversas | Conversas |  | test_leads_lookup_whatsapp | RESOLVED | 14ac45f |
+| W2-20 | F-312 / F-302 | Find-or-create de conversa por `whatsapp` sem UNIQUE nem lock | F-302/F-312 — `uq_conversations_whatsapp` ja existe no model e na m011 desde a Fase 2 | Conversas |  | test_data_integrity_constraints | NOT_REPRODUCED_WITH_EVIDENCE | — |
+| W2-21 | F-236 | `responsavel_id` mutável por 5 caminhos com 3 conjuntos de regra | F-236 — a ponte unificou o EFEITO do handoff, mas `responsavel_id` continua mutavel por 5 caminhos; consolida-los e refatoracao, nao correcao de sintoma relatado | CRM |  | — | OPEN | — |
+| W2-22 | F-419 | `loadAllTags()` sem await + deep link `?open=` → checkboxes vazios | F-419 — `loadAllTags()` sem await com deep link `?open=` | CRM UI |  | test_pipeline_ui_fixes | RESOLVED | 14ac45f |
+| W2-23 | F-427 | `formatWhatsappInput` indefinido no partial usado pelo pipeline | F-427 — ja corrigido em AUDIT-2026-08-W2B/F10; a definicao unica esta no partial | CRM UI |  | test_pipeline_inline_lead_edit | NOT_REPRODUCED_WITH_EVIDENCE | — |
+| W2-24 | F-430 | Filtro "Chegada em X dias" lido mas nunca enviado na request | F-430 — o filtro era lido por `hasActiveFilters()` e nunca virava parametro | CRM UI |  | test_pipeline_ui_fixes | RESOLVED | 14ac45f |
+| W2-25 | F-165 | `loadStage` descarta chamadas concorrentes; busca sem debounce | F-165 — guard que descartava chamadas + busca sem debounce | CRM UI |  | test_pipeline_ui_fixes | RESOLVED | 14ac45f |
+| W2-26 | F-246 | Substituir etapas órfã `FunnelEntry` das etapas removidas | F-246 — `etapas` e JSON substituido inteiro e `funnel_entries.etapa_id` nao tem FK; remover etapa ocupada tornava os leads INVISIVEIS | CRM |  | test_remover_etapa_com_lead_e_recusado (RED confirmado) | RESOLVED | 0be0ec2 |
 
 ## WAVE 3 — Bia / triagem / regras de negócio
 
@@ -130,19 +130,19 @@ Quatro exports frescos chegaram durante a execução e estão versionados em
 | ID | Origem/relato | Sintoma | Root cause | Componente | Repo/N8N | Teste | Status | Commit |
 |---|---|---|---|---|---|---|---|---|
 | W4-01 | Operador | Janela de 24h detectada errado | Janela ancorada no relogio da Meta e monotonica desde a Fase 2 | Conversas |  | test_conversas_service_window (256-275) | NOT_REPRODUCED_WITH_EVIDENCE | — |
-| W4-02 | Operador | Atendente não sabe quando template é obrigatório | | Conversas UI | | | OPEN | |
+| W4-02 | Operador | Atendente não sabe quando template é obrigatório | A UI so tinha o cadeado binario; o atendente nao sabia QUANDO a janela fecha | Conversas UI |  | test_conversas_meta_resiliencia D1 | RESOLVED | 3f7df5a |
 | W4-03 | F-349 | Envio sem credencial parece sucesso (`simulated` → `sent`) | F-349 ja corrigido na Fase 2: `simulated` virou status proprio | Conversas |  | test_conversas_webhook_hardening (265-291) | NOT_REPRODUCED_WITH_EVIDENCE | — |
-| W4-04 | Operador | Status de envio ambíguo (sent/delivered/failed/pending) | | Conversas | | | OPEN | |
-| W4-05 | Operador | Data+hora não permitem entender a janela | | Conversas UI | | | OPEN | |
+| W4-04 | Operador | Status de envio ambíguo (sent/delivered/failed/pending) | Status da Meta para linha ainda nao commitada era descartado | Conversas |  | test_conversas_meta_resiliencia D2 | RESOLVED | 3f7df5a |
+| W4-05 | Operador | Data+hora não permitem entender a janela | DUPLICATE de W4-02 (`service_window_expires_at` vem calculado do backend) | Conversas UI |  | test_conversas_meta_resiliencia D1 | DUPLICATE_ROOT_CAUSE | 3f7df5a |
 | W4-06 | Operador | Template correto não é selecionável / sem preview | Picker e preview existem (`openTemplateForm`/`updatePreview`) | Conversas UI |  | test_conversas_template_param_map | NOT_REPRODUCED_WITH_EVIDENCE | — |
 | W4-07 | F-347 | Lookup de template por nome só, ignorando o idioma | F-347 ja corrigido: o lookup e `(name, language)` | Conversas |  | test_conversas_service_window (399-412) | NOT_REPRODUCED_WITH_EVIDENCE | — |
-| W4-08 | F-348 | Parâmetro de template não sanitizado (Meta rejeita \n/\t/runs) | | Conversas | | | OPEN | |
-| W4-09 | F-350 | Nenhum retry/backoff; `send_attempts` existe e nunca é usado | | Conversas | | | OPEN | |
-| W4-10 | F-109/F-083/F-112 | Retry sem idempotência → cliente recebe a mesma mensagem duas vezes | | Conversas | | | OPEN | |
-| W4-11 | F-335 | Status callback da Meta chega antes do commit da mensagem | | Conversas | | | OPEN | |
-| W4-12 | F-454 | Janela de 24h: naive vs aware datetimes divergem SQLite/Postgres | | Conversas | | | OPEN | |
-| W4-13 | F-541 | Cache de catálogo de template sobrevive à troca de credencial | | Conversas | | | OPEN | |
-| W4-14 | F-321 | Aridade do param map lida da linha local editável por qualquer usuário | | Conversas | | | OPEN | |
+| W4-08 | F-348 | Parâmetro de template não sanitizado (Meta rejeita \n/\t/runs) | F-348 — valor resolvido so levava `.strip()`; a Meta recusa quebra de linha, tabulacao e corrida de espacos | Conversas |  | test_conversas_variables (14 checks, inclui o que NAO pode mudar) | RESOLVED | 56931a8 |
+| W4-09 | F-350 | Nenhum retry/backoff; `send_attempts` existe e nunca é usado | F-350 — nenhum caminho de envio tinha retry, backoff ou tratamento de 429/5xx | Conversas |  | test_conversas_meta_resiliencia D3 (429/5xx retentam, 400 nao) | RESOLVED | 3f7df5a |
+| W4-10 | F-109/F-083/F-112 | Retry sem idempotência → cliente recebe a mesma mensagem duas vezes | F-109/F-083/F-112 — retry era check-then-act; e o botao estava MORTO (`retrySending` nao declarada, ReferenceError em strict mode) | Conversas |  | test_conversas_meta_resiliencia D4 (duas threads reais -> UM envio) | RESOLVED | 3f7df5a |
+| W4-11 | F-335 | Status callback da Meta chega antes do commit da mensagem | F-335 — callback perdido na janela entre o envio e o commit da resposta da Bia | Conversas |  | test_conversas_meta_resiliencia D2 | RESOLVED | 3f7df5a |
+| W4-12 | F-454 | Janela de 24h: naive vs aware datetimes divergem SQLite/Postgres | F-454 — `service_window_open` ja normaliza naive/aware explicitamente | Conversas |  | test_conversas_service_window | NOT_REPRODUCED_WITH_EVIDENCE | — |
+| W4-13 | F-541 | Cache de catálogo de template sobrevive à troca de credencial | F-541 — `invalidate_catalog_cache` nao tinha chamador; a chave do cache agora inclui a credencial | Conversas |  | test_conversas_meta_resiliencia D5 | RESOLVED | 3f7df5a |
+| W4-14 | F-321 | Aridade do param map lida da linha local editável por qualquer usuário | F-321 — o `body_text` local so influencia o bounds-check do /param-map (admin); o caminho de ENVIO sempre rederiva a aridade da Meta | Conversas |  | test_conversas_template_param_map | NOT_REPRODUCED_WITH_EVIDENCE | — |
 
 ## WAVE 5 — Follow-up / formulários
 
@@ -151,7 +151,7 @@ Quatro exports frescos chegaram durante a execução e estão versionados em
 | W5-01 | Operador | Cliente para de responder e fica no limbo (sem follow-up ~8h) | | n8n + Conversas | | | OPEN | |
 | W5-02 | Operador | Leads de formulário chegam sem tags | `POST /api/leads` nao aplicava tag nenhuma (o caminho do WhatsApp aplicava) | n8n + CRM |  | test_lead_funnel_entry | RESOLVED | d211d61 |
 | W5-03 | Operador | Segundo formulário (rodapé do site) não integrado | O segundo formulario nunca foi integrado a nenhum workflow | n8n |  | — | BLOCKED_OPERATOR | — |
-| W5-04 | Operador | Campos do formulário inconsistentes com o CRM | | CRM | | | OPEN | |
+| W5-04 | Operador | Campos do formulário inconsistentes com o CRM | O contrato do corpo do formulario e replayado a partir do export real e travado por teste | CRM |  | test_n8n_contract_lead_update | NOT_REPRODUCED_WITH_EVIDENCE | — |
 | W5-05 | Operador | Formulário sobrescreve dado existente | D3 aplicada pelo operador — e introduziu a regressao M6 (`==` no jsonBody) | CRM + n8n (D3) |  | reconciliacao 26/08 secao 2 | FIXED_PENDING_MANUAL_N8N | 1047aec |
 | W5-06 | Operador | Lead de formulário sem `FunnelEntry` adequado | DUPLICATE de W2-13 | CRM |  | test_lead_funnel_entry | DUPLICATE_ROOT_CAUSE | d211d61 |
 | W5-07 | Operador | Contato automático da Bia não inicia após formulário | O disparo depende de um no do n8n que nao existe | n8n |  | — | BLOCKED_OPERATOR | — |
@@ -171,14 +171,14 @@ Quatro exports frescos chegaram durante a execução e estão versionados em
 
 | ID | Origem/relato | Sintoma | Root cause | Componente | Repo/N8N | Teste | Status | Commit |
 |---|---|---|---|---|---|---|---|---|
-| W7-01 | Operador | Lista de segmentação com comportamento quebrado | | CRM | | | OPEN | |
+| W7-01 | Operador | Lista de segmentação com comportamento quebrado | DUPLICATE de W7-02 e W7-03 (o overlay travado e a corrida de filtros) | CRM |  | test_segmentacao_ui_fix | DUPLICATE_ROOT_CAUSE | b510ce7 |
 | W7-02 | Operador | Tela de segmentação "embaçada" | `erroNoDetalhe` nao removia `.show`/`.open` do overlay com blur | CRM UI |  | test_segmentacao_ui_fix | RESOLVED | b510ce7 |
 | W7-03 | Operador | Filtros de segmentação não aplicam | 14 `onchange` fora do debounce e `previewCount` sem sequenciamento | CRM |  | test_segmentacao_ui_fix | RESOLVED | b510ce7 |
-| W7-04 | Operador | Campos personalizados não filtrados corretamente | | CRM | | | OPEN | |
-| W7-05 | Operador | Falha intermitente de login | | CRM | | | OPEN | |
-| W7-06 | Operador | Usuários que acessavam deixam de acessar | | CRM | | | OPEN | |
+| W7-04 | Operador | Campos personalizados não filtrados corretamente | O cast json->jsonb ficava FORA do guard: uma linha legada derrubava o filtro para TODOS | CRM |  | PostgreSQL real + test_postgres_dialect_divergence secao 10 | RESOLVED | 23a6f76 |
+| W7-05 | Operador | Falha intermitente de login | O Conversas levantava 401 no primeiro Bearer invalido, sem cair para o cookie — o CRM ja tinha corrigido isso | CRM |  | test_conversas_auth_hardening (Bearer obsoleto + cookie valido -> 200) | RESOLVED | 7173d44 |
+| W7-06 | Operador | Usuários que acessavam deixam de acessar | DUPLICATE de W7-05 | CRM |  | test_conversas_auth_hardening | DUPLICATE_ROOT_CAUSE | 7173d44 |
 | W7-07 | Operador | Safari em loop de login | O Conversas nao tinha o quebra-loop de um salto que o CRM ja tem | CRM |  | test_conversas_login_loop_guard (executa o script no Node) | RESOLVED | b510ce7 |
 | W7-08 | Operador | Frontend antigo após atualização (precisa hard refresh) | JS compartilhado sem `?v=`; tokens manuais ja divergentes entre telas | Ambos |  | test_asset_cache_busting | RESOLVED | b510ce7 + 1047aec |
-| W7-09 | F-043 | Filtro de campo personalizado 500 permanente com ` ` no Postgres | | CRM | | | OPEN | |
+| W7-09 | F-043 | Filtro de campo personalizado 500 permanente com ` ` no Postgres | F-043 — reproduzido no PostgreSQL 16: `json` aceita o escape de NUL, `jsonb` nao | CRM |  | PostgreSQL real (5 linhas, uma envenenada) + travamento da forma na suite | RESOLVED | 23a6f76 |
 | W7-10 | F-440 | Debounce só nos campos de texto; 14 `onchange` sem sequenciamento | DUPLICATE de W7-03 | CRM UI |  | test_segmentacao_ui_fix | DUPLICATE_ROOT_CAUSE | b510ce7 |
-| W7-11 | F-495 | Só uma página protegida preserva `?next=` no redirect de login | | CRM | | | OPEN | |
+| W7-11 | F-495 | Só uma página protegida preserva `?next=` no redirect de login | F-495 — o default certo do `next` mora em `page_login_redirect`, nao nos call sites | CRM |  | test_todas_as_paginas_protegidas_preservam_o_next (percorre as rotas registradas) | RESOLVED | 1129841 |

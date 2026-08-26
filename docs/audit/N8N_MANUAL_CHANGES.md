@@ -549,3 +549,43 @@ e-mail, WhatsApp e as duas datas. Um formulário mais curto será rejeitado com
 completar o formulário), e não é minha.
 
 **STATUS:** `BLOCKED_OPERATOR`.
+
+---
+
+## M10 — o `Buscar lead pelo WhatsApp` agora pode receber 409
+
+**Consequência conhecida de uma correção desta rodada. Não é um defeito novo —
+é uma troca deliberada, e você precisa saber dela.**
+
+`GET /api/leads/by-whatsapp/{numero}` resolvia ambiguidade escolhendo um lead
+**arbitrário**: o terceiro passo era um ENDS-WITH resolvido por `.first()` sem
+`order_by`, então com mais de um casamento quem vencia era indefinido pelo
+banco e podia mudar entre execuções. Este endpoint é o primeiro nó do workflow
+do Formulário e a `Tool Buscar Lead WhatsApp` do Gerenciador — casar errado
+fazia o n8n **atualizar o lead de outro cliente**.
+
+Agora a ambiguidade vira **409**, nomeando os ids candidatos.
+
+**O que isso faz no seu workflow:** o nó `Buscar lead pelo WhatsApp` usa
+`neverError: true` e o `Lead existe?` ramifica pelo corpo da resposta. Um 409
+cairá no ramo *"não existe"* e o workflow **criará um lead novo** em vez de
+atualizar.
+
+**Isso é o menos ruim dos dois**, e foi escolhido de propósito: duplicar um lead
+é recuperável por quem olha o CRM; escrever no cliente errado não é. Mas a
+ambiguidade em si continua sendo um problema de DADO que só você pode resolver.
+
+**Ação recomendada (não urgente):**
+1. Quando aparecer um lead duplicado logo após um envio de formulário, procure
+   no CRM dois leads cujo WhatsApp termine igual — é esse o caso.
+2. Consolide manualmente os dois.
+3. Se quiser tratamento explícito no n8n, acrescente ao `Lead existe?` um ramo
+   para `statusCode === 409` que pare o fluxo e notifique, em vez de criar. O
+   corpo do 409 traz os ids em `detail`.
+
+**Nada disso bloqueia nada.** Sem ação, o comportamento é: lead novo criado, com
+funil, histórico e tag (corrigido nesta rodada), em vez de sobrescrever o
+cliente errado.
+
+**STATUS:** `FIXED_PENDING_PRODUCTION_VALIDATION` — a correção está no
+repositório; a consolidação dos duplicados existentes é sua.
