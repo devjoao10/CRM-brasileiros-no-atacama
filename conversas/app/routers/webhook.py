@@ -26,6 +26,7 @@ from app.models.api_config import ApiConfig
 from app.services import whatsapp
 from app.services import crm as crm_service
 from app.services import variables as variables_service
+from app.services.atendimento import aplicar_estado_humano
 from app.services.outbound import record_outbound_message, NOT_FAILED_STATUSES
 from app.models.media_asset import MediaAsset
 
@@ -573,6 +574,10 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
             conversation.atendente_id = None
             conversation.is_bot_active = True
             conversation.queued_at = None
+            # AUDIT-2026-08-WA — reabrir e comecar do zero: o atendimento
+            # humano anterior nao vale para a conversa nova. Sem isto ela
+            # voltaria ja marcada como "atendida" e nunca apareceria na fila.
+            conversation.primeira_resposta_humana_at = None
         conversation.status = "aberta"
         if opens_window:
             conversation.last_customer_msg_at = _advance_customer_msg_at(conversation, msg_at)
@@ -986,11 +991,36 @@ async def _forward_to_agent(conversation: Conversation, message_text: str, db: S
             last_ok_part = parte
 
     # Update conversation preview only with the last SENT part.
-    # NADA de estado operacional aqui: `is_bot_active`, `atendente_id` e
-    # `queued_at` seguem intactos — uma falha da Bia nao move a conversa de fila.
     if last_ok_part is not None:
         conversation.ultimo_msg = last_ok_part[:200]
         conversation.unread_count = 0
+
+    # AUDIT-2026-08-WA — falha DEGRADADA da Bia manda a conversa para a fila.
+    #
+    # Ate aqui esta funcao nao tocava estado operacional em hipotese alguma,
+    # com a justificativa de que "uma falha da Bia nao move a conversa de
+    # fila". O efeito real era o oposto do pretendido: a conversa ficava em
+    # ATENDIMENTOS BIA com `is_bot_active=True` e NENHUM humano a via. O
+    # cliente escrevia, recebia um fallback pedindo os dados de novo, escrevia
+    # de novo, e o ciclo se repetia — o "loop do repita sua mensagem" que a
+    # operacao relatou.
+    #
+    # `degraded` significa que o agente falhou ou devolveu saida bloqueada. Um
+    # cliente sem resposta da automacao PRECISA alcancar um humano, e a fila e
+    # exatamente o lugar de quem espera por um. `keep_queue_position=True`
+    # torna isto idempotente: falhas repetidas nao empurram a conversa para o
+    # fim da fila.
+    #
+    # Nao atribuimos atendente aqui de proposito: isto e uma excecao, nao um
+    # handoff de triagem concluida. Ela entra na fila sem dono e qualquer
+    # atendente pode assumir.
+    if degraded and not conversation.primeira_resposta_humana_at:
+        aplicar_estado_humano(conversation, None, keep_queue_position=True)
+        logger.warning(
+            f"Bia degradada na conversa {conversation.id} — conversa movida "
+            f"para a FILA DE ESPERA humana (bot desligado)"
+        )
+
     db.commit()
 
     # O fallback tambem pode falhar no envio (Meta fora, credencial ruim). Ele ja

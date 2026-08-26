@@ -21,6 +21,7 @@ Roda standalone (processo isolado):
 """
 import os
 import pathlib
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -606,8 +607,18 @@ for guard in ("if (windowClosed()) { applyWindowState(activeConversation); retur
           "texto, Enter, midia e retry checam a janela antes de enviar")
 # A CONDICAO do polling, nao so a declaracao da variavel: trocar o `||` por nada
 # deixaria `windowChanged` declarada e um teste de presenca passaria em falso.
+# AUDIT-2026-08-WA — a asserção era o literal
+# `if (newCount !== oldCount || windowChanged) {`. A condição do polling ganhou
+# um terceiro termo (`estadoMudou`: atendente/responsável/status/fila da conversa
+# aberta mudarem por ação de OUTRO usuário), e o literal quebrou sem que a
+# garantia mudasse. O que precisa continuar valendo é a INTENÇÃO: `windowChanged`
+# é calculado a partir do campo certo E participa da condição do re-render.
+# Extrair a condição e conferir os dois termos mata a mutação L do mesmo jeito,
+# sem travar a linha contra qualquer termo novo.
+_cond = re.search(r"if \(newCount !== oldCount[^)]*\) \{", js)
 check("service_window_open !== data.service_window_open" in js
-      and "if (newCount !== oldCount || windowChanged) {" in js,
+      and _cond is not None
+      and "windowChanged" in _cond.group(0),
       "polling re-renderiza quando a janela vira, sem mensagem nova (mata mutation L)")
 # `btn.disabled = true` sozinho aparece em outros pontos do arquivo (player de
 # audio, por exemplo). A sequencia com `tplSending` prende o guard ao envio de

@@ -84,6 +84,7 @@ def record_outbound_message(
     update_preview: bool = True,
     reset_unread: bool = False,
     commit: bool = True,
+    autor_user_id: Optional[int] = None,
 ) -> Message:
     """
     Persiste um Message outbound com status fiel ao resultado do envio.
@@ -98,6 +99,18 @@ def record_outbound_message(
     - Falha: status='failed' + last_error seguro; preview/unread NAO sao tocados.
 
     Sempre grava send_attempts=1 e last_attempt_at (base para retry).
+
+    AUDIT-2026-08-WA — `autor_user_id` distingue QUEM enviou.
+
+    `Message` nao tem coluna de autoria: Bia, auto-resposta e humano passam
+    todos por aqui com `direction='outbound'`. Sem um discriminador, "primeira
+    resposta humana" — o evento que tira a conversa da FILA DE ESPERA — e
+    indecidivel.
+
+    As rotas autenticadas por uma pessoa passam `current_user.id`; a Bia
+    (`webhook._forward_to_agent`) e as auto-respostas passam `None` e nunca
+    encerram a espera do cliente por um humano. O envio precisa ter dado certo:
+    uma tentativa que falhou na Meta nao atendeu ninguem.
     """
     r = classify_wa_response(wa_response)
     now = datetime.now(timezone.utc)
@@ -127,6 +140,16 @@ def record_outbound_message(
                 f"{conversation.id} (msg_type={msg_type}); persistida como "
                 f"status='simulated', sem wamid."
             )
+        # AUDIT-2026-08-WA — a transicao FILA -> EM ATENDIMENTO acontece aqui,
+        # e so aqui, porque este e o unico ponto por onde passa todo envio.
+        if autor_user_id is not None:
+            from app.services.atendimento import marcar_atendimento_humano
+
+            if marcar_atendimento_humano(conversation, autor_user_id):
+                logger.info(
+                    f"Primeira resposta humana na conversa {conversation.id} "
+                    f"(atendente={conversation.atendente_id}); saiu da fila."
+                )
     else:
         # Log seguro: last_error ja e um resumo sem token/payload sensivel.
         logger.warning(
@@ -157,6 +180,7 @@ async def send_media_upload(
     mime_type: str,
     caption: str = "",
     filename: Optional[str] = None,
+    autor_user_id: Optional[int] = None,
 ):
     """
     CONV-03 — envio outbound de midia por upload (generico: audio/imagem/video/
@@ -202,6 +226,7 @@ async def send_media_upload(
     message = record_outbound_message(
         db, conversation, caption or f"[{kind.upper()}]", kind, wa_response,
         media_url=None, update_preview=True, reset_unread=True,
+        autor_user_id=autor_user_id,
     )
 
     # 3) asset com espelho LOCAL do arquivo do operador (preview + retry)

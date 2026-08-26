@@ -67,8 +67,22 @@ class Conversation(Base):
     last_customer_msg_at = Column(DateTime(timezone=True), nullable=True)  # Janela 24h Meta
     # PACOTE-A: momento em que a conversa ENTROU na fila de atendimento humano.
     # NAO e atividade do cliente (last_customer_msg_at), nem updated_at/created_at.
-    # Preenchido no handoff BIA->humano e no release; zerado quando alguem assume.
+    # Preenchido no handoff BIA->humano e no release; zerado na PRIMEIRA RESPOSTA
+    # HUMANA (nao mais ao atribuir — ver a coluna abaixo).
     queued_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    # AUDIT-2026-08-WA — ATRIBUIDO != ATENDIDO.
+    # Ate aqui o inbox classificava por `atendente_id IS NULL`, o que fazia de
+    # "atribuir" sinonimo de "atender": assim que o handoff (ou um assign)
+    # definia um dono, a conversa saia da FILA DE ESPERA — mesmo sem nenhum
+    # humano ter falado com o cliente. A regra operacional real e o contrario:
+    # a conversa fica na fila enquanto NINGUEM tiver respondido.
+    #
+    # Abrir, visualizar, outro atendente abrir: nada disso e atendimento. O
+    # unico evento que encerra a espera e a PRIMEIRA MENSAGEM OUTBOUND HUMANA.
+    # `messages` nao guarda autoria (Bia, auto-resposta e humano passam pelo
+    # mesmo record_outbound_message), entao o instante e gravado aqui, pela
+    # rota que sabe quem e o `current_user`.
+    primeira_resposta_humana_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
     # AUDIT-2026-08-W2E (F1) — declarado como Index(unique=True) e nao como
     # UniqueConstraint de proposito: assim `create_all()` e a migration m011
@@ -100,6 +114,13 @@ class Conversation(Base):
         cascade="all, delete-orphan",
         order_by="ConversationNote.created_at",
     )
+
+    # AUDIT-2026-08-WA — NAO e coluna: e um atributo de apresentacao que o
+    # router preenche em lote antes de serializar (uma query por pagina, nunca
+    # uma por linha). Declarado aqui com default None para que
+    # `ConversationResponse.model_validate(conversation)` sempre encontre o
+    # atributo, mesmo nos caminhos que nao o preenchem.
+    atendente_nome = None
 
     @property
     def service_window_open(self) -> bool:

@@ -327,12 +327,38 @@ b_bot, b_atend, b_queue, b_status = (
 )
 run_agent(cid, "timeout")
 after = get_conv(cid)
-check(after.is_bot_active == b_bot, "is_bot_active NAO muda por falha da Bia")
-check(after.atendente_id == b_atend, "atendente_id NAO muda")
-check(after.queued_at == b_queue, "queued_at NAO muda (conversa nao entra/sai da fila)")
+# AUDIT-2026-08-WA — REGRA INVERTIDA, de proposito.
+#
+# Este bloco afirmava que uma falha da Bia NAO mexe no estado operacional. A
+# intencao era boa (um blip de rede nao deve reorganizar a fila), mas o efeito
+# real era o oposto do pretendido: a conversa ficava em ATENDIMENTOS BIA com
+# `is_bot_active=True` e NENHUM humano a via. O cliente escrevia, recebia o
+# fallback pedindo para reenviar, escrevia de novo, o agente falhava de novo —
+# o "loop do repita sua mensagem" que a operacao relatou, com o cliente
+# invisivel para a equipe o tempo todo.
+#
+# Agora uma falha DEGRADADA joga a conversa na FILA DE ESPERA humana: quem
+# escreveu e nao foi atendido pela automacao precisa alcancar uma pessoa. O
+# custo (a Bia para de responder essa conversa) e reversivel pelo proprio
+# atendente, que pode religar o bot no painel.
+check(after.is_bot_active is False,
+      "AUDIT-2026-08-WA: falha da Bia DESLIGA o bot (conversa vai para humano)")
+check(after.atendente_id == b_atend,
+      "atendente_id NAO muda — isto e excecao, nao handoff de triagem concluida")
+check(after.queued_at is not None,
+      "AUDIT-2026-08-WA: conversa entra na FILA DE ESPERA (nao fica invisivel)")
+check(after.primeira_resposta_humana_at is None,
+      "continua aguardando humano — o fallback da Bia nao e atendimento")
 check(after.status == b_status, "status da conversa NAO muda")
 check(after.ultimo_msg == FALLBACK, "preview reflete o fallback, que o cliente recebeu")
 check(after.unread_count == 0, "unread zerado — houve outbound entregue")
+
+# Idempotencia: uma segunda falha nao empurra a conversa para o fim da fila.
+fila_1 = after.queued_at
+run_agent(cid, "timeout")
+after2 = get_conv(cid)
+check(after2.queued_at == fila_1,
+      "AUDIT-2026-08-WA: falha repetida PRESERVA a posicao na fila (FIFO intacto)")
 
 
 # ============ F. Fallback que falha no envio ============
