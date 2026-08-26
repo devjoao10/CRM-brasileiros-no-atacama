@@ -11,6 +11,7 @@ authentication overhead and is more reliable.
 """
 
 import logging
+import os
 from typing import Optional
 
 from sqlalchemy import bindparam, text
@@ -246,16 +247,42 @@ async def auto_create_lead_in_crm(
         lead_id = result.fetchone()[0]
         logger.info(f"Lead criado automaticamente: #{lead_id} — {nome} ({whatsapp})")
 
-        # 2. Find the first active funnel with 'whatsapp' in the name (case-insensitive)
-        #    Falls back to ANY first active funnel if none matches
-        funnel_row = db.execute(
-            text(
-                "SELECT id, etapas FROM funnels "
-                "WHERE is_active = true "
-                "ORDER BY (LOWER(nome) LIKE '%whatsapp%') DESC, id ASC "
-                "LIMIT 1"
-            )
-        ).fetchone()
+        # 2. Funil default — MESMA precedencia de
+        #    app/services/lead_creation.py:resolver_funil_padrao (CRM, modulo
+        #    irmao que nao da para importar daqui: processo e app FastAPI
+        #    separados). AUDIT-2026-08-WB (W2-10): a query antiga preferia
+        #    QUALQUER funil ativo com "whatsapp" no nome
+        #    (`ORDER BY (LOWER(nome) LIKE '%whatsapp%') DESC, id ASC`) e
+        #    mandava o lead para "Vendas WhatsApp" em vez do funil principal.
+        #    Precedencia agora: DEFAULT_FUNNEL_ID (env), se apontar para um
+        #    funil ativo; senao o funil ATIVO de MENOR id — nunca por nome.
+        #
+        #    Le a env DIRETO com os.getenv, nao via conversas/app/config.py:
+        #    este modulo e do Conversas, que tem o proprio config.py, e a
+        #    tarefa que gerou esta correcao nao e dona dele para acrescentar a
+        #    variavel la. os.getenv aqui e o mesmo valor, sem precisar editar
+        #    um arquivo fora do escopo.
+        funnel_row = None
+        default_funnel_id_raw = os.getenv("DEFAULT_FUNNEL_ID", "").strip()
+        if default_funnel_id_raw.isdigit():
+            funnel_row = db.execute(
+                text(
+                    "SELECT id, etapas FROM funnels "
+                    "WHERE id = :fid AND is_active = true "
+                    "LIMIT 1"
+                ),
+                {"fid": int(default_funnel_id_raw)},
+            ).fetchone()
+
+        if not funnel_row:
+            funnel_row = db.execute(
+                text(
+                    "SELECT id, etapas FROM funnels "
+                    "WHERE is_active = true "
+                    "ORDER BY id ASC "
+                    "LIMIT 1"
+                )
+            ).fetchone()
 
         if funnel_row:
             funnel_id = funnel_row.id
@@ -315,6 +342,14 @@ async def auto_create_lead_in_crm(
                             f"Adicionado ao funil (etapa: {first_stage_id})",
                     "dados": "{}",
                 },
+            )
+        else:
+            # AUDIT-2026-08-WB: antes este bloco era pulado em SILENCIO — o
+            # lead commitava sem FunnelEntry e sem ninguem saber por que
+            # (outra rota para "zero FunnelEntry" documentada no F-341).
+            logger.warning(
+                "Lead #%s criado sem funil: nenhum funil ativo encontrado.",
+                lead_id,
             )
 
         # 3. Apply 'WhatsApp' tag (create if it doesn't exist)

@@ -27,6 +27,8 @@ from app.schemas.lead import (
 )
 from app.auth import get_current_user, require_admin
 from app.query_filters import campo_personalizado_match
+from app.config import LEAD_TAG_ORIGEM_API
+from app.services.lead_creation import criar_lead
 
 router = APIRouter(prefix="/api/leads", tags=["Leads"])
 
@@ -453,39 +455,44 @@ def get_lead(
 @router.post("", response_model=LeadResponse, status_code=201, summary="Criar lead")
 def create_lead(
     data: LeadCreate,
+    funnel_id: Optional[int] = Query(
+        None, description="Funil onde o lead entra. Default: DEFAULT_FUNNEL_ID "
+                          "(config) ou o funil ativo de menor id."
+    ),
+    etapa_id: Optional[str] = Query(
+        None, description="Etapa inicial dentro do funil. Default: primeira etapa do funil."
+    ),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    Cria um novo lead.
-    
+    Cria um novo lead e o coloca no Kanban (AUDIT-2026-08-WB, F-341).
+
     **N8N**: Ideal para criar leads a partir de formulários, WhatsApp, etc.
-    
+
     Os `campos_personalizados` aceitam qualquer JSON:
     ```json
     {"origem": "Instagram", "idioma": "pt-BR", "budget": 5000}
     ```
+
+    Alem da linha em `leads`, esta rota cria (na mesma transação) a entrada no
+    funil default, o evento 'created' no histórico e, se `LEAD_TAG_ORIGEM_API`
+    estiver configurada, aplica essa tag — ver `app/services/lead_creation.py`.
+    Este endpoint recebe leads tanto do formulário do site quanto do agente
+    n8n e não tem como distinguir a origem real; por isso a tag de origem é
+    uma única config compartilhada, não uma por chamador.
+
+    `funnel_id`/`etapa_id` são opcionais — os callers existentes (n8n, site)
+    não os enviam e continuam recebendo o funil/etapa default.
     """
-    lead = Lead(
-        nome=data.nome,
-        email=data.email,
-        whatsapp=data.whatsapp,
-        destinos=data.destinos or [],
-        data_chegada=data.data_chegada,
-        data_partida=data.data_partida,
-        total_dias=data.total_dias,
-        datas_destinos=data.datas_destinos or {},
-        dias_por_destino=data.dias_por_destino or {},
-        num_viajantes=data.num_viajantes,
-        num_criancas=data.num_criancas or 0,
-        idades_criancas=data.idades_criancas,
-        campos_personalizados=data.campos_personalizados or {},
-        status_venda=data.status_venda,
-        responsavel_id=data.responsavel_id,
+    lead = criar_lead(
+        db,
+        dados=data.model_dump(),
+        funnel_id=funnel_id,
+        etapa_id=etapa_id,
+        tag_nome=LEAD_TAG_ORIGEM_API or None,
+        origem="api",
     )
-    db.add(lead)
-    db.commit()
-    db.refresh(lead)
     return _build_lead_response(lead)
 
 
@@ -780,28 +787,31 @@ def import_leads(
     for i, row in enumerate(rows, start=2):  # Line 2 = first data row
         try:
             lead_data = _process_row(row, header_map)
-            
+
             if not lead_data.get("nome"):
                 errors.append(f"Linha {i}: campo 'nome' é obrigatório")
                 continue
 
-            lead = Lead(
-                nome=lead_data.get("nome", ""),
-                email=lead_data.get("email"),
-                whatsapp=lead_data.get("whatsapp"),
-                destinos=lead_data.get("destinos", []),
-                data_chegada=lead_data.get("data_chegada"),
-                data_partida=lead_data.get("data_partida"),
-                campos_personalizados=lead_data.get("campos_personalizados", {}),
+            # AUDIT-2026-08-WB (F-341): mesmo caminho de POST /api/leads —
+            # lead importado tambem entra no funil default, nao so na tabela
+            # `leads`. criar_lead commita por linha (ver docstring do
+            # service); o `db.commit()` unico do fim do lote deixou de existir.
+            criar_lead(
+                db,
+                dados=lead_data,
+                tag_nome=LEAD_TAG_ORIGEM_API or None,
+                origem="import",
             )
-            db.add(lead)
             imported += 1
 
         except Exception as e:
+            # Sem isto, uma linha ruim deixa a sessão com a transação
+            # ABORTADA (PostgreSQL) e TODAS as linhas seguintes do mesmo
+            # import falhariam em cascata — criar_lead comita por linha, mas
+            # uma exceção no meio do seu próprio commit deixa a sessão nesse
+            # estado até um rollback explícito.
+            db.rollback()
             errors.append(f"Linha {i}: {str(e)}")
-
-    if imported > 0:
-        db.commit()
 
     return ImportResponse(
         total_linhas=len(rows),

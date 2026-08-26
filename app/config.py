@@ -73,6 +73,19 @@ if SEED_INITIAL_ADMIN and not ADMIN_INITIAL_PASSWORD:
         "Defina ADMIN_INITIAL_PASSWORD no .env ou desative o seed com SEED_INITIAL_ADMIN=false.\n"
     )
 
+# ─── Criacao de lead (AUDIT-2026-08-WB, F-341) — app/services/lead_creation.py
+# DEFAULT_FUNNEL_ID: funil onde um lead novo entra quando o caller nao pede um
+# especifico. Opcional — sem ele, resolver_funil_padrao usa o funil ATIVO de
+# MENOR id. Nunca vazio-string: "" nao e um id valido, vira None.
+_default_funnel_id_raw = os.getenv("DEFAULT_FUNNEL_ID", "").strip()
+DEFAULT_FUNNEL_ID = int(_default_funnel_id_raw) if _default_funnel_id_raw.isdigit() else None
+
+# Tag aplicada a todo lead criado via POST /api/leads. Esse endpoint recebe
+# tanto o formulario do site quanto o agente n8n e nao tem como distinguir a
+# origem real — uma tag configuravel e unica e honesta; inventar uma tag por
+# caller nao seria (o endpoint nao sabe qual caller e). Default "" = nenhuma tag.
+LEAD_TAG_ORIGEM_API = os.getenv("LEAD_TAG_ORIGEM_API", "")
+
 # Upload
 MAX_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_UPLOAD_SIZE_BYTES", str(10 * 1024 * 1024)))  # 10MB
 
