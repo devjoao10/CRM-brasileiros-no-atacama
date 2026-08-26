@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import secrets
+from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -258,8 +259,24 @@ def page_login_redirect(request: Request, next_url: Optional[str] = None) -> Red
     Sem isso um cookie expirado/corrompido ficava no navegador para sempre e o
     estado inconsistente nunca se resolvia sozinho.
     """
+    # AUDIT-2026-08-WG (F-495) — o `next` passa a sair do PROPRIO request.
+    #
+    # Das onze paginas protegidas, so `/gestao/pendencias` passava `next_url` a
+    # mao. As outras dez chamavam `page_login_redirect(request)` sem argumento,
+    # entao uma sessao expirada em /pipeline (ou num deep link como
+    # /leads?open=123) devolvia o operador ao /hub, e ele tinha de navegar de
+    # novo ate onde estava. Corrigir nos dez call sites seria o mesmo defeito
+    # esperando para voltar no decimo primeiro: o default certo mora AQUI.
+    #
+    # So o PATH entra — nunca a query string, que pode carregar filtro ou id
+    # de cliente e acabaria em log de acesso e em historico de navegador. E o
+    # `safeNext()` de static/js/login.js ja bloqueia destino externo
+    # (`//evil.com`, `javascript:`), entao o valor e sempre interno.
+    destino = next_url or request.url.path
+    if destino in ("/", "/login"):
+        destino = None
     response = RedirectResponse(
-        url=f"/login?next={next_url}" if next_url else "/login",
+        url=f"/login?next={quote(destino, safe='/')}" if destino else "/login",
         status_code=302,
     )
     # ponytail: `decode_token` engole ExpiredSignatureError junto com as demais
