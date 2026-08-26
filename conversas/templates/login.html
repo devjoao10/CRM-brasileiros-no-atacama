@@ -160,7 +160,7 @@
         </div>
     </div>
 
-    <script src="/static/js/auth.js"></script>
+    <script src="/static/js/auth.js?v={{ asset_version }}"></script>
     <script>
         // AUDIT-2026-08-W1B — F3: as duas escritas de cookie de sessao sairam
         // daqui. Cookie escrito por JS nunca pode ser HttpOnly nem Secure; quem
@@ -172,15 +172,39 @@
         // Entao perguntamos ao servidor pela sessao de COOKIE (sem header
         // Authorization: assim `get_current_user` cai no ramo do cookie) e so
         // redirecionamos quando ela realmente vale.
+        //
+        // AUDIT-2026-08-WG — BUG 4: guarda one-shot contra loop, porta do
+        // AUTH-LOOP-01 do CRM (static/js/login.js + app/auth.py:233-238).
+        // Chave PROPRIA ('conversas_inbox_hop'), sem estado compartilhado com
+        // o hub do CRM ('crm_hub_hop'). Sem isto, um navegador que derruba ou
+        // atrasa o cookie access_token (Safari ITP e o caso relatado — cookie
+        // host-only, SameSite=Lax, Secure fora de dev) faz esta pagina
+        // validar, redirecionar, ser devolvida por "/" e validar de novo, sem
+        // fim. Na segunda chegada aqui com a guarda ja marcada, paramos de
+        // tentar e deixamos o formulario (ja no DOM) pronto para uso.
+        const CONVERSAS_HOP_KEY = 'conversas_inbox_hop';
+
         fetch('/api/auth/me/validate', { credentials: 'same-origin' })
             .then(res => {
-                if (res.ok) {
-                    window.location.href = '/';
-                } else {
+                if (!res.ok) {
+                    sessionStorage.removeItem(CONVERSAS_HOP_KEY);
                     Auth.clearAuth();  // localStorage orfao: forca login limpo
+                    return;
                 }
+                if (sessionStorage.getItem(CONVERSAS_HOP_KEY)) {
+                    // Ja tentamos ir para "/" e "/" devolveu para /login: o
+                    // cookie nao chegou na navegacao completa. Nao tenta de novo.
+                    sessionStorage.removeItem(CONVERSAS_HOP_KEY);
+                    Auth.clearAuth();
+                    return;
+                }
+                sessionStorage.setItem(CONVERSAS_HOP_KEY, '1');
+                window.location.href = '/';
             })
-            .catch(() => Auth.clearAuth());
+            .catch(() => {
+                sessionStorage.removeItem(CONVERSAS_HOP_KEY);
+                Auth.clearAuth();
+            });
 
         document.getElementById('crmLink').href =
             typeof CRM_BASE_URL !== 'undefined' ? CRM_BASE_URL : '#';
@@ -215,6 +239,9 @@
                 // por ora porque `Auth.apiRequest` monta o header Authorization
                 // com ele — remove-lo e uma mudanca maior, fora deste escopo.
                 Auth.setAuth(data.access_token, data.user);
+                // BUG 4: mesma guarda one-shot do redirect automatico acima —
+                // um login recem-feito pode sofrer o mesmo drop/atraso de cookie.
+                sessionStorage.setItem(CONVERSAS_HOP_KEY, '1');
                 window.location.href = '/';
             } catch (err) {
                 errorEl.textContent = err.message || 'Erro ao fazer login';
