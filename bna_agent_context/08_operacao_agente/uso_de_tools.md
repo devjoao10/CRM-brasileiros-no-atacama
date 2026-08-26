@@ -20,6 +20,9 @@ adicionada no futuro RAG). Parâmetros SEMPRE como texto (string).
 - Quando: **na primeira mensagem** do cliente na conversa.
 - Para quê: saber se o lead já existe no CRM e quais dados já temos (evita
   perguntar de novo o que já se sabe).
+- Lead existente = CONTATO ou COTAÇÃO anterior, nunca viagem
+  confirmada/paga — ver "Lead pré-existente" em
+  `08_operacao_agente/fluxo_atendimento_bia.md`.
 
 ## `enviar_ao_gerenciador`
 

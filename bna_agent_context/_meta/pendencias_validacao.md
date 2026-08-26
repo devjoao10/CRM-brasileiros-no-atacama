@@ -16,6 +16,12 @@ categoria. João valida na fonte real e segue
       qualquer fonte; decidir se entram no vault.
 - [ ] Pacote fechado tem preço melhor que soma de avulsos? (usado como
       argumento em objeções de preço — confirmar).
+- [ ] **CONFLITO Uyuni 3 dias regular vs. viajante solo** (H8, auditoria
+      2026-08): a regra de negócio diz que o Regular 3 dias/2 noites exige
+      mínimo de 2 passageiros e não deve ser ofertado a viajante solo (ver
+      `03_tours/uyuni_expedicoes.md`), mas `04_precos/precos_2026_uyuni.md`
+      tabela o formato com preço avulso por pessoa, sem mínimo declarado.
+      Reconciliar tabela x regra.
 
 ## 2. PIX / PAGAMENTO
 

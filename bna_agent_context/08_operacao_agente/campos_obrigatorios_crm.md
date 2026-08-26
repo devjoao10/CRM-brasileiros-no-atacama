@@ -18,7 +18,7 @@ inventar dados.
 | Campo | Conteúdo | Regra |
 |---|---|---|
 | whatsapp | nº do cliente | OBRIGATÓRIO SEMPRE (sem ele, não chamar a tool) |
-| nome | nome do cliente | obrigatório p/ handoff |
+| nome | nome COMPLETO do cliente (cadastro; ao falar com o cliente, usar só o primeiro nome — ver `00_persona/tom_de_voz.md`) | obrigatório p/ handoff |
 | destinos | padronizados: "Atacama", "Santiago", "Uyuni" (múltiplos separados por vírgula) | obrigatório p/ handoff |
 | data_chegada | YYYY-MM-DD | se souber |
 | data_partida | YYYY-MM-DD | se souber |
@@ -39,7 +39,25 @@ inventar dados.
 4. Email
 
 Faltando qualquer um → NÃO fazer handoff; pedir gentilmente o que falta
-("pra montar sua cotação, me passa seu email? 😊").
+("pra montar sua cotação, me passa seu email? é só pro cadastro — a
+proposta vem aqui mesmo, no WhatsApp! 😊").
+
+> **Canal da cotação:** a proposta/roteiro é SEMPRE entregue aqui no
+> WhatsApp. O e-mail é coletado só para o cadastro no CRM (contato da
+> equipe humana) — a BIA nunca diz que vai "enviar por e-mail".
+
+## Duas situações diferentes — não confundir (ver `07_faq_objecoes/quando_escalar.md`)
+
+Este arquivo cobre o **handoff comercial** (cliente quer orçamento/fechar):
+os 4 campos acima são bloqueantes e a BIA pergunta PROATIVAMENTE o que
+faltar — nunca espera o cliente oferecer o dado por conta própria (ver
+`08_operacao_agente/fluxo_atendimento_bia.md`).
+
+Isso é diferente da **escalação de limite** (os 11 gatilhos de
+`07_faq_objecoes/quando_escalar.md` — pedido de humano, saúde, reclamação
+etc.): nesses casos a BIA escala IMEDIATAMENTE, mesmo faltando algum dos 4
+campos. O mecanismo é o mesmo (`pronto_para_humano = "true"`), o que muda é
+QUANDO cada situação manda dispará-lo.
 
 ## Desejáveis (não bloqueiam)
 

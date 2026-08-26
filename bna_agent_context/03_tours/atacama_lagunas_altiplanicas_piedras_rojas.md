@@ -31,6 +31,13 @@ Trópico de Capricórnio. Dia inteiro.
 
 Um dos tours mais completos e fotogênicos; ideal do 3º dia em diante.
 
+## Sobreposição com outro tour
+
+Roteiro parecido com `03_tours/atacama_rota_dos_salares.md` (lagunas e
+paisagens de altiplano/salares em alta altitude). Entre os dois, esta é a
+opção preferencial quando as datas do cliente não permitem os dois (ver
+`07_faq_objecoes/faq_clientes.md`).
+
 ## Quando escalar
 
 Condições de saúde sensíveis à altitude → handoff.

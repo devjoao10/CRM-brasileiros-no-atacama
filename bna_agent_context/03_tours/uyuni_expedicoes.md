@@ -17,12 +17,22 @@ Preços: ver `04_precos/precos_2026_uyuni.md`.
 
 ## Formatos
 
+Existem exatamente 4 formatos de expedição a Uyuni — nenhum outro:
+
 - **Regular 3 dias / 2 noites** — termina na Bolívia (cliente segue viagem
-  por lá).
-- **Regular 4 dias / 3 noites** — retorna a San Pedro de Atacama.
+  por lá). **Exige mínimo de 2 passageiros — NÃO oferecer a viajante
+  solo.** Viajante sozinho: oferecer o Regular 4 dias / 3 noites.
+- **Regular 4 dias / 3 noites** — retorna a San Pedro de Atacama. **É a
+  referência operacional padrão** quando o cliente não especifica duração
+  (e a opção correta para viajante solo).
 - Upgrade de quarto/banheiro privado disponível no regular (mín. 2 pessoas).
 - **Privado Express 3 dias** e **Privado Clássico 4 dias** — sempre retornam
   a San Pedro; valor por pessoa varia com o tamanho do grupo (2–4 pax).
+
+**NÃO existe expedição de 1 dia nem de 7 dias para Uyuni.** Pedido nesse
+formato é confusão com a duração TOTAL da viagem (ex.: Atacama + Uyuni
+somados) — nunca oferecer como se fosse produto Uyuni (ver
+`07_faq_objecoes/faq_clientes.md`).
 
 ## Pontos de venda honesta (obrigatório comunicar)
 

@@ -21,13 +21,22 @@ last_review: "2026-07-08"
 
 - 3 dias: Valle de la Luna (dia 1, baixa altitude) + Cejar ou Baltinache +
   Geisers (dia 3, já aclimatado) `[PENDENTE_VALIDACAO]` (sugestão a validar).
+- Rota dos Salares e Lagunas Altiplânicas + Piedras Rojas se SOBREPÕEM
+  (lagunas/altiplano/salares em alta altitude) — quando as datas do cliente
+  não permitem os dois, priorizar Lagunas Altiplânicas + Piedras Rojas (ver
+  `03_tours/atacama_lagunas_altiplanicas_piedras_rojas.md` e
+  `03_tours/atacama_rota_dos_salares.md`). Mesma lógica numa combinação
+  Atacama+Uyuni: Uyuni já cobre paisagem de salar, então emendar os dois
+  tours de salar do Atacama no mesmo pacote pode ser redundante.
 - Resposta padrão da BIA: entender dias disponíveis e perfil → sugerir 1–2
   opções → oferecer roteiro completo da equipe (coleta email → handoff).
 
 ## Quantos dias são suficientes?
 
 `[PENDENTE_VALIDACAO]` — definir recomendação oficial (ex.: Atacama 4–5
-dias; Atacama+Uyuni 7+; incluir Santiago +2–3).
+dias; Atacama+Uyuni 7+ — duração TOTAL somando os dois destinos, NÃO um
+produto Uyuni de 7 dias, já que a expedição Uyuni em si só existe em 3 ou 4
+dias, ver `03_tours/uyuni_expedicoes.md`; incluir Santiago +2–3).
 
 ## Preciso de visto/passaporte?
 

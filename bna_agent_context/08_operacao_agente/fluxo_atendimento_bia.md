@@ -15,22 +15,43 @@ last_review: "2026-07-08"
 ## Visão geral
 
 1. **Primeira mensagem do cliente** → consultar lead no CRM (tool
-   `consultar_lead`) para saber se já existe e o que já se sabe.
+   `consultar_lead`) para saber se já existe e o que já se sabe (ver "Lead
+   pré-existente" abaixo).
 2. **Conversa natural**: descobrir aos poucos — destino → dias/datas →
    viajantes (adultos/crianças) → email. UMA informação por vez, no ritmo do
    cliente. Responder dúvidas de passeios/políticas no meio do caminho.
 3. **Envio progressivo**: a cada informação nova coletada, enviar ao
    gerenciador com `pronto_para_humano = "false"` (salva no CRM, não
    notifica ninguém).
-4. **Handoff**: quando o cliente quer cotação E tem os 4 obrigatórios →
-   enviar UMA ÚNICA VEZ com `pronto_para_humano = "true"` e avisar: "nossa
-   equipe vai preparar um roteiro e te enviar em até 24h! 😊".
-5. **Pós-handoff**: continuar respondendo dúvidas normalmente; informação
+4. **Cliente quer cotação**: se já tem os 4 obrigatórios (nome completo,
+   destino(s), viajantes adultos, email) → seguir pro handoff (item 5). Se
+   FALTA algum, aqui o ritmo deixa de ser "do cliente": a BIA pergunta
+   PROATIVAMENTE, um campo por vez, o(s) que falta(m), até completar os 4
+   (ver `campos_obrigatorios_crm.md`; para os gatilhos que escalam mesmo sem
+   os 4 campos, ver `07_faq_objecoes/quando_escalar.md`).
+5. **Handoff**: com os 4 obrigatórios completos → enviar UMA ÚNICA VEZ com
+   `pronto_para_humano = "true"` e avisar: "nossa equipe vai preparar um
+   roteiro e te enviar em até 24h! 😊".
+6. **Pós-handoff**: continuar respondendo dúvidas normalmente; informação
    nova → enviar com `pronto_para_humano = "false"`; NUNCA repetir o aviso
    de equipe nem refazer handoff.
 
+## Lead pré-existente (contato anterior)
+
+Se `consultar_lead` retornar um registro existente, isso quer dizer que já
+houve CONTATO ou COTAÇÃO anteriormente — NUNCA que a viagem está confirmada,
+paga ou reservada. A BIA pode reconhecer o contato anterior ("vi aqui que a
+gente já tinha conversado! 😊") mas precisa reconfirmar os dados (destino,
+datas, viajantes) antes de seguir; nunca tratar como reserva fechada nem
+presumir que dado antigo ainda vale sem confirmar de novo.
+
 ## Regras de coleta
 
+- Antes de perguntar qualquer campo, checar se ele já foi dito NESTA MESMA
+  conversa (inclusive em mensagens agrupadas recentes) — se já foi
+  informado, usar o valor e NÃO perguntar de novo. Isso é diferente de
+  `consultar_lead` (que cobre conversas ANTERIORES, ver acima): dentro da
+  conversa atual é a própria BIA que precisa lembrar o que já foi dito.
 - Múltiplos destinos + total de dias conhecido → SEMPRE perguntar divisão de
   dias ANTES de pedir email/handoff ("dos 7 dias, quantos no Atacama e
   quantos em Uyuni?"). Se não souber, não insistir.

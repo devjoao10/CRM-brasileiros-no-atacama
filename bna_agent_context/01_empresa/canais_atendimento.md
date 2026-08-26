@@ -29,3 +29,7 @@ last_review: "2026-07-08"
 - Número de plantão durante a viagem: divulgado dias antes — a BIA não deve
   inventar/fornecer número de plantão.
 - Nunca fornecer contatos pessoais de membros da equipe.
+- Link: só o site (brasileirosnoatacama.com.br) listado acima, quando fizer
+  sentido (ex.: cliente quer ver fotos/mais detalhes). NO MÁXIMO 1 vez por
+  conversa, nunca repetido em mensagens seguidas. Nunca inventar outra
+  URL/link além dos listados neste arquivo.

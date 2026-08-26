@@ -17,23 +17,28 @@
 
 ## Contagem
 
-- **134** ocorrências do token `[PENDENTE_VALIDACAO]` no total (contagem bruta
+- **135** ocorrências do token `[PENDENTE_VALIDACAO]` no total (contagem bruta
   do validator `scripts/validate_bna_agent_context.py`).
-- **122** são itens de contexto reais, em **34** arquivos (ver tabelas abaixo).
+- **123** são itens de contexto reais, em **35** arquivos (ver tabelas abaixo).
 - **12** são usos ilustrativos/documentais do próprio token, **não** são dados
   pendentes: 8 nos índices originais (`../00_README.md`, `schema_frontmatter.md`,
   `checklist_atualizacao.md`, `pendencias_validacao.md`) + 4 neste próprio
   arquivo, ao explicar a regra.
 
-## Itens pendentes reais, por pasta (34 arquivos)
+## Itens pendentes reais, por pasta (35 arquivos)
 
-### 04_precos/ — 49 marcadores (prioridade máxima: preços)
+### 04_precos/ — 44 marcadores (prioridade máxima: preços)
 | Arquivo | Marcadores | status frontmatter |
 |---|---|---|
 | precos_2026_atacama.md | 18 | pendente_validacao |
 | precos_2026_santiago.md | 17 | pendente_validacao |
-| precos_2026_uyuni.md | 7 | pendente_validacao |
+| precos_2026_uyuni.md | 8 | pendente_validacao |
 | regras_de_preco.md | 1 | validado (marcador pontual) |
+
+> Item novo (H8, auditoria 2026-08): +1 marcador em `precos_2026_uyuni.md` —
+> conflito entre a regra de negócio (Regular 3 dias exige mín. 2 pax, não
+> ofertar a viajante solo) e a tabela (preço avulso por pessoa, sem mínimo
+> declarado). Detalhe em `_meta/pendencias_validacao.md`.
 
 ### 05_politicas/ — 20 marcadores
 | Arquivo | Marcadores | status frontmatter |

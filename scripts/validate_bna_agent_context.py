@@ -75,6 +75,95 @@ SECRET_PATTERNS = [
 
 MAX_FUTURE_PROMPT_CHARS = 8000
 
+# --- checks semanticos cross-file (auditoria 2026-08 — pegam contradicoes
+# que o check estrutural acima nao ve: campo divergente, precedencia
+# ausente, promessa de e-mail, produto Uyuni inexistente). ---
+
+HANDOFF_FIELD_KEYWORDS = ["nome completo", "destino", "viajante", "email"]
+ESCALATION_DISTINCTION_MARKERS = ["handoff comercial", "escalação de limite"]
+
+EMAIL_DELIVERY_RE = re.compile(
+    r"e-?mail\s+que\b(?:\s+\w+){0,4}\s+(envio|mando|manda|envia|retorno|retorna|retornamos)\b",
+    re.I,
+)
+
+UYUNI_BAD_DURATION_RE = re.compile(r"\b1\s*dia\b|\b7\s*dias\b", re.I)
+UYUNI_FILES = ["03_tours/uyuni_expedicoes.md", "04_precos/precos_2026_uyuni.md"]
+
+
+def check_handoff_fields_match(root: Path) -> str | None:
+    """campos_obrigatorios_crm.md e handoff_humano.md tem que citar os
+    MESMOS 4 campos bloqueantes — se um arquivo desalinhar, a IA que le so
+    um dos dois fica com uma lista diferente (causa raiz da H3)."""
+    f1 = root / "08_operacao_agente/campos_obrigatorios_crm.md"
+    f2 = root / "08_operacao_agente/handoff_humano.md"
+    if not f1.is_file() or not f2.is_file():
+        return None  # arquivo ausente ja e outra falha (REQUIRED_FILES)
+    t1 = f1.read_text(encoding="utf-8").lower()
+    t2 = f2.read_text(encoding="utf-8").lower()
+    missing1 = [k for k in HANDOFF_FIELD_KEYWORDS if k not in t1]
+    missing2 = [k for k in HANDOFF_FIELD_KEYWORDS if k not in t2]
+    if missing1 or missing2:
+        return (
+            "campos obrigatorios de handoff divergem: "
+            f"campos_obrigatorios_crm.md sem {missing1}, "
+            f"handoff_humano.md sem {missing2}"
+        )
+    return None
+
+
+def check_escalation_precedence(root: Path) -> str | None:
+    """Se quando_escalar.md manda escalar 'mesmo sem os 4 campos', o
+    arquivo precisa deixar explicita a distincao handoff comercial (4
+    campos bloqueantes) vs escalacao de limite (bloqueio nao vale) — senao
+    o modelo tem duas regras batendo na mesma alavanca (causa raiz da H3)."""
+    f = root / "07_faq_objecoes/quando_escalar.md"
+    if not f.is_file():
+        return None
+    text = f.read_text(encoding="utf-8").lower()
+    if "mesmo sem os 4 campos" not in text:
+        return None
+    missing = [m for m in ESCALATION_DISTINCTION_MARKERS if m not in text]
+    if missing:
+        return (
+            "quando_escalar.md cita 'mesmo sem os 4 campos' sem a "
+            f"distincao handoff comercial vs escalacao de limite (falta: {missing})"
+        )
+    return None
+
+
+def check_no_email_delivery_claim(root: Path) -> list[str]:
+    """Nenhum arquivo pode prometer que a cotacao vai 'por e-mail' — ela e
+    sempre entregue no WhatsApp; o e-mail e so cadastro no CRM (H6)."""
+    problems = []
+    for p in sorted(root.rglob("*.md")):
+        text = p.read_text(encoding="utf-8")
+        if EMAIL_DELIVERY_RE.search(text):
+            rel = str(p.relative_to(root)).replace("\\", "/")
+            problems.append(f"{rel}: frase sugere envio da cotacao por e-mail (proibido, ver H6)")
+    return problems
+
+
+def check_no_uyuni_1_or_7_day(root: Path) -> list[str]:
+    """uyuni_expedicoes.md/precos_2026_uyuni.md nao podem ofertar Uyuni de
+    1 dia nem de 7 dias — esses produtos nao existem (H7). Mencao e ok SE
+    for para negar (janela de contexto com 'nao existe' por perto)."""
+    problems = []
+    for relpath in UYUNI_FILES:
+        p = root / relpath
+        if not p.is_file():
+            continue
+        text = p.read_text(encoding="utf-8")
+        for m in UYUNI_BAD_DURATION_RE.finditer(text):
+            start = max(0, m.start() - 80)
+            end = min(len(text), m.end() + 80)
+            window = text[start:end].lower()
+            if "não existe" not in window and "nao existe" not in window:
+                problems.append(
+                    f"{relpath}: possivel oferta de Uyuni '{m.group(0)}' sem negacao proxima"
+                )
+    return problems
+
 
 def has_frontmatter(text: str) -> tuple[bool, list[str]]:
     if not text.startswith("---"):
@@ -154,6 +243,18 @@ def main() -> int:
 
     if (ROOT / "_meta/pendencias_validacao.md").is_file() and pendencias_total == 0:
         warnings.append("nenhum [PENDENTE_VALIDACAO] encontrado — inesperado nesta fase")
+
+    # checks semanticos cross-file (auditoria 2026-08)
+    handoff_mismatch = check_handoff_fields_match(ROOT)
+    if handoff_mismatch:
+        failures.append(handoff_mismatch)
+
+    escalation_problem = check_escalation_precedence(ROOT)
+    if escalation_problem:
+        failures.append(escalation_problem)
+
+    failures.extend(check_no_email_delivery_claim(ROOT))
+    failures.extend(check_no_uyuni_1_or_7_day(ROOT))
 
     print(f"Arquivos .md: {len(list(ROOT.rglob('*.md')))}")
     print(f"Marcadores [PENDENTE_VALIDACAO]: {pendencias_total}")

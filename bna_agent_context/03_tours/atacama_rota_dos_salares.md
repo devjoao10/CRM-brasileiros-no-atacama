@@ -31,6 +31,14 @@ e flora únicas.
 Quem quer paisagens andinas remotas e já está aclimatado. Não indicado para
 o primeiro dia de viagem.
 
+## Sobreposição com outro tour
+
+Roteiro parecido com `03_tours/atacama_lagunas_altiplanicas_piedras_rojas.md`
+(lagunas e paisagens de altiplano/salares em alta altitude). Datas curtas →
+priorizar Lagunas Altiplânicas + Piedras Rojas (ver
+`07_faq_objecoes/faq_clientes.md`); Rota dos Salares fica como opção
+adicional para quem já fez o outro ou tem mais dias disponíveis.
+
 ## Quando escalar
 
 Mesmas condições de saúde do Geisers del Tatio → handoff humano.
