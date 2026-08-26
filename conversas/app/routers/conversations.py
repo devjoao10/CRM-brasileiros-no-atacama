@@ -4,7 +4,7 @@ Includes responsavel (owner) management and CRM integration.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File, Form
 from sqlalchemy.orm import Session
@@ -791,6 +791,162 @@ async def conversation_counts(
     # terminou e nenhum humano respondeu ainda. So some quando alguem responde.
     payload["aguardando_humano"] = payload.get("fila", 0)
     return payload
+
+
+# ─── AUDIT-2026-08-WE (M8): follow-up por inatividade ─────────────────
+# docs/audit/N8N_MANUAL_CHANGES.md § M8. O repositorio NAO tem scheduler
+# (varredura completa: zero ocorrencias de APScheduler/cron/schedule.every); o
+# unico mecanismo temporal existente (webhook.py:_schedule_agent_debounce)
+# reseta a cada ATIVIDADE, o oposto do que se precisa aqui. O disparo (a cada
+# 30 min) e o envio do texto sao do n8n (Schedule Trigger); esta rota e SO a
+# consulta — "quais conversas estao em silencio agora".
+#
+# Piso pequeno (nao zero): `horas=0` tornaria a regra 3 (nenhuma mensagem nas
+# ultimas `horas`) sempre verdadeira, inclusive para uma conversa que acabou
+# de receber o proprio follow-up — reabriria o loop de perseguicao que a
+# regra 4 fecha. 0.01h (36s) ainda permite validar manualmente sem esperar
+# 8h de verdade.
+_INATIVAS_HORAS_MIN = 0.01
+# Teto derivado de SERVICE_WINDOW (a MESMA constante de service_window_open),
+# nunca de um 24 hardcoded: acima da janela da Meta nenhuma linha pode
+# satisfazer a condicao 2 (um follow-up fora da janela exigiria template).
+_INATIVAS_HORAS_MAX = SERVICE_WINDOW / timedelta(hours=1)
+
+
+@router.get(
+    "/inativas",
+    response_model=ConversationListResponse,
+    summary="M8: conversas silenciosas ha `horas`, elegiveis para follow-up",
+)
+async def list_inactive_conversations(
+    horas: float = Query(
+        8, ge=_INATIVAS_HORAS_MIN, le=_INATIVAS_HORAS_MAX,
+        description="Silencio minimo, em qualquer direcao, desde a ultima mensagem",
+    ),
+    limite: int = Query(50, ge=1, le=200, description="Teto de linhas por chamada"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    M8 — consulta pura para o Schedule Trigger do n8n (docs/audit/
+    N8N_MANUAL_CHANGES.md § M8). O n8n dispara a cada 30 min, le esta lista e
+    manda UMA mensagem de texto por conversa via `POST /{id}/messages`; esta
+    rota nao envia nada, so decide QUEM esta elegivel agora.
+
+    Elegivel = TODAS as condicoes:
+      1. status aberto (`LEGACY_OPEN_STATUSES`);
+      2. `last_customer_msg_at` dentro da janela de 24h da Meta (`SERVICE_WINDOW`,
+         a MESMA constante de `service_window_open`) E com pelo menos `horas`
+         de silencio: `agora-24h < last_customer_msg_at <= agora-horas`. Fora
+         da janela um follow-up precisaria de template aprovado — outro
+         problema, fora do escopo desta rota;
+      3. nenhuma mensagem, em QUALQUER direcao, nas ultimas `horas` — o lado
+         cliente e a propria condicao 2 (`<= agora-horas`); o lado outbound e
+         verificado abaixo, contra `silence_cutoff`;
+      4. no maximo UMA mensagem outbound desde a ultima entrada do cliente —
+         o guard anti-perseguicao. Mandado o follow-up, ele PROPRIO passa a
+         ser a mensagem mais recente da conversa e reprova a condicao 3 no
+         proximo poll (30 min depois); quando as `horas` se completarem de
+         novo, o CASO NORMAL ja tinha uma resposta anterior (Bia ou humano)
+         antes do follow-up — que assim vira a SEGUNDA outbound e reprova esta
+         condicao 4 PARA SEMPRE, ate o cliente mandar uma entrada nova (o que
+         avanca `last_customer_msg_at` e reinicia a contagem a partir dela).
+
+    DECISAO — conversa ainda com a Bia (`is_bot_active=True`) ESTA incluida
+    (nenhum filtro extra sobre essa coluna). Este endpoint nao distingue
+    "silencio na fila humana" de "silencio no meio da triagem com a Bia": as
+    quatro condicoes acima sao as UNICAS. Motivos:
+      - e exatamente o relato original ("o cliente para de responder e fica
+        no limbo") — um cliente que parou de responder a Bia NO MEIO da
+        triagem fica tao no limbo quanto um que parou de responder na fila
+        humana; excluir a Bia deixaria esse caso sem cobertura nenhuma;
+      - com o handoff degradado da Bia (rodada anterior desta auditoria), uma
+        Bia que falha ja MOVE a conversa para a fila humana (is_bot_active
+        vira False) em vez de deixá-la presa em is_bot_active=True — entao
+        `is_bot_active=True` aqui tende a significar "triagem em andamento e
+        pausada pelo silencio do cliente", nao "travada por um erro";
+      - o texto sugerido no work package (`docs/audit/N8N_MANUAL_CHANGES.md`
+        § M8) ja foi escrito para cobrir os dois casos com a MESMA pergunta:
+        "quer que eu siga com o seu roteiro [continuar com a Bia], ou prefere
+        falar com alguem do nosso time agora? [ir para humano]".
+
+    Custo: 3 queries no maximo, independente do tamanho do inbox — (1)
+    candidatas por status+janela, (2) `selectinload` em lote das tags dessas
+    candidatas (`ConversationResponse.tags` — sem isto a serializacao faria
+    lazy-load de tags UMA conversa por vez, o N+1 que `list_conversations` ja
+    evita do mesmo jeito), (3) agregado de outbound por conversa em UMA query
+    (join + GROUP BY). Nunca uma query por linha (mesmo padrao de
+    `_preencher_atendente_nome`/`crm_service.get_leads_responsaveis`). Sem
+    candidatas, para na query (1) — (2) e (3) so disparam quando ha o que buscar.
+    """
+    now = datetime.now(timezone.utc)
+    window_floor = now - SERVICE_WINDOW            # exclusivo — condicao 2 (janela Meta)
+    silence_cutoff = now - timedelta(hours=horas)   # inclusivo — condicoes 2 e 3 (lado cliente)
+
+    # Query 1/3: candidatas por status + janela, com tags em lote
+    # (selectinload — dispara so se `candidatas` nao vier vazio). `last_customer_
+    # msg_at IS NULL` nunca casa `>`/`<=` (logica de tres valores do SQL) —
+    # conversa sem inbound nunca teve janela, mesma regra de `service_window_open`.
+    candidatas = (
+        db.query(Conversation)
+        .options(selectinload(Conversation.tags))
+        .filter(
+            Conversation.status.in_(LEGACY_OPEN_STATUSES),
+            Conversation.last_customer_msg_at > window_floor,
+            Conversation.last_customer_msg_at <= silence_cutoff,
+        )
+        .all()
+    )
+    if not candidatas:
+        return ConversationListResponse(conversations=[], total=0)
+
+    # Query 3/3: outbound POSTERIOR ao ultimo inbound, em lote — join direto
+    # (cada conversa compara contra o SEU PROPRIO last_customer_msg_at; sem
+    # subquery correlacionada por linha). Ausente do dict = zero outbound.
+    candidate_ids = [c.id for c in candidatas]
+    outbound_stats = {
+        conversation_id: (outbound_count, last_outbound_at)
+        for conversation_id, outbound_count, last_outbound_at in (
+            db.query(
+                Message.conversation_id,
+                func.count(Message.id),
+                func.max(Message.created_at),
+            )
+            .join(Conversation, Conversation.id == Message.conversation_id)
+            .filter(
+                Conversation.id.in_(candidate_ids),
+                Message.direction == "outbound",
+                Message.created_at > Conversation.last_customer_msg_at,
+            )
+            .group_by(Message.conversation_id)
+            .all()
+        )
+    }
+
+    elegiveis = []
+    for c in candidatas:
+        outbound_count, last_outbound_at = outbound_stats.get(c.id, (0, None))
+        if outbound_count > 1:
+            continue  # condicao 4 — ja foi seguido (ou mais) desde o ultimo inbound
+        if last_outbound_at is not None:
+            # normaliza (SQLite devolve naive) — mesmo padrao de service_window_open
+            if last_outbound_at.tzinfo is None:
+                last_outbound_at = last_outbound_at.replace(tzinfo=timezone.utc)
+            if last_outbound_at > silence_cutoff:
+                continue  # condicao 3 — houve outbound dentro de `horas`
+        elegiveis.append(c)
+
+    # Mais silenciosa primeiro; id como desempate deterministico (F-523 —
+    # consulta sem desempate pode duplicar/pular linha entre chamadas).
+    elegiveis.sort(key=lambda c: (c.last_customer_msg_at, c.id))
+
+    pagina = elegiveis[:limite]
+    _preencher_atendente_nome(db, pagina)
+
+    return ConversationListResponse(
+        conversations=[ConversationResponse.model_validate(c) for c in pagina],
+        total=len(elegiveis),
+    )
 
 
 @router.get("/by-lead/{lead_id}", response_model=Optional[ConversationResponse])
