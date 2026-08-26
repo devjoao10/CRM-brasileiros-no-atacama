@@ -28,11 +28,18 @@ def _only_digits(value: Optional[str]) -> str:
     return "".join(ch for ch in (value or "") if ch.isdigit())
 
 
-async def lookup_lead_by_whatsapp(whatsapp: str, db: Session) -> Optional[dict]:
+async def lookup_lead_by_whatsapp(whatsapp: str, db: Session) -> tuple[Optional[dict], bool]:
     """
     Look up a lead in the CRM by WhatsApp number.
     Uses direct DB query on the shared 'leads' table.
-    Returns the lead data dict or None if not found.
+
+    Devolve `(lead, bloquear_criacao)`:
+      - `(dict, False)`  exatamente UM lead tem este numero;
+      - `(None, False)`  NENHUM lead tem este numero — o caller pode criar;
+      - `(None, True)`   nao da para afirmar que o numero e novo (dois ou mais
+                         leads com ele, ou a consulta falhou). O caller NAO
+                         pode vincular nem criar: criar aqui e fabricar mais um
+                         duplicado em cima do problema.
 
     AUDIT-2026-08-W2F (F10) — IDENTIDADE, nao "busca flexivel".
     O casamento antigo era `whatsapp LIKE '%<10 ultimos digitos>%'` e o primeiro
@@ -45,41 +52,60 @@ async def lookup_lead_by_whatsapp(whatsapp: str, db: Session) -> Optional[dict]:
     ruido de busca: e vazamento entre clientes. (`variables.py:226-229` ja
     documentava esta funcao como insegura para identidade e a evitava.)
 
-    Agora: o LIKE sobrou apenas como PRE-FILTRO barato (aproveita o indice/scan
-    e nao depende de regexp_replace, que existe no PostgreSQL mas nao no
-    SQLite); a decisao e feita em Python por igualdade EXATA dos digitos. E,
-    se mais de um lead casar exatamente, devolve NENHUM — ambiguidade e
-    recusada, nunca resolvida por "ORDER BY created_at DESC LIMIT 1", que
-    escolhia um cliente arbitrario.
+    AUDIT-2026-08-WF2 — o PRE-FILTRO passou a normalizar OS DOIS LADOS no SQL.
+    A decisao ja era por igualdade exata dos digitos, mas o conjunto de
+    candidatos vinha de um LIKE sobre a coluna CRUA: lead gravado com
+    formatacao (`+55 11 98765-4322`, que e exatamente o que o formulario do
+    site grava — o proprio `_only_digits` existe porque a coluna guarda `+`,
+    espaco, `()`, `-` e `.`) NUNCA entrava na lista. Nem o casamento exato nem
+    o guard de ambiguidade chegavam a ve-lo: o lookup devolvia None e
+    `auto_create_lead_in_crm` criava o lead DE NOVO, com a conversa presa ao
+    duplicado e o lead real — com e-mail, destinos e responsavel — orfao.
+    Medido em PostgreSQL 16 com 19.004 leads: o LIKE devolvia `[]`.
+
+    `regexp_replace(whatsapp, '[^0-9]', '', 'g')` e a mesma normalizacao de
+    `_only_digits`, agora do lado do banco, entao o pre-filtro devolve TODOS os
+    leads com aquele numero, em qualquer formato — que e o que o guard de
+    ambiguidade precisa enxergar para funcionar. Custo: continua um Seq Scan
+    (2,7 ms -> 11,5 ms nos mesmos 19k leads; o LIKE com `%` a esquerda tambem
+    nunca usou `ix_leads_whatsapp`). Com um indice de expressao sobre a mesma
+    normalizacao vira Index Scan de 0,1 ms — criar esse indice e migration
+    (`migrations/mNNN_*.py`), fora do escopo deste arquivo.
+
+    A igualdade em Python continua depois do SQL de proposito: `[^0-9]` do
+    PostgreSQL e ASCII e `str.isdigit()` nao e, entao quem decide identidade e
+    sempre o Python. Ambiguidade continua RECUSADA, nunca resolvida por
+    "ORDER BY created_at DESC LIMIT 1", que escolhia um cliente arbitrario.
+
+    SO-PostgreSQL, como o resto do modulo (`NOW()`, `::jsonb`, `RETURNING`):
+    em SQLite `regexp_replace` nao existe e a consulta cai no `except` — que
+    agora bloqueia a criacao em vez de deixar passar como "numero novo".
     """
     normalized = _only_digits(whatsapp)
     if not normalized:
-        return None
-    # Use last 10 digits only to NARROW the candidate set (nunca para decidir)
-    suffix = normalized[-10:] if len(normalized) >= 10 else normalized
+        return None, False
 
     try:
         candidates = db.execute(
             text(
                 "SELECT id, nome, whatsapp, email, responsavel_id "
                 "FROM leads "
-                "WHERE whatsapp LIKE :pattern "
-                "ORDER BY created_at DESC "
+                "WHERE regexp_replace(whatsapp, '[^0-9]', '', 'g') = :digitos "
                 "LIMIT 50"
             ),
-            {"pattern": f"%{suffix}%"},
+            {"digitos": normalized},
         ).fetchall()
 
         exact = [r for r in candidates if _only_digits(r.whatsapp) == normalized]
         if not exact:
-            return None
+            return None, False
         if len({r.id for r in exact}) > 1:
             logger.warning(
                 "Lookup de lead AMBIGUO para %s: %s leads com o mesmo numero "
                 "(%s) — nenhum vinculo automatico sera feito.",
                 normalized, len(exact), sorted({r.id for r in exact}),
             )
-            return None
+            return None, True
         result = exact[0]
 
         # Get responsavel name
@@ -99,10 +125,14 @@ async def lookup_lead_by_whatsapp(whatsapp: str, db: Session) -> Optional[dict]:
             "email": result.email,
             "responsavel_id": result.responsavel_id,
             "responsavel_nome": responsavel_nome,
-        }
+        }, False
     except Exception as e:
+        # AUDIT-2026-08-WF2 — falha AQUI nao e "numero novo". Este except cobre
+        # tambem a leitura do responsavel, que roda DEPOIS de o lead ter sido
+        # encontrado: devolver "pode criar" transformava um erro de consulta em
+        # duplicata do lead que a consulta tinha acabado de achar.
         logger.error(f"Erro ao buscar lead no banco: {e}")
-        return None
+        return None, True
 
 
 async def get_lead_pipeline_info(lead_id: int, db: Session) -> Optional[dict]:
@@ -524,10 +554,24 @@ async def auto_link_conversation(conversation: Conversation, db: Session) -> boo
     if not conversation.whatsapp:
         return False
 
-    lead_data = await lookup_lead_by_whatsapp(conversation.whatsapp, db)
+    lead_data, bloquear_criacao = await lookup_lead_by_whatsapp(conversation.whatsapp, db)
 
     # Lead not found — create automatically
     if not lead_data:
+        # AUDIT-2026-08-WF2 — "nao achei" e "nao sei" nao sao a mesma coisa.
+        # Com o pre-filtro corrigido o guard de ambiguidade finalmente enxerga o
+        # par formatado/nao-formatado do MESMO cliente; se criassemos assim
+        # mesmo, o unico efeito de detectar a duplicata seria produzir uma
+        # TERCEIRA. Sem vinculo e sem lead novo: a conversa fica pendente ate
+        # alguem unificar os leads no CRM, que e a unica correcao possivel.
+        if bloquear_criacao:
+            logger.warning(
+                "Conversa %s NAO vinculada: o WhatsApp dela nao identifica um "
+                "unico lead (ambiguidade ou falha de consulta — o log logo acima "
+                "diz qual). Nenhum lead foi criado; desambigue no CRM.",
+                conversation.id,
+            )
+            return False
         nome = conversation.nome or conversation.whatsapp
         lead_data = await auto_create_lead_in_crm(conversation.whatsapp, nome, db)
         if not lead_data:

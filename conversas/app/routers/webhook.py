@@ -133,6 +133,44 @@ _debounce_tasks: dict[int, asyncio.Task] = {}  # conversation_id -> scheduled ta
 # outbound ANTES da resposta automatica). Escrito por _remember_agent_cutoff,
 # lido por _schedule_agent_debounce, removido quando o lote e consumido.
 _debounce_cutoffs: dict = {}
+
+# AUDIT-2026-08-WF2 (D2) — LOTE EM VOO.
+#
+# `_debounce_cutoffs` so cobre a janela de 15s do debounce: a entrada e apagada
+# ANTES da chamada a Bia, que dura de 1m30 a AGENT_TIMEOUT.read (240s). Uma
+# mensagem que chega nesse meio nao acha corte em memoria e recalcula pelo
+# ultimo outbound COMMITADO — e as respostas da Bia so commitam no fim
+# (`record_outbound_message(..., commit=False)`). O corte volta para ANTES do
+# lote em voo e o lote seguinte reinclui o que ja foi enviado: o cliente recebe
+# duas respostas para a mesma pergunta e as tools do Gerenciador (Criar Lead,
+# Alterar Responsavel) rodam duas vezes sobre a mesma mensagem — exatamente o
+# que a docstring de `_fetch_agent_parts` proibe para o retry.
+#
+# Duas pecas, as duas necessarias:
+#
+#   _agent_locks           enfileira os lotes da MESMA conversa (conversas
+#                          diferentes seguem em paralelo). So o corte nao
+#                          bastaria: rodando junto com o lote 1, o lote 2 monta
+#                          o `historico` sem a resposta que o lote 1 ainda esta
+#                          produzindo e a Bia responde/age de novo assim mesmo.
+#   _agent_delivered_until created_at da ULTIMA mensagem ja entregue ao agente.
+#                          E um PISO que so avanca: nenhum lote desce abaixo
+#                          dele, entao nenhuma mensagem vai ao agente duas vezes
+#                          mesmo quando o corte foi recalculado do banco no meio
+#                          do voo. Nunca ENCOLHE o lote alem disso: e comparado
+#                          com o corte e vence so quando e mais novo.
+#
+# ponytail: estado de UM processo, como `_debounce_tasks`/`_debounce_cutoffs` e
+# `outbound._pending_statuses`. Com mais de um worker uvicorn, dois lotes da
+# mesma conversa caem em processos diferentes e a garantia cai junto — para
+# valer entre workers isto precisa virar lock/marcador no banco, nao mais um
+# dict. Sem limpeza de proposito: fica um Lock + um datetime por conversa
+# atendida pela Bia enquanto o processo viver; remover a entrada enquanto um
+# lote espera na fila do lock quebraria a exclusao (o proximo criaria OUTRO
+# lock). Se o consumo incomodar, TTL como o de `_pending_statuses`.
+_agent_locks: dict[int, asyncio.Lock] = {}
+_agent_delivered_until: dict = {}
+
 router = APIRouter(tags=["Webhook"])
 
 
@@ -798,6 +836,12 @@ async def _debounce_then_forward(conversation_id: int, cutoff=None):
     """
     Wait AGENT_DEBOUNCE_SECONDS, then forward all recent unprocessed
     messages to the AI agent as a single batch.
+
+    AUDIT-2026-08-WF2 (D2): da consulta do lote ate a resposta da Bia estar
+    commitada a conversa fica sob `_agent_locks` — um lote por conversa, por
+    vez. O lock e tomado ANTES de `SessionLocal()` de proposito: quem espera na
+    fila nao pode segurar conexao do pool (e `SessionLocal()` sozinho nao tira
+    conexao — a primeira query e que tira).
     """
     try:
         await asyncio.sleep(AGENT_DEBOUNCE_SECONDS)
@@ -808,6 +852,12 @@ async def _debounce_then_forward(conversation_id: int, cutoff=None):
     # Clean up the task reference
     _debounce_tasks.pop(conversation_id, None)
     _debounce_cutoffs.pop(conversation_id, None)
+
+    # AUDIT-2026-08-WF2 (D2): daqui ate o commit da resposta, um lote por vez
+    # nesta conversa. Espera em vez de desistir — desistir perderia a mensagem
+    # do cliente que este lote acabou de tirar da fila do debounce.
+    lock = _agent_locks.setdefault(conversation_id, asyncio.Lock())
+    await lock.acquire()
 
     # Use a fresh DB session (we're in a background task)
     db = SessionLocal()
@@ -830,6 +880,15 @@ async def _debounce_then_forward(conversation_id: int, cutoff=None):
         # sempre mais nova que a mensagem do cliente: o lote vinha vazio e a Bia
         # nunca respondia. `cutoff is None` = conversa sem outbound nenhum no
         # momento em que a mensagem chegou -> todo o inbound e pendente.
+        # AUDIT-2026-08-WF2 (D2) — PISO: o corte fotografado no webhook OU a
+        # ultima mensagem ja entregue ao agente, o que for mais NOVO. O corte
+        # pode ter sido recalculado do banco enquanto o lote anterior estava em
+        # voo (as respostas da Bia ainda nao estavam commitadas), e nesse caso
+        # ele aponta para ANTES de mensagens que ja foram ao agente.
+        entregue_ate = _agent_delivered_until.get(conversation_id)
+        if entregue_ate is not None and (cutoff is None or entregue_ate > cutoff):
+            cutoff = entregue_ate
+
         query = db.query(Message).filter(
             Message.conversation_id == conversation_id,
             Message.direction == "inbound",
@@ -843,6 +902,17 @@ async def _debounce_then_forward(conversation_id: int, cutoff=None):
             logger.debug(f"Nenhuma mensagem pendente para conversa {conversation_id}")
             return
 
+        # AUDIT-2026-08-WF2 (D2): avanca o piso AQUI, na mesma fatia sincrona da
+        # consulta. Sem ponto de suspensao entre as duas, nenhum outro lote pode
+        # ver estas mensagens como pendentes.
+        #
+        # ANTES da chamada, e nao depois, de proposito: se a chamada falhar, o
+        # cliente recebe o fallback e a conversa vai para a fila humana — mandar
+        # as MESMAS mensagens de novo no lote seguinte seria a duplicacao que
+        # este piso existe para impedir, e o n8n pode ter executado a Bia inteira
+        # mesmo quando nos desistimos da conexao (`responseMode: responseNode`).
+        _agent_delivered_until[conversation_id] = pending_msgs[-1].created_at
+
         # Combine all pending messages into one text
         combined_text = "\n".join(m.content for m in pending_msgs if m.content)
         logger.info(
@@ -854,6 +924,10 @@ async def _debounce_then_forward(conversation_id: int, cutoff=None):
     except Exception as e:
         logger.error(f"Erro no debounce da conversa {conversation_id}: {e}", exc_info=True)
     finally:
+        # Soltar o lock PRIMEIRO: `db.close()` pode levantar (rollback sobre
+        # conexao morta) e um lock nunca solto travaria essa conversa para
+        # sempre, sem recuperacao possivel a nao ser reiniciar o processo.
+        lock.release()
         db.close()
 
 
@@ -1035,7 +1109,28 @@ async def _forward_to_agent(conversation: Conversation, message_text: str, db: S
 
     agent_url = f"{N8N_BASE_URL}/webhook/agent-bia"
 
-    partes, silencio = await _fetch_agent_parts(agent_url, payload, conversation.id)
+    # AUDIT-2026-08-WF2 (D1) — DEVOLVER A CONEXAO AO POOL ANTES DA ESPERA.
+    #
+    # Ate aqui so houve leitura, mas a transacao esta aberta e a sessao segura
+    # UMA conexao. O await abaixo dura ate AGENT_TIMEOUT.read (240s; era 60s
+    # antes desta rodada, entao o tempo de retencao quadruplicou) e o pool do
+    # Conversas tem teto de 15 (pool_size=5 + max_overflow=10, database.py).
+    # Numa rajada de inbound — resposta a disparo de marketing — 15 lotes em voo
+    # zeram o pool: a 16a requisicao, inclusive o proprio POST /webhook e o
+    # polling do inbox, espera `pool_timeout` e recebe sqlalchemy.exc.TimeoutError,
+    # que esta em `_INFRA_ERRORS` -> 503 -> a Meta reentrega -> mais lotes -> o
+    # pool nao se recupera e o inbox dos atendentes cai junto.
+    #
+    # `close()` e nao `commit()` de proposito: alem de soltar a conexao ele
+    # DESLIGA os objetos da sessao, entao um acesso distraido a `conversation`
+    # depois do await falha alto em vez de ler valor velho em silencio. A sessao
+    # continua utilizavel — a proxima query abre transacao nova. Nao ha commit
+    # pendente para perder: so houve leitura ate aqui, tanto neste caminho
+    # quanto no unico chamador (`_debounce_then_forward`).
+    conversation_id = conversation.id
+    db.close()
+
+    partes, silencio = await _fetch_agent_parts(agent_url, payload, conversation_id)
 
     # AUDIT-2026-08-F2: silencio DELIBERADO da Bia (portao de emoji) nao e
     # degradacao. Sai daqui sem enviar nada e sem marcar falha — mandar o
@@ -1049,6 +1144,23 @@ async def _forward_to_agent(conversation: Conversation, message_text: str, db: S
     degraded = not partes
     if degraded:
         partes = [AGENT_FALLBACK_REPLY]
+
+    # AUDIT-2026-08-WF2 (D1) — RECARREGA depois da espera, e usa o que voltou.
+    #
+    # Passaram-se ate 4 minutos com a sessao fechada: um atendente pode ter
+    # assumido, respondido ou encerrado a conversa. O objeto lido antes do await
+    # esta DETACHED e com valores velhos; escrever por cima dele aplicaria
+    # decisao vencida — em especial no ramo `degraded`, que decide pela
+    # `primeira_resposta_humana_at` se a conversa volta para a fila de espera.
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id
+    ).first()
+    if conversation is None:
+        logger.error(
+            f"Conversa {conversation_id} desapareceu durante a chamada ao agente: "
+            f"resposta da Bia descartada, cliente sem resposta"
+        )
+        return
 
     # CONV-08b: cada parte e persistida com status fiel ao envio;
     # preview/unread so mudam se ao menos uma parte foi aceita.

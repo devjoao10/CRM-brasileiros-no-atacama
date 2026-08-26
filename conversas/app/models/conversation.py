@@ -99,7 +99,12 @@ class Conversation(Base):
         "Message",
         back_populates="conversation",
         cascade="all, delete-orphan",
-        order_by="Message.created_at"
+        # AUDIT-2026-08-WF2 — desempate por `id`: os dois leitores de mensagem
+        # que fazem query direto (routers/conversations.py e o `historico` de
+        # routers/webhook.py) ja ordenam com `Message.id`; so este ficou sem.
+        # Timestamps iguais existem (partes da mesma resposta da Bia flushadas
+        # juntas) e sem desempate a ordem delas e arbitraria.
+        order_by="Message.created_at, Message.id"
     )
     # CONV-05: tags N:N (link table com PK composta)
     tags = relationship(
@@ -148,7 +153,36 @@ class Message(Base):
     media_url = Column(Text, nullable=True)
     whatsapp_msg_id = Column(String(100), nullable=True, unique=True)
     status = Column(String(20), default="sent", nullable=False)  # sent, delivered, read, failed
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    # AUDIT-2026-08-WF2 — o INSTANTE do INSERT, nao o inicio da TRANSACAO.
+    #
+    # No PostgreSQL `now()` e `transaction_timestamp()`: toda linha inserida na
+    # mesma transacao recebe o MESMO valor, o do inicio dela. No SQLite
+    # `CURRENT_TIMESTAMP` e avaliado por statement — por isso a suite passa em
+    # dev e o defeito so existe em producao.
+    #
+    # `_debounce_then_forward` (routers/webhook.py) abre a transacao numa
+    # leitura, chama a Bia no n8n (AGENT_TIMEOUT=240s; 1m30-2m40 reais),
+    # persiste cada parte da resposta com `commit=False` e so commita no fim.
+    # Com `now()` as respostas ficavam com o timestamp em que o debounce
+    # ACORDOU — ANTERIOR ao das mensagens que o cliente mandou durante a espera,
+    # cada uma commitada na sua propria transacao curta. Em PostgreSQL real
+    # (16.14) isso ordena a RESPOSTA ANTES DA PERGUNTA no inbox e no `historico`
+    # que volta para a Bia.
+    #
+    # A correcao e o default do lado do PYTHON: a ORM avalia o callable ao
+    # emitir o INSERT, entao o valor nao depende do dialeto nem de quando a
+    # transacao comecou. `clock_timestamp()` corrigiria so o PostgreSQL, criaria
+    # mais uma divergencia de dialeto e — por ser DDL — exigiria ALTER TABLE
+    # para valer no banco que ja existe.
+    #
+    # `server_default` FICA: e o default do DDL para INSERT fora da ORM (psql,
+    # COPY, restore). Nesses caminhos a transacao e curta e `now()` basta. O DDL
+    # emitido pelo create_all nao muda, entao nao ha migration nem drift.
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
 
     # CONV-08b — integridade de outbound (base para retry).
     # Bancos existentes: aplicar migrations/m003_conversas_message_error_fields.py.
