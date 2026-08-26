@@ -205,7 +205,69 @@ check(msg_c_after[0].status == "failed", "apos existir a linha, 'delivered' cont
 
 # ===========================================================================
 print("\nD3 — retry HTTP com backoff (whatsapp.py)")
-whatsapp.send_text_message = _real_send_text_message  # restaura a funcao REAL (nao mock)
+whatsapp.send_text_message = _real_send_text_message
+
+
+# ---- D4b: falha NAO-HTTPException nao pode deixar a linha presa em 'retrying' ----
+# AUDIT-2026-08-WD (revisao) — o `except` do retry era `except HTTPException`, e o
+# comentario acima do claim promete que o bloco SEMPRE termina em 'sent' ou
+# 'failed'. Nao terminava: `local.read_bytes()` no ramo de midia le do disco e
+# pode levantar OSError (arquivo sumiu entre o resolve e a leitura, permissao,
+# disco cheio). Isso escapava com a linha ja commitada como 'retrying' — e o
+# guard da propria rota (`status != 'failed'` -> 409) tornava a mensagem
+# PERMANENTEMENTE nao-reenviavel: sem botao (que so aparece para 'failed') e
+# sem caminho de volta pela interface.
+print()
+print("D4b — falha inesperada devolve a mensagem para 'failed', nao deixa presa")
+conv_d4b_id = _new_conversation("5511900000045")
+sess = SessionLocal()
+msg_d4b = Message(conversation_id=conv_d4b_id, direction="outbound",
+                  content="mensagem que vai estourar", msg_type="text",
+                  status="failed", send_attempts=1)
+sess.add(msg_d4b)
+sess.commit()
+sess.refresh(msg_d4b)
+msg_d4b_id = msg_d4b.id
+sess.close()
+
+
+async def _send_que_estoura(to, text, db=None):
+    # NAO e HTTPException — e a classe de erro que escapava antes.
+    raise OSError("arquivo de midia sumiu entre o resolve e a leitura")
+
+
+whatsapp.send_text_message = _send_que_estoura
+try:
+    estourou = False
+    try:
+        client.post(f"/api/conversations/{conv_d4b_id}/messages/{msg_d4b_id}/retry")
+    except OSError:
+        estourou = True
+    except Exception:
+        estourou = True
+    check(estourou, "a excecao NAO e engolida — continua propagando")
+finally:
+    whatsapp.send_text_message = _real_send_text_message
+
+depois_d4b = q_messages(id=msg_d4b_id)
+check(bool(depois_d4b) and depois_d4b[0].status == "failed",
+      f"a mensagem voltou para 'failed' (got {depois_d4b[0].status if depois_d4b else None!r}) — "
+      f"presa em 'retrying' ela nunca mais poderia ser reenviada")
+
+# E a prova de que voltar para 'failed' importa: um novo retry e ACEITO.
+# Mock local de sucesso — D4b nao pode depender de um mock definido em outra
+# secao, senao a ordem das secoes vira acoplamento escondido.
+async def _send_ok_d4b(to, text, db=None):
+    return {"messages": [{"id": "wamid.D4B_OK"}]}
+
+
+whatsapp.send_text_message = _send_ok_d4b
+try:
+    r_de_novo = client.post(f"/api/conversations/{conv_d4b_id}/messages/{msg_d4b_id}/retry")
+    check(r_de_novo.status_code == 200,
+          f"um novo retry e aceito depois da falha inesperada (got {r_de_novo.status_code})")
+finally:
+    whatsapp.send_text_message = _real_send_text_message  # restaura a funcao REAL (nao mock)
 
 _call_count = {"n": 0}
 _resp_queue = []

@@ -1697,10 +1697,25 @@ async def retry_message(
                 raise HTTPException(status_code=400, detail="Reenvio nao suportado para este tipo de mensagem")
         else:
             raise HTTPException(status_code=400, detail="Reenvio nao suportado para este tipo de mensagem")
-    except HTTPException:
+    except Exception:
         # AUDIT-2026-08-WD (D4): reverte o CLAIM ('retrying' -> 'failed') antes
         # de propagar — senao a mensagem ficaria presa sem o botao de reenvio
         # (que so aparece para status='failed') para sempre.
+        #
+        # AUDIT-2026-08-WD (revisao): era `except HTTPException`, e o comentario
+        # acima do claim promete que o bloco SEMPRE termina em 'sent' ou
+        # 'failed'. Nao terminava: `local.read_bytes()` le do disco e pode
+        # levantar OSError/FileNotFoundError (arquivo removido entre o
+        # `is_file()` do resolve e a leitura, permissao, disco cheio). Isso
+        # escapava do `except HTTPException` com a linha ja commitada como
+        # 'retrying' — e o guard da propria rota (`status != 'failed'` -> 409)
+        # tornava a mensagem PERMANENTEMENTE nao-reenviavel, sem botao e sem
+        # caminho de volta pela interface.
+        #
+        # `except Exception` com `raise` nu nao muda nada para os dois
+        # HTTPException(400) intencionais: eles continuam propagando iguais. O
+        # que muda e que qualquer outra falha tambem devolve a linha para
+        # 'failed' antes de subir.
         message.status = "failed"
         db.commit()
         raise
