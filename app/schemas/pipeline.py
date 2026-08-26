@@ -162,6 +162,31 @@ class HistoryResponse(BaseModel):
     dados: dict = {}
     created_at: Optional[datetime] = None
 
+    # AUDIT-2026-08-WG (F-503) — UMA linha com `dados` NULL derrubava o
+    # historico INTEIRO do lead.
+    #
+    # `LeadHistory.dados` e `Column(JSON, default=dict)`: o default e do lado
+    # Python, entao a coluna e NULL-avel e qualquer escrita que nao passe pela
+    # ORM — reparo manual via psql, restore de dump, SQL cru, codigo antigo —
+    # grava NULL. Aqui o campo era `dict` NAO-opcional, entao o Pydantic
+    # levantava ValidationError na serializacao e
+    # `GET /api/pipeline/history/{lead_id}` devolvia 500. Nao para aquela
+    # linha: para a resposta toda. O timeline do lead ficava inacessivel, e
+    # "Ver no Funil" abria numa tela quebrada.
+    #
+    # Ja houve um incidente exatamente assim (AUDIT-2026-08-W2F/F9), corrigido
+    # do lado de QUEM ESCREVE. Isto corrige do lado de QUEM LE, que e o unico
+    # lado capaz de sobreviver a uma linha legada que ninguem pode reescrever
+    # daqui sem autorizacao.
+    #
+    # A normalizacao e para NULL apenas: um `dados` com conteudo continua
+    # intacto, e um valor que nao seja objeto continua sendo erro de verdade —
+    # nao queremos esconder dado malformado, so a ausencia.
+    @field_validator("dados", mode="before")
+    @classmethod
+    def _dados_nulo_vira_vazio(cls, valor):
+        return {} if valor is None else valor
+
     class Config:
         from_attributes = True
 
