@@ -170,6 +170,49 @@ rows_after = crm_exec(
 check(len(rows_after) == 0, "remover no Conversas removeu o vinculo no CRM")
 
 
+# ==== 3b. AUDIT-2026-08-WD — recusar remocao SO quando o espelho ressuscita ====
+print()
+print("SYNC — falha no CRM: recusa quando o espelho volta, permite quando nao volta")
+# A remocao local e recusada (502) porque `sync_lead_tags_to_conversation`
+# reespelha o conjunto do CRM a cada abertura: sem a remocao la, a tag volta
+# sozinha. Mas esse espelho DESISTE quando o CRM esta inacessivel — e ai a
+# remocao local nao volta, e recusar quebraria o inbox por um risco inexistente
+# (foi o que aconteceu em dev isolado, onde as tabelas do CRM nem existem).
+from app.routers import tags as tags_router  # noqa: E402
+
+_orig_remove = tags_router.crm_service.remove_tag_from_lead
+_orig_get = tags_router.crm_service.get_lead_tags
+
+# reaplica a tag para ter o que remover nos dois cenarios
+client.post(f"/api/conversations/{CID_L}/tags/{TAG_ORC}")
+
+try:
+    # (a) CRM ALCANCAVEL e a remocao falhou -> 502, e a tag CONTINUA local
+    tags_router.crm_service.remove_tag_from_lead = lambda *a, **k: False
+    tags_router.crm_service.get_lead_tags = lambda *a, **k: []      # alcancavel
+    r_502 = client.delete(f"/api/conversations/{CID_L}/tags/{TAG_ORC}")
+    check(r_502.status_code == 502,
+          f"CRM alcancavel + remocao falhou -> 502 (obteve {r_502.status_code})")
+    # Le o vinculo LOCAL direto no banco: `GET /api/conversations/{id}` abre a
+    # conversa e dispara o espelho, que com o mock `get_lead_tags -> []`
+    # esvaziaria as tags — e o teste estaria medindo o espelho, nao a rota.
+    ainda = client.get(f"/api/conversations/{CID_L}?opening=false").json()["tags"]
+    check(any(t["nome"] == "Orcamento" for t in ainda),
+          "a tag NAO foi removida localmente — nao vai reaparecer no proximo reabrir")
+
+    # (b) CRM INACESSIVEL -> 200, remove local (o espelho tambem nao roda)
+    tags_router.crm_service.get_lead_tags = lambda *a, **k: None    # inacessivel
+    r_ok = client.delete(f"/api/conversations/{CID_L}/tags/{TAG_ORC}")
+    check(r_ok.status_code == 200,
+          f"CRM inacessivel -> remocao local permitida (obteve {r_ok.status_code})")
+    depois = client.get(f"/api/conversations/{CID_L}").json()["tags"]
+    check(not any(t["nome"] == "Orcamento" for t in depois),
+          "a tag saiu localmente mesmo com o CRM fora — o inbox nao trava")
+finally:
+    tags_router.crm_service.remove_tag_from_lead = _orig_remove
+    tags_router.crm_service.get_lead_tags = _orig_get
+
+
 # ============ 4. CONVERSA SEM LEAD = LOCAL PURO ============
 print("\nSYNC — conversa sem lead nao toca o CRM")
 crm_count_before = crm_exec("SELECT COUNT(*) AS c FROM lead_tags")[0].c

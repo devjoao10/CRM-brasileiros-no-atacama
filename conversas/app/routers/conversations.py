@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db, IS_SQLITE
 from app.auth import get_current_user, is_admin_role, User
-from app.models.conversation import Conversation, Message, service_window_open
+from app.models.conversation import Conversation, Message, service_window_open, SERVICE_WINDOW
 from app.schemas.conversation import (
     ConversationResponse,
     ConversationDetail,
@@ -87,6 +87,39 @@ def _require_open_window(conversation: Conversation) -> None:
             status_code=409,
             detail={"code": "WINDOW_CLOSED", "message": WINDOW_CLOSED_MESSAGE},
         )
+
+
+def _service_window_expires_at(last_customer_msg_at: Optional[datetime]) -> Optional[datetime]:
+    """
+    AUDIT-2026-08-WD (D1) — instante em que a janela de 24h fecha, exposto
+    como TIMESTAMP para o frontend RENDERIZAR em vez de recalcular. Mesma
+    regra de `Conversation.service_window_open` (app/models/conversation.py:
+    SERVICE_WINDOW = 24h a partir do ultimo inbound) — so em outro formato;
+    `service_window_open` continua INALTERADO e continua sendo quem DECIDE se
+    a janela esta aberta.
+
+    None quando nao ha inbound ainda (`last_customer_msg_at is None`).
+    """
+    if last_customer_msg_at is None:
+        return None
+    if last_customer_msg_at.tzinfo is None:
+        last_customer_msg_at = last_customer_msg_at.replace(tzinfo=timezone.utc)
+    return last_customer_msg_at + SERVICE_WINDOW
+
+
+class ConversationDetailWithWindow(ConversationDetail):
+    """
+    AUDIT-2026-08-WD (D1) — estende `ConversationDetail` com
+    `service_window_expires_at` (ver `_service_window_expires_at` acima).
+
+    Subclasse LOCAL a este router, e nao um campo novo em
+    `app/schemas/conversation.py`: aquele arquivo esta fora do conjunto de
+    arquivos deste pacote de auditoria. Puramente aditiva — nao redefine nem
+    repete nenhum campo de `ConversationDetail`, so response_model de
+    `GET /{conversation_id}` (unico endpoint que alimenta `activeConversation`
+    no frontend, tanto na abertura quanto no polling de 5s).
+    """
+    service_window_expires_at: Optional[datetime] = None
 
 
 async def _build_template_send(
@@ -304,6 +337,30 @@ def _lock_conversation(db: Session, conversation_id: int) -> Conversation:
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversa nao encontrada")
     return conversation
+
+
+def _lock_message(db: Session, conversation_id: int, message_id: int) -> Message:
+    """
+    AUDIT-2026-08-WD (D4) — mesmo padrao de `_lock_conversation`, na linha da
+    MENSAGEM: e o campo `status` dela que `retry_message` faz check-then-act.
+    Duas requisicoes concorrentes (duplo clique, ou duas abas) paravam as duas
+    no mesmo `if message.status != 'failed'` e reenviavam AS DUAS — o cliente
+    recebia a mesma mensagem duas vezes. No Postgres, `FOR UPDATE` serializa a
+    segunda ate a primeira commitar; no SQLite `with_for_update()` nao existe
+    (mesmo motivo do `_lock_conversation`). Ver o CLAIM logo no inicio de
+    `retry_message`: e ele (uma UPDATE condicional, nao esta trava sozinha)
+    que fecha a corrida no intervalo real do bug — a chamada de REDE entre a
+    leitura do status e a escrita, que nenhuma trava de linha cobre sozinha.
+    """
+    query = db.query(Message).filter(
+        Message.id == message_id, Message.conversation_id == conversation_id
+    )
+    if not IS_SQLITE:
+        query = query.with_for_update()
+    message = query.first()
+    if not message:
+        raise HTTPException(status_code=404, detail="Mensagem nao encontrada")
+    return message
 
 
 # AUDIT-2026-08-WA — `_apply_human_state` mudou de casa.
@@ -764,7 +821,7 @@ async def list_users_for_responsavel(
     return {"users": users}
 
 
-@router.get("/{conversation_id}", response_model=ConversationDetail)
+@router.get("/{conversation_id}", response_model=ConversationDetailWithWindow)
 async def get_conversation(
     conversation_id: int,
     opening: bool = Query(
@@ -848,7 +905,12 @@ async def get_conversation(
     set_committed_value(conversation, "messages", list(reversed(recent)))
 
     _preencher_atendente_nome(db, [conversation])
-    return ConversationDetail.model_validate(conversation)
+    # AUDIT-2026-08-WD (D1): `service_window_expires_at` nao e atributo do
+    # model — setado explicitamente apos a validacao (from_attributes so le o
+    # que existe em `conversation`).
+    detail = ConversationDetailWithWindow.model_validate(conversation)
+    detail.service_window_expires_at = _service_window_expires_at(conversation.last_customer_msg_at)
+    return detail
 
 
 @router.put("/{conversation_id}", response_model=ConversationResponse)
@@ -1400,6 +1462,19 @@ async def retry_message(
       salvo e o corpo renderizado, nao os parametros do template).
     Atualiza a MESMA linha (sem duplicar mensagem), incrementa send_attempts
     e last_attempt_at, e limpa/atualiza last_error conforme o resultado.
+
+    AUDIT-2026-08-WD (D4) — o check-then-act original (`if message.status !=
+    'failed'`) tinha uma corrida: duas requisicoes concorrentes (duplo clique,
+    duas abas) passavam AS DUAS pelo `if` e reenviavam AS DUAS — o cliente
+    recebia a mesma mensagem duplicada. `_lock_message` ja ajuda no Postgres,
+    mas o intervalo real do bug e a chamada de REDE entre a leitura do status
+    e a escrita, que uma trava de linha sozinha nao cobre (ela so serializa
+    leitura+escrita, sem rede no meio). O que fecha a corrida de fato e o
+    CLAIM logo abaixo: uma UPDATE ATOMICA condicionada a `status='failed'`,
+    commitada ANTES de qualquer chamada a Meta — so a requisicao cujo UPDATE
+    realmente casar a condicao segue adiante; a outra ve rowcount=0 e para
+    ali, sem jamais tocar a rede. Funciona identico em SQLite e Postgres (a
+    atomicidade e da propria UPDATE, nao de `FOR UPDATE`).
     """
     conversation = db.query(Conversation).filter(
         Conversation.id == conversation_id
@@ -1407,12 +1482,7 @@ async def retry_message(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversa nao encontrada")
 
-    message = db.query(Message).filter(
-        Message.id == message_id,
-        Message.conversation_id == conversation_id,
-    ).first()
-    if not message:
-        raise HTTPException(status_code=404, detail="Mensagem nao encontrada")
+    message = _lock_message(db, conversation_id, message_id)
 
     if message.direction != "outbound":
         raise HTTPException(status_code=400, detail="Apenas mensagens enviadas podem ser reenviadas")
@@ -1425,37 +1495,59 @@ async def retry_message(
     # (template ja e recusado logo abaixo, entao aqui so ha free-form.)
     _require_open_window(conversation)
 
-    if message.msg_type == "text":
-        wa_response = await whatsapp.send_text_message(conversation.whatsapp, message.content, db)
-    elif message.msg_type in ("image", "audio", "document", "video"):
-        # CONV-03: midia com espelho local (upload do operador) -> re-upload + send
-        from app.services import media_storage
-        asset = message.media_asset
-        local = media_storage.resolve_local_file(asset) if asset else None
-        if local is not None:
-            up = await whatsapp.upload_media(local.read_bytes(), asset.meta_mime_type or "application/octet-stream", db)
-            if not isinstance(up, dict) or up.get("error"):
-                wa_response = {
-                    "error": True,
-                    "summary": (up.get("summary") if isinstance(up, dict) else None)
-                    or "falha no re-upload da midia",
-                }
-            elif up.get("simulated"):
-                wa_response = {"simulated": True}
-            else:
-                asset.meta_media_id = up.get("id")
+    # AUDIT-2026-08-WD (D4): CLAIM atomico — ver docstring acima. 'retrying'
+    # e um status TRANSIENTE: o codigo abaixo SEMPRE termina em 'sent' ou
+    # 'failed' (nunca deixa a linha presa aqui, mesmo quando a Meta recusa o
+    # reenvio ou o tipo de midia nao e suportado).
+    claim = db.execute(
+        sa_update(Message)
+        .where(Message.id == message.id, Message.status == "failed")
+        .values(status="retrying")
+    )
+    if claim.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Apenas mensagens com falha podem ser reenviadas")
+    db.commit()
+
+    try:
+        if message.msg_type == "text":
+            wa_response = await whatsapp.send_text_message(conversation.whatsapp, message.content, db)
+        elif message.msg_type in ("image", "audio", "document", "video"):
+            # CONV-03: midia com espelho local (upload do operador) -> re-upload + send
+            from app.services import media_storage
+            asset = message.media_asset
+            local = media_storage.resolve_local_file(asset) if asset else None
+            if local is not None:
+                up = await whatsapp.upload_media(local.read_bytes(), asset.meta_mime_type or "application/octet-stream", db)
+                if not isinstance(up, dict) or up.get("error"):
+                    wa_response = {
+                        "error": True,
+                        "summary": (up.get("summary") if isinstance(up, dict) else None)
+                        or "falha no re-upload da midia",
+                    }
+                elif up.get("simulated"):
+                    wa_response = {"simulated": True}
+                else:
+                    asset.meta_media_id = up.get("id")
+                    wa_response = await whatsapp.send_media_message(
+                        conversation.whatsapp, message.msg_type,
+                        caption=message.content or "", db=db, media_id=up.get("id"),
+                    )
+            elif message.media_url:
                 wa_response = await whatsapp.send_media_message(
-                    conversation.whatsapp, message.msg_type,
-                    caption=message.content or "", db=db, media_id=up.get("id"),
+                    conversation.whatsapp, message.msg_type, message.media_url, message.content, db
                 )
-        elif message.media_url:
-            wa_response = await whatsapp.send_media_message(
-                conversation.whatsapp, message.msg_type, message.media_url, message.content, db
-            )
+            else:
+                raise HTTPException(status_code=400, detail="Reenvio nao suportado para este tipo de mensagem")
         else:
             raise HTTPException(status_code=400, detail="Reenvio nao suportado para este tipo de mensagem")
-    else:
-        raise HTTPException(status_code=400, detail="Reenvio nao suportado para este tipo de mensagem")
+    except HTTPException:
+        # AUDIT-2026-08-WD (D4): reverte o CLAIM ('retrying' -> 'failed') antes
+        # de propagar — senao a mensagem ficaria presa sem o botao de reenvio
+        # (que so aparece para status='failed') para sempre.
+        message.status = "failed"
+        db.commit()
+        raise
 
     r = classify_wa_response(wa_response)
     message.send_attempts = (message.send_attempts or 0) + 1
@@ -1478,6 +1570,10 @@ async def retry_message(
         logger.info(f"Reenvio OK da mensagem {message.id} (conversa {conversation.id})")
         return MessageResponse.model_validate(message)
 
+    # AUDIT-2026-08-WD (D4): Meta recusou o reenvio -> volta para 'failed'
+    # explicitamente (o CLAIM acima ja tirou a linha de 'failed'; sem isto ela
+    # ficaria presa em 'retrying' e o botao de reenvio nunca mais apareceria).
+    message.status = "failed"
     message.last_error = r["error_summary"]
     db.commit()
     logger.warning(

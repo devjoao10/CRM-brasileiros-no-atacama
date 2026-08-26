@@ -142,9 +142,16 @@ async def remove_tag(
     # conjunto de tags do lead a cada abertura (fonte de verdade = CRM).
     # Sincronizando primeiro e falhando a request se nao der certo, a remocao
     # local so acontece quando ela vai sobreviver ao proximo reabrir.
+    #
+    # AUDIT-2026-08-WD — a recusa vale SO quando o espelho pode ressuscitar a
+    # tag. `sync_lead_tags_to_conversation` desiste sem tocar nas tags locais
+    # quando o CRM esta inacessivel (`get_lead_tags` devolve None) — nesse caso
+    # a remocao local NAO reaparece, e recusar seria quebrar o inbox por um
+    # risco que nao existe ali (foi o que aconteceu em dev isolado, onde as
+    # tabelas do CRM nem existem). A sonda extra so roda no caminho de falha.
     if conv.lead_id and conv.lead_id > 0:
         removida_no_crm = crm_service.remove_tag_from_lead(conv.lead_id, tag.nome, db)
-        if not removida_no_crm:
+        if not removida_no_crm and crm_service.get_lead_tags(conv.lead_id, db) is not None:
             raise HTTPException(
                 status_code=502,
                 detail=(
@@ -152,6 +159,14 @@ async def remove_tag(
                     "cancelada para evitar que a tag reaparecesse sozinha ao "
                     "reabrir a conversa."
                 ),
+            )
+        if not removida_no_crm:
+            logger.warning(
+                "Tag %r removida so no Conversas: o CRM esta inacessivel "
+                "(conversa %s, lead %s). O espelho tambem nao roda nesse "
+                "estado, entao a tag nao volta sozinha — mas o CRM segue com "
+                "ela ate a proxima sincronizacao.",
+                tag.nome, conv.id, conv.lead_id,
             )
     if tag in conv.tags:
         conv.tags.remove(tag)

@@ -917,6 +917,25 @@
     let tplSending = false;   // guard de duplo clique (UI)
 
     /**
+     * AUDIT-2026-08-WD (D1): HH:MM no fuso do navegador (mesmo padrao de
+     * formatTime, mais abaixo neste arquivo). `service_window_expires_at` e
+     * um timestamp que o BACKEND ja calculou — isto so FORMATA, nunca soma
+     * 24h.
+     */
+    function formatWindowClock(date) {
+        return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    /** "faltam 2h13min" / "faltam 47min"; null quando o instante ja passou. */
+    function formatWindowRemaining(expiresAt) {
+        const totalMin = Math.floor((expiresAt.getTime() - Date.now()) / 60000);
+        if (totalMin <= 0) return null;
+        const h = Math.floor(totalMin / 60);
+        const m = totalMin % 60;
+        return h > 0 ? `${h}h${m}min` : `${m}min`;
+    }
+
+    /**
      * Aplica o estado da janela ao composer. Esconder o composer NAO basta:
      * Enter, o input de arquivo e os botoes de reenvio continuariam vivos.
      * Cada mecanismo free-form e desligado explicitamente.
@@ -939,13 +958,33 @@
         if (btnSend) btnSend.disabled = !open;
         if (btnAttach) btnAttach.disabled = !open;
 
+        // AUDIT-2026-08-WD (D1): o atendente nao tinha como saber QUANDO a
+        // janela fecha, so que estava aberta ou fechada. `service_window_expires_at`
+        // vem PRONTO do backend (nunca somado aqui) — mostrado no cabecalho
+        // enquanto aberta e no aviso de janela encerrada depois de fechar.
+        const expiryEl = document.getElementById('chatWindowExpiry');
+        const expiresAt = (conv && conv.service_window_expires_at)
+            ? new Date(conv.service_window_expires_at) : null;
+
         if (!open) {
             closeQrPalette(false);
             closeVarPalette();
-        } else {
-            document.getElementById('windowClosedText').textContent =
-                'O cliente não envia uma mensagem há mais de 24 horas. '
-                + 'Para retomar o atendimento, envie um template aprovado.';
+            if (expiryEl) expiryEl.style.display = 'none';
+            document.getElementById('windowClosedText').textContent = expiresAt
+                ? `Janela de 24h encerrada às ${formatWindowClock(expiresAt)}. `
+                  + 'Para retomar o atendimento, envie um template aprovado.'
+                : 'O cliente não envia uma mensagem há mais de 24 horas. '
+                  + 'Para retomar o atendimento, envie um template aprovado.';
+        } else if (expiryEl) {
+            if (expiresAt) {
+                const restante = formatWindowRemaining(expiresAt);
+                expiryEl.textContent = restante
+                    ? `Janela fecha às ${formatWindowClock(expiresAt)} (faltam ${restante})`
+                    : `Janela fecha às ${formatWindowClock(expiresAt)}`;
+                expiryEl.style.display = '';
+            } else {
+                expiryEl.style.display = 'none';
+            }
         }
     }
 
@@ -1905,6 +1944,14 @@
     };
 
     // CONV-08b: reenvio manual de mensagem outbound com falha
+    // AUDIT-2026-08-WD (D4): guard de modulo p/ duplo clique/duas abas.
+    // Antes desta linha `retrySending` era usado (linhas abaixo) SEM nunca
+    // ter sido declarado — em strict mode isso e ReferenceError na PRIMEIRA
+    // leitura, entao TODO clique em reenviar lancava excecao antes de chegar
+    // ao fetch: nenhuma requisicao de retry saia do navegador. O guard em si
+    // (disable do botao, checagem antes do envio, reset no finally) ja
+    // seguia o mesmo padrao de `tplSending` — faltava so esta declaracao.
+    let retrySending = false;
     window._retryMessage = async function (msgId, btn) {
         if (!activeConversation) return;
         // CONV-WINDOW-01: reenvio e free-form — o botao some com a janela fechada,

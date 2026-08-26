@@ -27,7 +27,12 @@ from app.services import whatsapp
 from app.services import crm as crm_service
 from app.services import variables as variables_service
 from app.services.atendimento import aplicar_estado_humano
-from app.services.outbound import record_outbound_message, NOT_FAILED_STATUSES
+from app.services.outbound import (
+    record_outbound_message,
+    NOT_FAILED_STATUSES,
+    apply_status_rank,
+    remember_pending_status,
+)
 from app.models.media_asset import MediaAsset
 
 logger = logging.getLogger(__name__)
@@ -94,12 +99,12 @@ _INFRA_ERRORS = (
     OSError,                  # cobre ConnectionError, socket, disco
 )
 
-# AUDIT-2026-08-W1D (F5) — precedencia de status de entrega da Meta.
-# A Meta NAO garante ordem de callback e reentrega os antigos, entao um
-# 'delivered' atrasado chegava DEPOIS do 'read' e regredia a mensagem.
-# 'failed' e TERMINAL: nunca pode ser apagado por um 'sent' velho, senao a
-# nao-entrega some da tela do operador.
-_STATUS_RANK = {"sent": 1, "delivered": 2, "read": 3}
+# AUDIT-2026-08-W1D (F5) — precedencia de status de entrega da Meta: um
+# 'delivered' atrasado nao pode regredir um 'read', e 'failed' e TERMINAL.
+# AUDIT-2026-08-WD (D2): a regra (antes so aqui) mudou para
+# `app.services.outbound.apply_status_rank` — agora e usada TAMBEM ao inserir
+# uma mensagem cujo wamid tem um status orfao pendente
+# (`outbound.consume_pending_status`), entao precisa valer nos dois lugares.
 
 
 def _is_signature_required() -> bool:
@@ -662,31 +667,37 @@ async def _process_status_update(status_update: dict, db: Session):
 
     message = db.query(Message).filter(Message.whatsapp_msg_id == msg_id).first()
     if not message:
-        # AUDIT-2026-08-W1D (F5): antes isto era um `return` mudo. Status para um
-        # wamid desconhecido significa que o Message nao foi persistido, que o
-        # wamid nao foi gravado, ou que a Meta esta falando de outro numero —
-        # todas hipoteses que so aparecem se alguem puder ver.
-        logger.warning(f"Status '{new_status}' para wamid desconhecido no banco: {msg_id}")
-        return
-
-    # AUDIT-2026-08-W1D (F5) — SO AVANCA, nunca regride.
-    current = message.status or ""
-    if current == "failed" and new_status != "failed":
-        logger.info(
-            f"Status '{new_status}' IGNORADO para {msg_id}: 'failed' e terminal "
-            f"(um 'sent' atrasado esconderia a nao-entrega do operador)"
+        # AUDIT-2026-08-WD (D2): o Message pode nao existir AINDA — o loop de
+        # resposta da Bia persiste cada parte com commit=False e um sleep de
+        # 1.2s entre elas (`_forward_to_agent` abaixo), entao o callback de
+        # status da Meta pode chegar antes do commit do envio. AUDIT-2026-08-W1D
+        # (F5): antes isto era um `return` mudo e o status se perdia para
+        # sempre (delivered/read nunca aparecia, ou pior, uma falha real ficava
+        # invisivel). Agora fica pendente por wamid e e aplicado quando
+        # `record_outbound_message` inserir a linha (`outbound.consume_pending_status`),
+        # com a MESMA regra de precedencia de sempre.
+        remember_pending_status(msg_id, new_status)
+        logger.warning(
+            f"Status '{new_status}' para wamid desconhecido no banco: {msg_id} "
+            f"(guardado como pendente ate a mensagem ser persistida)"
         )
         return
-    if new_status != "failed" and _STATUS_RANK.get(new_status, 0) <= _STATUS_RANK.get(current, 0):
+
+    # AUDIT-2026-08-W1D (F5) — SO AVANCA, nunca regride; 'failed' e TERMINAL.
+    # AUDIT-2026-08-WD (D2): regra agora em `outbound.apply_status_rank`
+    # (compartilhada com a reconciliacao do status orfao acima).
+    resolved = apply_status_rank(message.status, new_status)
+    if resolved is None:
         logger.info(
             f"Status '{new_status}' IGNORADO para {msg_id}: nao avanca sobre "
-            f"'{current}' (a Meta nao garante ordem de callback)"
+            f"'{message.status}' (a Meta nao garante ordem de callback, e "
+            f"'failed' e terminal)"
         )
         return
 
-    message.status = new_status
+    message.status = resolved
     db.commit()
-    logger.info(f"Status atualizado: {msg_id} -> {new_status}")
+    logger.info(f"Status atualizado: {msg_id} -> {resolved}")
 
     # If message failed, log the error details
     if new_status == "failed":
