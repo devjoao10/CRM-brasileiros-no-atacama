@@ -280,3 +280,57 @@ A prova de comportamento vive aqui, e não na suíte: o SQLite não tem `jsonb` 
 **nunca** reproduz este defeito. Na suíte ficou o travamento da FORMA
 (`tests/test_postgres_dialect_divergence.py`, seção 10), que falha se o cast
 voltar para fora do `CASE` — que era exatamente o defeito.
+
+## 4. Smoke CRM ↔ Conversas de ponta a ponta
+
+**Os dois serviços de verdade, em processos separados, contra o mesmo
+PostgreSQL 16** (os pacotes se chamam `app` nos dois e não podem coexistir num
+processo só). Prova a cadeia inteira da Wave 1 a partir do **único sinal
+determinístico que o repositório recebe no handoff** — a rota que o
+`Tool Alterar Responsavel` do Gerenciador já chama:
+
+```
+PUT  crm:8100/api/leads/{id}/responsavel?responsavel_id=<humano>
+  → ponte HTTP (app/services/conversas_bridge.py)
+POST conversas:8101/api/conversations/by-lead/{id}/handoff
+```
+
+```
+2 — estado inicial: com a Bia, fora da fila
+  PASS: conversa comeca com a Bia ligada
+  PASS: conversa NAO esta na fila
+  PASS: conversa sem atendente
+  PASS: a conversa NAO aparece na FILA DE ESPERA ainda
+
+3 — o unico sinal que o n8n manda: PUT /api/leads/{id}/responsavel
+  PASS: CRM aceita a troca de responsavel (got 200)
+  PASS: o lead ficou com a Julia
+
+4 — a PONTE moveu a conversa, sem ninguem chamar o Conversas
+  PASS: a Bia foi desligada
+  PASS: a conversa ENTROU na fila de espera
+  PASS: o atendente elegivel foi resolvido (got 3, esperado 3)
+  PASS: ninguem respondeu ainda — ela CONTINUA esperando
+  PASS: o nome do atendente aparece (got 'Julia Smoke')
+  PASS: a conversa APARECE na FILA DE ESPERA
+  PASS: ATRIBUIDA nao e ATENDIDA: nao aparece em 'meus atendimentos'
+  PASS: o badge 'aguardando humano' conta (got 2)
+
+5 — abrir a conversa NAO tira da fila
+  PASS: abrir preserva a posicao na fila
+  PASS: abrir NAO conta como atendimento
+
+6 — retry do handoff e idempotente
+  PASS: retry NAO manda a conversa para o fim da fila
+```
+
+19/19. Usuários, lead e conversa do smoke removidos ao final.
+
+É a prova de que o defeito principal desta rodada acabou: antes, a Bia dizia ao
+cliente que ele estava na fila e **nada** acontecia do lado do inbox, porque
+nenhum nó do n8n alcança a porta 8001. Agora o sinal que o n8n **já manda** move
+a conversa — e ela fica na fila, com dono, até alguém responder de verdade.
+
+Este smoke depende de `CONVERSAS_API_KEY` estar definida no ambiente do CRM.
+Sem ela a ponte é no-op silencioso (é o comportamento de hoje, e nada regride) —
+ver M7 em `N8N_MANUAL_CHANGES.md`.
