@@ -6,7 +6,7 @@ import os
 from typing import Optional, List
 from datetime import datetime, date, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Response, status, Query, UploadFile, File
 from app.config import MAX_UPLOAD_SIZE_BYTES
 from app.database import IS_SQLITE
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -521,7 +521,26 @@ def create_lead(
     Prefira `funnel_nome` a `funnel_id`: `funnels.nome` é UNIQUE e estável; o
     id não está versionado em lugar nenhum e muda entre ambientes.
     """
-    if funnel_id is None and funnel_nome:
+    # AUDIT-2026-08-WF2 (revisao) — os dois parametros recusam IGUAL.
+    #
+    # Antes, `funnel_nome` inexistente devolvia 404 e nao criava o lead, mas
+    # `funnel_id` inexistente devolvia 201 e criava o lead SEM funil nenhum:
+    # fora do Kanban, `GET /api/pipeline/locate/{id}` em 404, "Ver no Funil"
+    # morto. Mesma intencao do chamador, dois contratos opostos — e o pior dos
+    # dois era justamente o do parametro que a docstring acima desaconselha.
+    if funnel_id is not None:
+        alvo = db.query(Funnel).filter(
+            Funnel.id == funnel_id, Funnel.is_active == True,  # noqa: E712
+        ).first()
+        if alvo is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Nenhum funil ativo com id {funnel_id}. O lead NÃO foi "
+                    "criado — criar fora de funil seria pior que recusar."
+                ),
+            )
+    elif funnel_nome:
         alvo = resolver_funil_por_nome(db, funnel_nome)
         if alvo is None:
             raise HTTPException(
@@ -562,6 +581,35 @@ def update_lead(
         raise HTTPException(status_code=404, detail="Lead não encontrado")
 
     update_data = data.model_dump(exclude_unset=True)
+
+    # AUDIT-2026-08-WF2 (W2-21) — trocar responsavel NAO passa por aqui.
+    #
+    # Esta rota escrevia `responsavel_id` como qualquer outro campo, via
+    # `setattr`. Duas coisas se perdiam em silencio, e as duas sao invariantes
+    # que `PUT /{lead_id}/responsavel` mantem:
+    #
+    # 1. o evento `responsavel_changed` em LeadHistory — a propria rota
+    #    dedicada grava esse evento na MESMA transacao "para nunca haver
+    #    responsavel sem rastro";
+    # 2. a ponte para o inbox (`conversas_bridge.notificar_handoff`) — sem ela,
+    #    o lead muda de dono mas a conversa continua com a Bia ligada e fora da
+    #    fila, que e exatamente o defeito principal desta rodada.
+    #
+    # Nenhum chamador conhecido manda `responsavel_id` neste corpo: a
+    # `Tool Atualizar Lead` do n8n manda doze chaves e nenhuma e essa, e a
+    # interface usa a rota dedicada (`templates/pipeline.html`). Por isso
+    # recusar e mais seguro que aceitar em silencio: quem mandar recebe 422
+    # dizendo qual e a rota certa, em vez de uma troca de dono sem historico e
+    # sem handoff.
+    if "responsavel_id" in update_data:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Use PUT /api/leads/{lead_id}/responsavel para trocar o "
+                "responsável. Por esta rota a troca ficaria sem evento no "
+                "histórico e sem mover a conversa do WhatsApp para a fila."
+            ),
+        )
 
     # AUDIT-2026-08-F2 — `None` NUNCA pode virar UPDATE de coluna NOT NULL.
     #
@@ -969,6 +1017,7 @@ def get_lead_by_whatsapp(
             summary="Alterar responsável do lead")
 async def update_lead_responsavel(
     lead_id: int,
+    response: Response,
     responsavel_id: Optional[int] = Query(None, description="ID do novo responsável (null = Agente IA)"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -1045,13 +1094,48 @@ async def update_lead_responsavel(
         conversa_notificada = await conversas_bridge.notificar_handoff(lead_id)
 
     resposta = _build_lead_response(lead)
-    # `conversa_notificada` e informativo e NAO faz parte de LeadResponse: um
-    # None aqui significa "a ponte nao rodou ou nao respondeu", e o operador
-    # precisa conseguir distinguir isso de "moveu" sem ler log.
+
+    # AUDIT-2026-08-WF2 (revisao) — o resultado da ponte vai num CABECALHO, nao
+    # so no log.
+    #
+    # `conversas_bridge` promete na docstring que "o chamador expoe isso ao
+    # cliente para que uma falha silenciosa nao se disfarce de sucesso", e ate
+    # aqui a promessa nao era cumprida: com o Conversas reiniciando, a ponte
+    # estourava o timeout de 5s, devolvia None, e o n8n recebia um 200
+    # identico ao do caso bem-sucedido. A Bia dizia ao cliente que ele estava
+    # na fila, a conversa continuava em ATENDIMENTOS BIA, e o unico rastro era
+    # um warning do lado do CRM — exatamente a invisibilidade que fez o handoff
+    # quebrado passar despercebido em primeiro lugar.
+    #
+    # Cabecalho, e nao campo do corpo, por dois motivos: `response_model=
+    # LeadResponse` descartaria um campo extra, e mudar o schema do lead por
+    # causa de um detalhe de transporte contaminaria todos os outros
+    # consumidores da rota.
+    #
+    # Continua sem virar 5xx de proposito: derrubar o PUT perderia a troca de
+    # responsavel, que ja foi commitada e esta correta. Quem le o cabecalho
+    # decide o que fazer — `pendente` e acionavel, o 200 sozinho nao era.
+    if responsavel_id is None:
+        estado_ponte = "nao_aplicavel"   # devolver ao Agente IA nao move fila
+    elif conversa_notificada is True:
+        estado_ponte = "movida"
+    elif conversa_notificada is False:
+        estado_ponte = "sem_conversa"    # nao ha conversa aberta para este lead
+    else:
+        estado_ponte = "pendente"        # ponte desligada, fora do ar ou timeout
+    response.headers["X-Conversa-Handoff"] = estado_ponte
+
     if conversa_notificada is not None:
         logger.info(
-            "Lead %s: responsavel alterado e conversa %s movida para a fila humana.",
+            "Lead %s: responsavel alterado; conversa %s movida para a fila humana.",
             lead_id, "" if conversa_notificada else "NAO",
+        )
+    elif responsavel_id is not None:
+        logger.warning(
+            "Lead %s: responsavel alterado, mas a ponte para o Conversas NAO "
+            "respondeu (desligada, fora do ar ou timeout). A conversa pode ter "
+            "ficado com a Bia. Cabecalho X-Conversa-Handoff: pendente.",
+            lead_id,
         )
     return resposta
 

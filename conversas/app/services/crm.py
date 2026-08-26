@@ -11,6 +11,7 @@ authentication overhead and is more reliable.
 """
 
 import logging
+import unicodedata
 import os
 from typing import Optional
 
@@ -276,7 +277,10 @@ async def auto_create_lead_in_crm(
         #    este modulo e do Conversas, que tem o proprio config, e as tres
         #    variaveis sao do dominio do CRM (app/config.py). O valor e o mesmo.
         def _norm(valor):
-            return " ".join(str(valor or "").replace("_", " ").split()).lower()
+            # NFC como no CRM: mesmo nome visivel, bytes diferentes, sem isto
+            # nao casa. Ver app/services/lead_creation.py:_normalizar.
+            texto = unicodedata.normalize("NFC", str(valor or ""))
+            return " ".join(texto.replace("_", " ").split()).lower()
 
         funnel_row = None
         default_funnel_id_raw = os.getenv("DEFAULT_FUNNEL_ID", "").strip()
@@ -335,15 +339,30 @@ async def auto_create_lead_in_crm(
             # app/services/lead_creation.py:resolver_etapa_inicial.
             import json
             stages = etapas if isinstance(etapas, list) else json.loads(etapas)
-            stages = [e for e in stages if isinstance(e, dict)]
+            # AUDIT-2026-08-WF2 (revisao) — `id` tem precedencia sobre `nome`,
+            # e empate desempata pelo proprio id, NUNCA pela posicao na lista.
+            # Mesma regra de app/services/lead_creation.py:_casar_etapa: sem
+            # isto, reordenar as etapas na tela de configuracao do funil mudava
+            # onde o lead nasce. Etapa sem `id` e descartada — casava por
+            # `nome` e devolvia None como etapa.
+            stages = [e for e in stages if isinstance(e, dict) and e.get("id")]
             alvo_etapa = _norm(os.getenv("DEFAULT_ETAPA_NOME", "Sem Contato"))
+            casam = [e for e in stages if _norm(e["id"]) == alvo_etapa]
+            if not casam:
+                casam = [e for e in stages if _norm(e.get("nome")) == alvo_etapa]
             first_stage_id = None
-            for etapa in stages:
-                if _norm(etapa.get("id")) == alvo_etapa or _norm(etapa.get("nome")) == alvo_etapa:
-                    first_stage_id = etapa.get("id")
-                    break
+            if len(casam) == 1:
+                first_stage_id = casam[0]["id"]
+            elif casam:
+                first_stage_id = min(e["id"] for e in casam)
+                logger.warning(
+                    "Funil #%s: %s etapas casam com %r (ids %s). Usando %r, "
+                    "escolhida pelo id e nao pela posicao — funil ambiguo.",
+                    funnel_id, len(casam), alvo_etapa,
+                    sorted(e["id"] for e in casam), first_stage_id,
+                )
             if first_stage_id is None:
-                if stages and stages[0].get("id"):
+                if stages:
                     first_stage_id = stages[0]["id"]
                     logger.warning(
                         "Funil #%s nao tem etapa %r — usando a primeira (%r). A "
@@ -410,9 +429,37 @@ async def auto_create_lead_in_crm(
             # AUDIT-2026-08-WB: antes este bloco era pulado em SILENCIO — o
             # lead commitava sem FunnelEntry e sem ninguem saber por que
             # (outra rota para "zero FunnelEntry" documentada no F-341).
+            #
+            # AUDIT-2026-08-WF2 (revisao): o log nao bastava. O INSERT em
+            # `lead_history` vivia DENTRO do `if funnel_row`, entao o lead que
+            # nascia sem funil ficava tambem sem NENHUMA linha de historico —
+            # invisivel no Kanban E com a timeline vazia, sem nada no proprio
+            # registro dizendo por que. O CRM (app/services/lead_creation.py)
+            # sempre gravou o `created` com um campo `aviso` nesse caso; o
+            # espelho daqui nao. Duas origens, mesmo estado de configuracao,
+            # rastreabilidade oposta.
+            #
+            # Antes desta rodada o `else` era quase inalcancavel (a query
+            # antiga so falhava com zero funis ativos). O fail-closed do funil
+            # abriu tres caminhos ate aqui — id mal configurado, nome nao
+            # encontrado, nome ambiguo — e nenhum deles levava o historico.
             logger.warning(
-                "Lead #%s criado sem funil: nenhum funil ativo encontrado.",
+                "Lead #%s criado sem funil: nenhum funil ativo resolvido.",
                 lead_id,
+            )
+            db.execute(
+                text(
+                    "INSERT INTO lead_history "
+                    "(lead_id, evento, descricao, dados, created_at) "
+                    "VALUES (:lid, 'created', :desc, :dados, NOW())"
+                ),
+                {
+                    "lid": lead_id,
+                    "desc": "Lead criado automaticamente via WhatsApp, SEM funil.",
+                    # String JSON literal, como o INSERT irmao logo acima: a
+                    # coluna e JSON e o schema de resposta valida CADA linha.
+                    "dados": '{"aviso": "nenhum funil ativo resolvido na criacao"}',
+                },
             )
 
         # 3. Apply 'WhatsApp' tag (create if it doesn't exist)

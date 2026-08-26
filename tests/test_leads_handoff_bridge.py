@@ -290,6 +290,36 @@ check("httpx" in codigo and "X-API-Key" in codigo,
       "a ponte fala HTTP com o Conversas, autenticada")
 
 
+# ============ 8. a rota generica nao e um segundo caminho ============
+# AUDIT-2026-08-WF2 (W2-21) — `PUT /api/leads/{id}` aceitava `responsavel_id`
+# no corpo e escrevia via setattr, sem gravar `responsavel_changed` no
+# LeadHistory e sem chamar a ponte. O lead trocava de dono e a conversa
+# continuava com a Bia ligada, fora da fila: o defeito principal desta rodada
+# de volta, por uma porta lateral.
+print()
+print("8 — PUT /api/leads/{id} recusa trocar responsavel")
+
+antes = responsavel_atual()
+chamadas.clear()
+r = client.put(f"/api/leads/{LEAD_ID}", json={"responsavel_id": JULIA_ID})
+check(r.status_code == 422,
+      f"corpo com responsavel_id -> 422 (obteve {r.status_code})")
+check("responsavel" in r.json().get("detail", "").lower(),
+      f"o 422 diz qual e a rota certa (obteve {r.json().get('detail')!r})")
+check(responsavel_atual() == antes,
+      f"o responsavel NAO mudou (era {antes}, esta {responsavel_atual()})")
+check(chamadas == [],
+      f"e a ponte nao foi chamada por este caminho (obteve {len(chamadas)})")
+
+# A recusa e so do responsavel: os outros campos continuam atualizaveis pela
+# mesma rota, senao a `Tool Atualizar Lead` do n8n quebraria inteira.
+r = client.put(f"/api/leads/{LEAD_ID}", json={"nome": "Nome Trocado W221"})
+check(r.status_code == 200,
+      f"atualizar outro campo continua funcionando (obteve {r.status_code})")
+check(r.json().get("nome") == "Nome Trocado W221",
+      f"e o campo mudou de verdade (obteve {r.json().get('nome')!r})")
+
+
 print()
 if failures:
     print(f"FALHOU ({len(failures)}):")

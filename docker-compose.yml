@@ -73,6 +73,15 @@ services:
       # reset de senha quebrados) e MAIL_PASSWORD com o placeholder do exemplo.
       # Passadas UMA A UMA de proposito (em vez de env_file:) para o contrato do
       # container continuar visivel aqui.
+      # AUDIT-2026-08-WF2: o funil e a etapa em que todo lead novo nasce.
+      # Sem estas tres linhas as variaveis NAO chegavam ao container (este
+      # bloco passa tudo uma a uma, de proposito), e os ERROR/WARNING do
+      # servico mandavam o operador "configurar DEFAULT_FUNNEL_ID ou
+      # DEFAULT_FUNNEL_NOME" — instrucao correta no diagnostico e sem efeito
+      # nenhum na pratica. Os defaults sao os mesmos de app/config.py.
+      - DEFAULT_FUNNEL_ID=${DEFAULT_FUNNEL_ID:-}
+      - DEFAULT_FUNNEL_NOME=${DEFAULT_FUNNEL_NOME:-Vendas: Principal}
+      - DEFAULT_ETAPA_NOME=${DEFAULT_ETAPA_NOME:-Sem Contato}
       - APP_DOMAIN=${APP_DOMAIN:-https://crm.crmbrasileirosnoatacama.cloud}
       - INTERNAL_AI_AUTH_MAX_SKEW_SECONDS=${INTERNAL_AI_AUTH_MAX_SKEW_SECONDS:-300}
       - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
@@ -148,6 +157,13 @@ services:
       # `true` aqui e `false` no codigo/.env.example — esquecer a variavel LIGAVA
       # o bot sozinho na conta de WhatsApp do cliente.
       - N8N_AGENT_ENABLED=${N8N_AGENT_ENABLED:-false}
+      # AUDIT-2026-08-WF2: o Conversas cria lead direto no banco do CRM
+      # (services/crm.py) e resolve funil/etapa com a MESMA precedencia. Se
+      # so um dos dois containers receber estas variaveis, o mesmo cliente cai
+      # em funis diferentes conforme quem criou o lead.
+      - DEFAULT_FUNNEL_ID=${DEFAULT_FUNNEL_ID:-}
+      - DEFAULT_FUNNEL_NOME=${DEFAULT_FUNNEL_NOME:-Vendas: Principal}
+      - DEFAULT_ETAPA_NOME=${DEFAULT_ETAPA_NOME:-Sem Contato}
       - META_VERIFY_TOKEN=${META_VERIFY_TOKEN:-}
       - META_ACCESS_TOKEN=${META_ACCESS_TOKEN:-}
       - META_PHONE_NUMBER_ID=${META_PHONE_NUMBER_ID:-}

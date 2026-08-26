@@ -20,6 +20,7 @@ este arquivo de la) e foi corrigido em paralelo para usar a MESMA precedencia
 de escolha de funil (ver comentario la).
 """
 import logging
+import unicodedata
 from typing import Optional
 
 from sqlalchemy import func
@@ -38,7 +39,7 @@ logger = logging.getLogger(__name__)
 _ETAPA_FALLBACK = "nova_oportunidade"
 
 
-def _normalizar(valor) -> str:
+def _normalizar(valor: object) -> str:
     """
     Chave de comparacao para nome de funil e de etapa.
 
@@ -53,7 +54,13 @@ def _normalizar(valor) -> str:
     NAO e busca por substring: e igualdade sobre a forma normalizada.
     "Vendas WhatsApp" nunca casa com "Vendas: Principal".
     """
-    return " ".join(str(valor or "").replace("_", " ").split()).lower()
+    # NFC antes de tudo: "Formulário" digitado com acento composto e com acento
+    # decomposto sao a MESMA palavra na tela e bytes diferentes na memoria. Sem
+    # isto, `?funnel_nome=Vendas: Formulário` em NFD devolvia 404 com uma
+    # mensagem impossivel de acreditar ("nenhum funil ativo chamado
+    # 'Vendas: Formulário'") enquanto o funil com esse nome visivel estava ativo.
+    texto = unicodedata.normalize("NFC", str(valor or ""))
+    return " ".join(texto.replace("_", " ").split()).lower()
 
 
 def resolver_funil_padrao(db: Session, funnel_id: Optional[int] = None) -> Optional[Funnel]:
@@ -92,7 +99,23 @@ def resolver_funil_padrao(db: Session, funnel_id: Optional[int] = None) -> Optio
     NUNCA por substring, NUNCA por ordem de id, NUNCA "o primeiro ativo".
     """
     if funnel_id is not None:
-        return db.query(Funnel).filter(Funnel.id == funnel_id).first()
+        # AUDIT-2026-08-WF2 (revisao) — o passo 1 nao filtrava `is_active` e nao
+        # dizia nada quando nao achava. `funnel_id=10000000` devolvia None em
+        # silencio e o lead nascia SEM funil, com 201 — o sintoma F-341 de
+        # volta, por um parametro que a propria rota documenta como valido. E o
+        # log seguinte acusava a causa ERRADA ("nenhum funil ativo encontrado"),
+        # mandando quem fosse diagnosticar procurar no lugar errado.
+        funnel = db.query(Funnel).filter(
+            Funnel.id == funnel_id, Funnel.is_active == True,  # noqa: E712
+        ).first()
+        if funnel is None:
+            logger.error(
+                "funnel_id=%s explicito nao aponta para nenhum funil ATIVO. O "
+                "lead sera criado SEM funil — o id pedido nao existe ou esta "
+                "desativado. Confira antes de culpar a configuracao default.",
+                funnel_id,
+            )
+        return funnel
 
     if DEFAULT_FUNNEL_ID is not None:
         funnel = db.query(Funnel).filter(
@@ -159,6 +182,34 @@ def resolver_funil_por_nome(db: Session, nome: str) -> Optional[Funnel]:
     return None
 
 
+def _casar_etapa(etapas: list, alvo: str, funnel: Funnel) -> Optional[str]:
+    """
+    `id` da etapa que casa com `alvo` (ja normalizado), ou None.
+
+    `id` vence `nome`: quem passa um identificador exato tem de receber aquela
+    etapa, nunca outra que por acaso se chama assim. Empate (duas etapas do
+    mesmo funil normalizando para o mesmo alvo) desempata pelo proprio `id`,
+    nao pela posicao na lista — reordenar as etapas na tela de configuracao do
+    funil NAO pode mudar onde o lead nasce. O empate e sempre logado: e funil
+    mal configurado, e ninguem descobriria sozinho.
+    """
+    por_id = [e for e in etapas if _normalizar(e["id"]) == alvo]
+    candidatos = por_id or [e for e in etapas if _normalizar(e.get("nome")) == alvo]
+    if not candidatos:
+        return None
+    if len(candidatos) > 1:
+        escolhida = min(candidatos, key=lambda e: e["id"])
+        logger.warning(
+            "Funil %r (#%s): %s etapas casam com %r (ids %s). Usando %r, "
+            "escolhida pelo id e nao pela posicao — mas o funil esta ambiguo e "
+            "isso deveria ser corrigido.",
+            funnel.nome, funnel.id, len(candidatos), alvo,
+            sorted(e["id"] for e in candidatos), escolhida["id"],
+        )
+        return escolhida["id"]
+    return candidatos[0]["id"]
+
+
 def resolver_etapa_inicial(funnel: Funnel, etapa_id: Optional[str] = None) -> str:
     """
     Decide em qual etapa do funil o lead entra.
@@ -171,7 +222,9 @@ def resolver_etapa_inicial(funnel: Funnel, etapa_id: Optional[str] = None) -> st
     etapas mudava, sem aviso, onde todo lead novo nasce.
 
     Precedencia:
-      1. `etapa_id` explicito, se existir NESTE funil.
+      1. `etapa_id` explicito, se casar (normalizado; `id` tem precedencia
+         sobre `nome`) com alguma etapa DESTE funil. Nao casou: WARNING,
+         e segue para o passo 2.
       2. a etapa cujo `id` OU `nome` casa com `DEFAULT_ETAPA_NOME` (default
          "Sem Contato") na forma normalizada — ver `_normalizar` para por que
          `id` e `nome` sao os dois comparados.
@@ -179,20 +232,54 @@ def resolver_etapa_inicial(funnel: Funnel, etapa_id: Optional[str] = None) -> st
          entrada, mas agora e ruidoso em vez de ser a regra.
       4. sem etapas utilizaveis: `_ETAPA_FALLBACK`.
     """
-    etapas = [e for e in (funnel.etapas or []) if isinstance(e, dict)]
-    if etapa_id and any(e.get("id") == etapa_id for e in etapas):
-        return etapa_id
+    etapas = [
+        e for e in (funnel.etapas or [])
+        if isinstance(e, dict) and e.get("id")
+    ]
 
-    alvo = _normalizar(DEFAULT_ETAPA_NOME)
-    for etapa in etapas:
-        if _normalizar(etapa.get("id")) == alvo or _normalizar(etapa.get("nome")) == alvo:
-            return etapa["id"]
-
-    if etapas and etapas[0].get("id"):
+    # AUDIT-2026-08-WF2 (revisao) — dois defeitos que sobreviveram a primeira
+    # correcao, os dois medidos:
+    #
+    # (a) o passo 1 comparava `etapa_id` por igualdade CRUA enquanto os outros
+    #     comparavam normalizado. Um `etapa_id` que so diferia por caixa,
+    #     espaco ou `_` era descartado e o lead caia em `etapas[0]` — e
+    #     `app/schemas/pipeline.py` documenta `sem_contato` E `Sem Contato`
+    #     como ids validos, entao a grafia exigida nao era conhecivel por quem
+    #     chama.
+    # (b) ao passar a casar por `id` OU `nome`, o primeiro casamento na ORDEM
+    #     DA LISTA vencia. Com `etapas=[{id:novo,nome:Triagem},
+    #     {id:triagem,nome:Novo}]`, pedir `etapa_id="triagem"` devolvia "novo":
+    #     um id que EXISTE respondido com outra etapa, por posicao. Trocar a
+    #     ordem das etapas na tela de configuracao mudava o destino, que e
+    #     exatamente o criterio que esta rodada existe para eliminar.
+    #
+    # `_casar_etapa` resolve os dois: `id` tem precedencia sobre `nome`
+    # (casamento exato vence casamento por rotulo), e empate desempata pelo
+    # proprio id, nunca pela posicao. Etapa sem `id` e descartada acima — antes
+    # ela casava por `nome` e estourava `KeyError: 'id'` no return, derrubando
+    # `POST /api/leads` com 500 enquanto o espelho do Conversas seguia normal.
+    if etapa_id:
+        achada = _casar_etapa(etapas, _normalizar(etapa_id), funnel)
+        if achada is not None:
+            return achada
+        # Pedido ignorado SEMPRE avisa. Antes, so avisava quando tambem faltava
+        # a etapa default — ou seja, no caso normal (funil com "Sem Contato")
+        # o pedido descartado nao deixava rastro nenhum.
         logger.warning(
-            "Funil %r (#%s) nao tem etapa %r — usando a primeira (%r). A posicao "
-            "na lista nao e contrato de negocio; renomeie a etapa ou ajuste "
-            "DEFAULT_ETAPA_NOME.",
+            "Funil %r (#%s): etapa pedida %r nao existe neste funil — o pedido "
+            "foi IGNORADO e a etapa default sera usada.",
+            funnel.nome, funnel.id, etapa_id,
+        )
+
+    achada = _casar_etapa(etapas, _normalizar(DEFAULT_ETAPA_NOME), funnel)
+    if achada is not None:
+        return achada
+
+    if etapas:
+        logger.warning(
+            "Funil %r (#%s) nao tem etapa %r — usando a primeira (%r). A "
+            "posicao na lista nao e contrato de negocio; renomeie a etapa ou "
+            "ajuste DEFAULT_ETAPA_NOME.",
             funnel.nome, funnel.id, DEFAULT_ETAPA_NOME, etapas[0]["id"],
         )
         return etapas[0]["id"]
