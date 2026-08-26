@@ -134,14 +134,28 @@ async def get_current_user(
             return user
         raise credentials_exception
 
-    # 2. Try JWT from Authorization header
+    # 2/3. JWT do header Authorization e JWT do cookie — nesta ordem, mas SEM
+    #      curto-circuito entre eles.
+    #
+    #      AUDIT-2026-08-WG — este era o MESMO defeito que o CRM ja corrigiu
+    #      (AUDIT-2026-08-W1A, `app/auth.py:198-218`), e que aqui continuava de
+    #      pe: o `auth.js` do inbox anexa o token do localStorage a TODA
+    #      request, entao UM valor obsoleto ali levantava 401 na API inteira —
+    #      mesmo com o cookie `access_token` perfeitamente valido. O atendente
+    #      era derrubado no meio do atendimento, sem ter feito nada, e "logar de
+    #      novo" so resolvia porque reescrevia o localStorage. E o relato
+    #      "usuarios que antes acessavam deixam de acessar".
+    #
+    #      Diferente da API Key (credencial explicita, sem ambiguidade, que
+    #      continua falhando alto acima), o header Bearer aqui e MELHOR ESFORCO:
+    #      so levantamos 401 depois de tentar TODOS os mecanismos. Nenhuma
+    #      sessao invalida passa a ser aceita — o que muda e nao rejeitar uma
+    #      sessao VALIDA por causa de uma credencial obsoleta ao lado dela.
     if token:
         user = _get_user_from_jwt(token, db)
         if user:
             return user
-        raise credentials_exception
 
-    # 3. Try JWT from cookie (frontend)
     cookie_token = request.cookies.get("access_token")
     if cookie_token:
         if cookie_token.startswith("Bearer "):
@@ -149,7 +163,6 @@ async def get_current_user(
         user = _get_user_from_jwt(cookie_token, db)
         if user:
             return user
-        raise credentials_exception
 
     raise credentials_exception
 

@@ -277,6 +277,38 @@ set_cookie(client, f"Bearer {USER_TOKEN}")
 check(client.get("/api/auth/me/validate").status_code == 200, "/me/validate aceita o cookie")
 set_cookie(client, None)
 
+# ============ AUDIT-2026-08-WG — Bearer obsoleto NAO derruba cookie valido ==
+print()
+print("AUDIT-2026-08-WG — header Bearer e melhor esforco, nao veto")
+# O `auth.js` do inbox anexa o token do localStorage a TODA request. Enquanto
+# um Bearer invalido levantava 401 na hora, um unico valor obsoleto ali
+# derrubava a API inteira mesmo com o cookie perfeitamente valido — o atendente
+# era deslogado no meio do atendimento sem ter feito nada. O CRM ja tinha
+# corrigido isso (AUDIT-2026-08-W1A); o Conversas nao.
+set_cookie(client, f"Bearer {USER_TOKEN}")
+r_falha = client.get("/api/auth/me/validate", headers={"Authorization": "Bearer lixo"})
+check(r_falha.status_code == 200,
+      f"Bearer obsoleto + cookie VALIDO -> 200 (got {r_falha.status_code}); "
+      f"a sessao boa nao pode ser recusada por causa da credencial velha ao lado")
+check(r_falha.json().get("email") == USER_EMAIL,
+      "a identidade resolvida vem do COOKIE, nao do header quebrado")
+
+# E o inverso continua valendo: sem sessao valida em lugar nenhum, 401.
+set_cookie(client, None)
+check(client.get("/api/auth/me/validate",
+                 headers={"Authorization": "Bearer lixo"}).status_code == 401,
+      "Bearer obsoleto SEM cookie -> 401 (nao virou porta dos fundos)")
+set_cookie(client, "Bearer lixo")
+check(client.get("/api/auth/me/validate",
+                 headers={"Authorization": "Bearer lixo"}).status_code == 401,
+      "Bearer obsoleto + cookie invalido -> 401")
+set_cookie(client, None)
+
+# A API Key continua falhando ALTO: e credencial explicita, sem ambiguidade.
+check(client.get("/api/auth/me/validate",
+                 headers={"X-API-Key": "chave-que-nao-existe"}).status_code == 401,
+      "X-API-Key invalida continua 401 imediato (nao vira melhor esforco)")
+
 check(client.get("/api/auth/me").status_code == 401, "/api/auth/me SEM credencial -> 401")
 r_me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {USER_TOKEN}"})
 check(r_me.status_code == 200, f"/api/auth/me com token valido -> 200 (got {r_me.status_code})")
