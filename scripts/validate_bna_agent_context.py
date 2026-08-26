@@ -90,6 +90,98 @@ EMAIL_DELIVERY_RE = re.compile(
 UYUNI_BAD_DURATION_RE = re.compile(r"\b1\s*dia\b|\b7\s*dias\b", re.I)
 UYUNI_FILES = ["03_tours/uyuni_expedicoes.md", "04_precos/precos_2026_uyuni.md"]
 
+# --- checks semanticos cross-file (AUDIT-2026-08-WH2 — W3-19/W3-21: promessa
+# de disponibilidade e nomes de destino proibidos vazando pro conteudo). ---
+
+# "garante/garantia/garantir/prometer" perto de "vaga/disponibilidade/reserva"
+# = promessa de disponibilidade, proibida pelo guardrail
+# 09_guardrails/nao_prometer_disponibilidade.md. So esses dois verbos (nao
+# "confirmar"): "confirmar" tambem aparece em frases legitimas do vault
+# ("Reserva confirmada -> voucher...", passo pos-pagamento, nao promessa da
+# BIA) e usar como gatilho geraria falso positivo em conteudo ja validado.
+# Sufixo so de letras (nao \w) e gap sem "_"/"." — o proprio nome do arquivo
+# guardrail ("nao_prometer_disponibilidade.md", citado em varios lugares
+# como referencia cruzada) e "promete" + "r_" + "disponibilidade" grudados
+# por underscore; \w* atravessaria o "_" e casaria o filename com ele mesmo.
+_PROMISE_VERB = r"(?:promet|garant)[a-zà-ÿ]*"
+_AVAILABILITY_NOUN = r"(?:vaga|disponibilidade|reserva(?:\s+antecipad[a-zà-ÿ]*)?)"
+AVAILABILITY_PROMISE_RE = re.compile(
+    rf"{_PROMISE_VERB}[^._\n]{{0,50}}{_AVAILABILITY_NOUN}"
+    rf"|{_AVAILABILITY_NOUN}[^._\n]{{0,50}}{_PROMISE_VERB}",
+    re.I,
+)
+# tolerancia a negacao explicita (ex.: "nunca prometa") perto do trecho
+NEGATION_NEARBY_RE = re.compile(r"\bnunca\b|\bn[aã]o\b", re.I)
+NEGATION_WINDOW = 40
+
+TOM_DE_VOZ_FILE = "00_persona/tom_de_voz.md"
+# linhas do tipo: - "Atacama" (nunca "Deserto do Atacama", "San Pedro de Atacama")
+FORBIDDEN_NAME_LINE_RE = re.compile(r'"[^"]+"\s*\(nunca\s+(?P<alts>.+)\)')
+
+
+def check_no_availability_promise(root: Path) -> list[str]:
+    """Nenhum arquivo pode prometer/garantir vaga, disponibilidade ou reserva
+    antecipada — guardrail critico, a BIA nao tem acesso a agenda de operacao
+    (09_guardrails/nao_prometer_disponibilidade.md). Tolerante a negacao
+    explicita ('nunca'/'nao') perto do trecho, igual a propria linguagem do
+    guardrail ('NUNCA confirmar vaga/disponibilidade')."""
+    problems = []
+    for p in sorted(root.rglob("*.md")):
+        text = p.read_text(encoding="utf-8")
+        for m in AVAILABILITY_PROMISE_RE.finditer(text):
+            window_start = max(0, m.start() - NEGATION_WINDOW)
+            if NEGATION_NEARBY_RE.search(text[window_start:m.end()]):
+                continue
+            rel = str(p.relative_to(root)).replace("\\", "/")
+            snippet = " ".join(m.group(0).split())
+            problems.append(
+                f"{rel}: possivel promessa de vaga/disponibilidade/reserva garantida ('{snippet}')"
+            )
+    return problems
+
+
+def _forbidden_destination_names(root: Path) -> list[str]:
+    """Deriva a lista de nomes de destino proibidos a partir do proprio
+    00_persona/tom_de_voz.md (secao 'Nomes padronizados de destino') em vez
+    de hardcodar aqui — uma lista hardcoded seria uma 4a fonte pra divergir
+    da regra real."""
+    f = root / TOM_DE_VOZ_FILE
+    if not f.is_file():
+        return []
+    names = []
+    for line in f.read_text(encoding="utf-8").splitlines():
+        m = FORBIDDEN_NAME_LINE_RE.search(line)
+        if m:
+            names.extend(re.findall(r'"([^"]+)"', m.group("alts")))
+    return names
+
+
+def check_no_forbidden_destination_names(root: Path) -> list[str]:
+    """AVISO (nao falha o build): nomes que tom_de_voz.md proibe a BIA de
+    falar (ex.: 'Salar de Uyuni', 'Bolivia', 'Deserto do Atacama', 'San
+    Pedro de Atacama') tambem aparecem legitimamente fora de tom_de_voz.md
+    como fatos geograficos/operacionais (a cidade San Pedro de Atacama de
+    onde saem os passeios, exigencia de visto pra entrar na Bolivia, titulo
+    de arquivo de destino) — nao sao o MESMO erro do W3-21c (usar o nome
+    proibido para NOMEAR o destino). Virar FALHA quebraria conteudo
+    legitimo ja validado; fica AVISO pra revisao humana."""
+    forbidden = _forbidden_destination_names(root)
+    if not forbidden:
+        return []
+    problems = []
+    for p in sorted(root.rglob("*.md")):
+        rel = str(p.relative_to(root)).replace("\\", "/")
+        is_readme = rel == "00_README.md" or rel.endswith("/README.md")
+        if is_readme or rel.startswith("_meta/") or rel == TOM_DE_VOZ_FILE:
+            continue  # navegacao/indice ou o proprio arquivo-fonte da regra
+        text = p.read_text(encoding="utf-8")
+        for name in forbidden:
+            if name.lower() in text.lower():
+                problems.append(
+                    f"{rel}: usa nome de destino que tom_de_voz.md proibe ('{name}')"
+                )
+    return problems
+
 
 def check_handoff_fields_match(root: Path) -> str | None:
     """campos_obrigatorios_crm.md e handoff_humano.md tem que citar os
@@ -255,6 +347,8 @@ def main() -> int:
 
     failures.extend(check_no_email_delivery_claim(ROOT))
     failures.extend(check_no_uyuni_1_or_7_day(ROOT))
+    failures.extend(check_no_availability_promise(ROOT))
+    warnings.extend(check_no_forbidden_destination_names(ROOT))
 
     print(f"Arquivos .md: {len(list(ROOT.rglob('*.md')))}")
     print(f"Marcadores [PENDENTE_VALIDACAO]: {pendencias_total}")

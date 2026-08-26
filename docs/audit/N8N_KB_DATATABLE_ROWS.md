@@ -275,3 +275,35 @@ H15 corrige uma contradição de contagem em `_meta/pendencias_index.md`
 (documentação interna do vault, "34 arquivos" vs. 35 linhas da própria
 tabela). Não é uma regra de comportamento da Bia, então não gera linha de
 Data Table.
+
+---
+
+## Adenda AUDIT-2026-08-WH2 (W3-19, W3-21)
+
+Sessão seguinte, mesmo formato. Dois dos quatro itens do escopo (W3-19b —
+resposta de visto/imigração vs. guardrail legal; W3-21d — conflito de época
+Atacama+Uyuni) foram deliberadamente marcados `[PENDENTE_VALIDACAO]` no
+vault, não resolvidos — são decisão comercial/jurídica de João, então **não
+geram linha de Data Table** (mesma lógica do H15 e dos preços fora de
+escopo: nada muda pro comportamento da Bia até alguém decidir).
+
+W3-21c (nomes de destino em `01_empresa/empresa.md` alinhados a
+`00_persona/tom_de_voz.md`) também não gera linha nova: a regra de nomes
+padronizados já é conteúdo do prompt de produção vigente (`tom_de_voz.md`
+tem `source: "live_bia_prompt"`) — o fix só alinhou um arquivo de
+referência do vault a uma regra que já está em produção, não criou regra
+nova.
+
+## H16 — Objeção de concorrência nunca promete vaga/reserva garantida
+
+| campo | valor |
+|---|---|
+| `record_key` | `faq.objecao_concorrencia_sem_garantia_vaga` |
+| `domain` | `faq` |
+| `title` | Objeção de preço/concorrência nunca promete vaga garantida |
+| `content` | Se o cliente disser que achou mais barato em outra agência ou direto em San Pedro, nunca fale mal da concorrência e nunca prometa vaga, reserva ou disponibilidade garantida — isso viola o guardrail de disponibilidade. Use como diferencial: atendimento 100% em português do planejamento ao pós-venda, equipe local com mais de 8 anos, reserva organizada com antecedência direto com os parceiros, suporte durante a viagem e parceiros selecionados. Pode reconhecer que comprar na rua em San Pedro sai mais barato, mas o trade-off é negociar vaga na hora (sem reserva organizada com antecedência), qualidade variável e atendimento em espanhol — nunca diga que a BnA garante vaga onde a concorrência não garante. |
+| `destination` | (vazio) |
+| `journey_stage` | (vazio) |
+| `handoff_reason` | Cliente com contraproposta concreta de concorrente pedindo cobertura de oferta (decisão comercial é humana). |
+| `validation_status` | `validado` |
+| `active` | `true` |

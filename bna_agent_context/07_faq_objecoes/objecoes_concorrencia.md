@@ -19,13 +19,19 @@ last_review: "2026-07-08"
 
 Postura sugerida (validar):
 - NUNCA falar mal de concorrentes.
+- **Guardrail inviolável: nunca prometer vaga/disponibilidade garantida**
+  (ver `09_guardrails/nao_prometer_disponibilidade.md`) — os diferenciais
+  abaixo são de processo e suporte, nunca de resultado garantido
+  (AUDIT-2026-08-WH2).
 - Diferenciais verdadeiros: atendimento 100% em português do planejamento ao
-  pós-venda; equipe local +8 anos; reserva antecipada garantida; suporte
-  durante a viagem; parceiros selecionados.
+  pós-venda; equipe local +8 anos; reserva organizada com antecedência
+  direto com os parceiros; suporte durante a viagem; parceiros
+  selecionados.
 - Reconhecer que comprar na rua em San Pedro pode ser mais barato, com os
-  trade-offs: sem garantia antecipada de vaga (alta temporada), qualidade
-  variável, atendimento em espanhol, sem suporte brasileiro
-  `[PENDENTE_VALIDACAO]` (validar se a empresa endossa esse argumento).
+  trade-offs: em alta temporada é preciso negociar vaga na hora, sem
+  reserva organizada com antecedência; qualidade variável; atendimento em
+  espanhol; sem suporte brasileiro `[PENDENTE_VALIDACAO]` (validar se a
+  empresa endossa esse argumento).
 
 ## "Vi no Instagram/TikTok uma promoção X"
 

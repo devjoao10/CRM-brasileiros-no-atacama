@@ -67,6 +67,12 @@ categoria. João valida na fonte real e segue
 - [ ] Períodos exatos de operação dos tours de verão/inverno de Santiago.
 - [ ] Roteiro Uyuni: pernoites (export cita "Villa Mar" nos dias 1 e 3 —
       possível erro da fonte).
+- [ ] **CONFLITO época Atacama+Uyuni combinado** (AUDIT-2026-08-WH2):
+      `02_destinos/melhor_epoca.md` manda evitar jan–mar no Atacama
+      (risco de chuva/cancelamento), mas a época mais procurada de Uyuni
+      (Uyuni Espelhado) é justamente fev–abr — sobreposição direta para o
+      roteiro combinado Atacama+Uyuni, que a empresa vende ativamente. Não
+      escolher a época sozinho; decidir qual destino prioriza.
 
 ## 7. CONTEÚDO RECUPERADO DO EXPORT (removido do live — decidir destino)
 
@@ -88,6 +94,13 @@ categoria. João valida na fonte real e segue
 - [ ] SLA de retorno da equipe ("até 24h" está no live — confirmar).
 - [ ] Alimentar FAQ com perguntas reais do histórico do Conversas
       (anonimizadas).
+- [ ] **CONFLITO visto/imigração vs. guardrail legal** (AUDIT-2026-08-WH2):
+      `07_faq_objecoes/faq_clientes.md` ("Preciso de visto/passaporte?")
+      responde orientação de entrada/documentação diretamente, mas
+      `09_guardrails/nao_prometer_disponibilidade.md` (regra 6) proíbe
+      orientação médica/legal e cita visto como exemplo do que NUNCA
+      afirmar. Decidir se a BIA responde pergunta de visto (e até que
+      limite) ou sempre faz handoff é decisão comercial/jurídica de João.
 
 ## 9. EMPRESA
 

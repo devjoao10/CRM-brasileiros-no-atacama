@@ -70,6 +70,7 @@ precos = VAULT / "04_precos"
 tours = VAULT / "03_tours"
 guardrails = VAULT / "09_guardrails"
 empresa = VAULT / "01_empresa"
+destinos = VAULT / "02_destinos"
 saude = VAULT / "06_saude_seguranca"
 politicas = VAULT / "05_politicas"
 meta = VAULT / "_meta"
@@ -90,6 +91,9 @@ rota_salares = tours / "atacama_rota_dos_salares.md"
 lagunas = tours / "atacama_lagunas_altiplanicas_piedras_rojas.md"
 proibicoes = persona / "proibicoes_de_linguagem.md"
 canais = empresa / "canais_atendimento.md"
+empresa_md = empresa / "empresa.md"
+objecoes_concorrencia = faq / "objecoes_concorrencia.md"
+melhor_epoca = destinos / "melhor_epoca.md"
 pend_index = meta / "pendencias_index.md"
 pend_validacao = meta / "pendencias_validacao.md"
 altitude = saude / "altitude.md"
@@ -229,6 +233,68 @@ check(
 check(
     "tour privativo obrigatório para participar" in criancas_text and "[PENDENTE_VALIDACAO]" in criancas_text,
     "criancas.md mantem a 3a variante (export) da regra de menores de 7, ainda pendente",
+)
+
+# ============ W3-19a — objecao de concorrencia nao promete mais vaga/reserva garantida ============
+print("\nW3-19a - objecao de concorrencia resolvida (nao promete disponibilidade, cross-referencia o guardrail)")
+check(
+    not has(objecoes_concorrencia, "reserva antecipada garantida"),
+    "objecoes_concorrencia.md nao alega mais 'reserva antecipada garantida'",
+)
+check(
+    not has(objecoes_concorrencia, "sem garantia antecipada de vaga"),
+    "objecoes_concorrencia.md nao alega mais 'sem garantia antecipada de vaga' (2a promessa/autocontradicao corrigida)",
+)
+check(
+    has(objecoes_concorrencia, "nao_prometer_disponibilidade.md"),
+    "objecoes_concorrencia.md cross-referencia o guardrail de disponibilidade (nao pode ser recuperado sozinho)",
+)
+
+# ============ W3-21c — empresa.md usa os nomes de destino padronizados por tom_de_voz.md ============
+print("\nW3-21c - empresa.md alinhado aos nomes padronizados de tom_de_voz.md")
+check(
+    not has(empresa_md, "Deserto do Atacama") and not has(empresa_md, "Salar de Uyuni"),
+    "empresa.md nao usa mais os nomes de destino que tom_de_voz.md proibe na lista de 'Destinos atendidos'",
+)
+check(
+    has(empresa_md, "Atacama, Santiago") and has(empresa_md, "Uyuni"),
+    "empresa.md lista os destinos com os nomes padronizados (Atacama/Santiago/Uyuni)",
+)
+
+# ============ W3-19b — visto/imigracao continua PENDENTE (nao resolvido por engano) ============
+print("\nW3-19b - conflito visto/imigracao vs guardrail legal continua PENDENTE, nao decidido")
+check(
+    has(faq_clientes, "CONFLITO") and has(faq_clientes, "seu visto vai sair"),
+    "faq_clientes.md nomeia o conflito citando o exemplo do guardrail ('seu visto vai sair')",
+)
+check(
+    has(faq_clientes, "nao_prometer_disponibilidade.md") and has(faq_clientes, "[PENDENTE_VALIDACAO]"),
+    "faq_clientes.md marca a resposta de visto como [PENDENTE_VALIDACAO] e cita o guardrail em conflito",
+)
+check(
+    has(faq_clientes, "decisão comercial/jurídica"),
+    "faq_clientes.md deixa a decisao de visto/imigracao para joao, nao decide sozinho",
+)
+# a resposta em si continua no arquivo — nao foi apagada nem reescrita, so marcada
+check(
+    has(faq_clientes, "Passaporte ou RG (em bom estado)"),
+    "faq_clientes.md preserva a resposta original (marcada pendente, nao removida)",
+)
+
+# ============ W3-21d — epoca combinada Atacama+Uyuni continua PENDENTE (nenhuma escolhida) ============
+print("\nW3-21d - conflito de epoca Atacama+Uyuni combinado continua PENDENTE, nenhuma epoca escolhida")
+check(
+    has(melhor_epoca, "CONFLITO") and has(melhor_epoca, "Atacama + Uyuni combinado"),
+    "melhor_epoca.md nomeia o conflito de epoca do roteiro combinado",
+)
+check(
+    has(melhor_epoca, "[PENDENTE_VALIDACAO]") and has(melhor_epoca, "não resolvida aqui"),
+    "melhor_epoca.md marca o conflito de epoca combinada como [PENDENTE_VALIDACAO], nao resolvido aqui",
+)
+# nem Atacama nem Uyuni podem ter sido reescritos pra "vencer" o conflito
+check(
+    has(melhor_epoca, "Recomendado: abr/mai e set/out/nov") and has(melhor_epoca, "Uyuni Espelhado: fevereiro a abril"),
+    "melhor_epoca.md preserva as duas recomendacoes de epoca originais, sem escolher uma",
 )
 
 # --- Resultado ---

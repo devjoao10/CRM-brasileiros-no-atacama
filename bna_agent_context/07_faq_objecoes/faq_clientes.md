@@ -40,6 +40,15 @@ dias, ver `03_tours/uyuni_expedicoes.md`; incluir Santiago +2–3).
 
 ## Preciso de visto/passaporte?
 
+`[PENDENTE_VALIDACAO]` — CONFLITO (AUDIT-2026-08-WH2): esta resposta dá
+orientação de imigração/visto diretamente (documento aceito,
+responsabilidade do passageiro), mas o guardrail
+`09_guardrails/nao_prometer_disponibilidade.md` (regra 6) proíbe orientação
+médica/legal e usa "seu visto vai sair" como exemplo do que NUNCA afirmar.
+Se a BIA deve responder pergunta de visto/entrada (e com que limite) ou
+sempre fazer handoff para a equipe é decisão comercial/jurídica de João —
+não resolvida aqui.
+
 Brasileiro: Passaporte ou RG (em bom estado). Verificar exigências de
 Chile/Bolívia é responsabilidade do passageiro. Detalhes → equipe.
 

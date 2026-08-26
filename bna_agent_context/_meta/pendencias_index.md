@@ -17,13 +17,16 @@
 
 ## Contagem
 
-- **135** ocorrências do token `[PENDENTE_VALIDACAO]` no total (contagem bruta
+- **137** ocorrências do token `[PENDENTE_VALIDACAO]` no total (contagem bruta
   do validator `scripts/validate_bna_agent_context.py`).
-- **123** são itens de contexto reais, em **35** arquivos (ver tabelas abaixo).
+- **125** são itens de contexto reais, em **35** arquivos (ver tabelas abaixo).
 - **12** são usos ilustrativos/documentais do próprio token, **não** são dados
   pendentes: 8 nos índices originais (`../00_README.md`, `schema_frontmatter.md`,
   `checklist_atualizacao.md`, `pendencias_validacao.md`) + 4 neste próprio
   arquivo, ao explicar a regra.
+- Itens novos (AUDIT-2026-08-WH2): +1 marcador em `faq_clientes.md` (conflito
+  visto/imigração vs. guardrail legal) e +1 em `melhor_epoca.md` (conflito de
+  época Atacama+Uyuni combinado). Detalhe em `_meta/pendencias_validacao.md`.
 
 ## Itens pendentes reais, por pasta (35 arquivos)
 
@@ -49,23 +52,35 @@
 | desconto_pix.md | 1 | pendente_validacao |
 | lgpd_privacidade.md | 1 | pendente_validacao |
 
-### 02_destinos/ — 18 marcadores
+### 02_destinos/ — 19 marcadores
 | Arquivo | Marcadores | status frontmatter |
 |---|---|---|
 | atacama.md | 7 | validado (marcadores pontuais) |
 | santiago.md | 6 | validado (marcadores pontuais) |
 | uyuni.md | 2 | validado (marcadores pontuais) |
 | logistica_geral.md | 2 | validado (marcadores pontuais) |
-| melhor_epoca.md | 1 | validado (marcadores pontuais) |
+| melhor_epoca.md | 2 | validado (marcadores pontuais) |
 
-### 07_faq_objecoes/ — 13 marcadores
+> Item novo (AUDIT-2026-08-WH2): +1 marcador em `melhor_epoca.md` — a época
+> mais procurada de Uyuni (fev–abr) se sobrepõe ao período que a BIA deve
+> evitar no Atacama (jan–mar), sem orientação de qual destino prioriza a
+> época no roteiro combinado Atacama+Uyuni. Detalhe em
+> `_meta/pendencias_validacao.md`.
+
+### 07_faq_objecoes/ — 14 marcadores
 | Arquivo | Marcadores | status frontmatter |
 |---|---|---|
-| faq_clientes.md | 5 | pendente_validacao |
+| faq_clientes.md | 6 | pendente_validacao |
 | objecoes_seguranca.md | 3 | pendente_validacao |
 | objecoes_concorrencia.md | 2 | pendente_validacao |
 | objecoes_preco.md | 2 | pendente_validacao |
 | quando_escalar.md | 1 | validado (marcador pontual) |
+
+> Item novo (AUDIT-2026-08-WH2): +1 marcador em `faq_clientes.md` — a
+> resposta de "Preciso de visto/passaporte?" dava orientação de
+> imigração/entrada direto, o que conflita com o guardrail que proíbe
+> orientação médica/legal (`09_guardrails/nao_prometer_disponibilidade.md`,
+> regra 6). Detalhe em `_meta/pendencias_validacao.md`.
 
 ### 06_saude_seguranca/ — 9 marcadores
 | Arquivo | Marcadores | status frontmatter |
