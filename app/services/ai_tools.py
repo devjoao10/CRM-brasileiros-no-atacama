@@ -405,25 +405,34 @@ def create_lead(nome: str, email: str = None, whatsapp: str = None, destinos: st
         d_partida = datetime.fromisoformat(data_partida).date() if data_partida else None
         lista_destinos = [d.strip() for d in destinos.split(",")] if destinos else []
 
-        lead = Lead(
-            nome=nome,
-            email=email,
-            whatsapp=whatsapp,
-            destinos=lista_destinos,
-            data_chegada=d_chegada,
-            data_partida=d_partida,
-            campos_personalizados={},
-            status_venda=status_venda
+        # AUDIT-2026-08-WB — mesmo defeito do F-341, aqui tambem.
+        #
+        # Esta ferramenta montava um `Lead(...)` cru e commitava: sem
+        # `FunnelEntry`, sem `LeadHistory`, sem tag de origem. O lead nascia
+        # FORA do Kanban — o pipeline so renderiza quem tem entry, e
+        # `GET /api/pipeline/locate/{id}` devolve 404 sem ela. Um lead criado
+        # pela Perpetua simplesmente nao existia para o time de vendas.
+        #
+        # Agora usa o mesmo `criar_lead` de `POST /api/leads` e do importador:
+        # um caminho so, e ele nao pode divergir de novo.
+        from app.services.lead_creation import criar_lead
+
+        lead = criar_lead(
+            db,
+            dados={
+                "nome": nome,
+                "email": email,
+                "whatsapp": whatsapp,
+                "destinos": lista_destinos,
+                "data_chegada": d_chegada,
+                "data_partida": d_partida,
+                "campos_personalizados": {},
+                "status_venda": status_venda,
+            },
+            tag_nome=tag or None,
+            origem="ia",
         )
-        db.add(lead)
-        db.commit()
-        db.refresh(lead)
-        
-        # Se uma tag foi pedida, nós reaproveitamos a lógica de adicao
-        if tag:
-            db.close() # close early here
-            return add_tag_to_lead(lead.id, tag)
-            
+
         return json.dumps({"success": True, "lead_id": lead.id, "message": f"Lead '{nome}' criado."})
     except Exception as e:
         db.rollback()

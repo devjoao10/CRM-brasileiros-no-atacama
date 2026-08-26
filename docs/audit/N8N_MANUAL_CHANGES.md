@@ -458,3 +458,94 @@ Alternativa, se o operador preferir manter a decisão no n8n: acrescentar ao
 Gerenciador um nó HTTP `POST http://conversas:8001/api/conversations/by-lead/{{lead_id}}/handoff`
 com header `X-API-Key`, disparado no mesmo ramo do `Tool Alterar Responsavel`.
 As duas soluções são idempotentes e podem coexistir sem duplicar efeito.
+
+---
+
+## M8 — follow-up por inatividade (~8 h)
+
+**Relato:** "o cliente para de responder e fica no limbo."
+**Desejo:** perguntar, depois de ~8 h de silêncio, se ele quer continuar ou
+falar com um humano.
+
+**Estado do repositório:** não existe scheduler de nenhum tipo. Varredura
+completa por APScheduler, cron, `BackgroundScheduler` e `schedule.every`: zero
+ocorrências. O único mecanismo temporal do Conversas é o *debounce* de 15 s que
+agrupa mensagens antes de chamar a Bia (`webhook.py:_schedule_agent_debounce`) —
+ele reseta a cada **atividade**, é `asyncio.Task` em memória, morre no restart, e
+não observa silêncio. Não serve, e adaptá-lo seria pior do que um agendador de
+verdade.
+
+**Divisão de trabalho.** O disparo é do n8n; a consulta é do repositório —
+o n8n não tem como saber quais conversas estão em silêncio sem perguntar.
+
+**Lado repositório (nesta rodada):** `GET /api/conversations/inativas`
+(autenticado como todas as outras rotas do inbox), com:
+
+| Parâmetro | Default | Significado |
+|---|---:|---|
+| `horas` | 8 | silêncio mínimo desde a última mensagem, em qualquer direção |
+| `limite` | 50 | teto de linhas por chamada |
+
+Retorna apenas conversas que satisfazem **todas** as condições:
+
+- status aberto;
+- `last_customer_msg_at` entre `agora - 24 h` e `agora - horas` — dentro da
+  janela da Meta, senão o follow-up exigiria template e vira outro problema;
+- nenhuma mensagem, em qualquer direção, nas últimas `horas`;
+- no máximo **uma** mensagem outbound desde a última entrada do cliente. É o
+  que impede o follow-up de virar perseguição: mandada a pergunta, a conversa
+  deixa de aparecer na próxima varredura, e só volta se o cliente responder.
+
+**Lado n8n (manual, sua parte):**
+
+**WORKFLOW:** novo — sugestão de nome `Follow-up de inatividade — BnA`
+
+| Nó | Tipo | Configuração |
+|---|---|---|
+| 1 | Schedule Trigger | a cada 30 min (a granularidade não precisa ser fina: a janela é de horas) |
+| 2 | HTTP Request | `GET http://conversas:8001/api/conversations/inativas?horas=8&limite=50`, header auth com a mesma credencial dos demais |
+| 3 | Split In Batches | tamanho 1 |
+| 4 | HTTP Request | `POST http://conversas:8001/api/conversations/{{ $json.id }}/messages` com `{ "content": "<texto>", "msg_type": "text" }` |
+
+**Texto sugerido** (não invente promessa nem prazo):
+
+> oi {{primeiro nome}}! vi que nossa conversa ficou parada por aqui 🙂 quer que
+> eu siga com o seu roteiro, ou prefere falar com alguém do nosso time agora?
+
+**Por que texto livre e não template:** a janela de 24 h ainda está aberta às
+8 h. Fora dela o envio seria recusado pelo próprio backend (409
+`WINDOW_CLOSED`), o que é o comportamento correto — não contorne.
+
+**Teste manual:** deixe uma conversa de teste em silêncio por mais de 8 h (ou
+chame o endpoint com `?horas=0` num ambiente descartável), confirme que ela
+aparece na resposta, rode o workflow uma vez e confirme que (a) a mensagem
+chegou e (b) a mesma conversa **não** aparece na chamada seguinte.
+
+**Rollback:** desativar o workflow. Nada persiste além da mensagem enviada.
+
+**STATUS:** repo-side implementado nesta rodada; disparo
+`FIXED_PENDING_MANUAL_N8N`.
+
+---
+
+## M9 — segundo formulário (rodapé do site)
+
+O formulário do rodapé não está ligado a workflow nenhum: existe **um**
+`POST /webhook/formulario-site` e um só consumidor. Não há nada a corrigir no
+repositório — `POST /api/leads` já cria lead com funil, histórico e tag
+(corrigido nesta rodada), e o contrato de `""` vs `null` já está travado por
+teste.
+
+**Ação:** apontar o formulário do rodapé para o **mesmo** webhook
+`/webhook/formulario-site`, garantindo que ele envie os mesmos campos que o nó
+`Validar e normalizar` já espera (`nome`, `email`, `telefone`/`whatsapp`, `ddi`,
+`data_chegada`, `data_partida`, `num_adultos`, `num_criancas`, `destinos`, e o
+honeypot `empresa`). Duplicar o workflow criaria dois caminhos para manter em
+sincronia — foi assim que a criação de lead divergiu em dois lugares (F-341).
+
+**Se os campos do rodapé forem um subconjunto:** o nó de validação exige nome,
+e-mail, WhatsApp e as duas datas. Um formulário mais curto será rejeitado com
+400. Nesse caso a decisão é de produto (relaxar a validação para essa origem, ou
+completar o formulário), e não é minha.
+
+**STATUS:** `BLOCKED_OPERATOR`.
