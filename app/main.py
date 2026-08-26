@@ -87,9 +87,24 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # Limites por rota (ex.: login 5/minute) continuam via @limiter.limit no router.
 app.add_middleware(SlowAPIMiddleware)
 
-# CORS — Restrito em produção, aberto em dev
-_allowed_origins = ["*"] if ENVIRONMENT == "development" else [
+# CORS
+# AUDIT-2026-08-W1B (F8) tirou o curinga do Conversas e explicou por que:
+# `["*"]` com `allow_credentials=True` faz o Starlette ECOAR o Origin do
+# chamador em Access-Control-Allow-Origin, entao qualquer site aberto no
+# navegador do usuario le respostas autenticadas usando o cookie dele. E nao
+# era opt-in: `ENVIRONMENT` nao definido ja vale "development".
+#
+# AUDIT-2026-08-WF2 (revisao): o CRM tinha ficado de fora daquela correcao — o
+# mesmo curinga, com o mesmo default, no servico que guarda os leads e as
+# chaves de API. Assimetria entre dois servicos irmaos e onde defeito se
+# esconde. Em dev, lista explicita, igual ao Conversas.
+_allowed_origins = [
     "https://crm.crmbrasileirosnoatacama.cloud",
+] if ENVIRONMENT != "development" else [
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://localhost:8001",
+    "http://127.0.0.1:8001",
 ]
 app.add_middleware(
     CORSMiddleware,

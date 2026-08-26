@@ -1059,6 +1059,25 @@
         });
         if (resp && resp.ok) {
             const data = await resp.json();
+            // AUDIT-2026-08-WF2: trocar o responsavel aqui NAO e so comercial —
+            // a mesma rota notifica o Conversas, que DESLIGA a Bia e poe a
+            // conversa do WhatsApp na fila humana. Uma revisao adversarial
+            // apontou que o vendedor fazia isso sem nenhum aviso: a Bia parava
+            // no meio da triagem e o cliente ficava esperando um humano que nao
+            // sabia da conversa. O cabecalho X-Conversa-Handoff diz o que
+            // aconteceu de verdade; `pendente` significa que o Conversas nao
+            // respondeu (desligado, fora do ar ou timeout) e a conversa pode ter
+            // ficado com a Bia.
+            const handoff = resp.headers.get('X-Conversa-Handoff');
+            if (handoff === 'movida') {
+                alert('✅ Responsável alterado.\n\nA conversa deste lead no '
+                    + 'WhatsApp saiu da Bia e entrou na FILA DE ESPERA do '
+                    + 'Conversas, aguardando atendimento humano.');
+            } else if (handoff === 'pendente') {
+                alert('⚠️ Responsável alterado no CRM, mas o Conversas não '
+                    + 'respondeu.\n\nA conversa no WhatsApp pode ter continuado '
+                    + 'com a Bia. Confira no inbox.');
+            }
             loadBoard();
         } else {
             alert('Erro ao alterar responsável');

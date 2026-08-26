@@ -440,6 +440,33 @@ def test_login_js_valid_session_still_redirects_once():
     assert r["nav"] == ["/hub"], f"sessao valida deveria ir ao hub: {r['nav']}"
 
 
+def test_cors_nao_usa_curinga_com_credenciais():
+    """AUDIT-2026-08-WF2: o curinga de CORS saiu do Conversas e ficou no CRM.
+
+    `allow_origins=["*"]` junto de `allow_credentials=True` faz o Starlette
+    ECOAR o Origin de quem chamou em Access-Control-Allow-Origin — qualquer
+    site aberto no navegador do usuario le respostas autenticadas usando o
+    cookie dele. E nao era opt-in de dev: `ENVIRONMENT` nao definido ja vale
+    "development", e este e o servico que guarda os leads e as chaves de API.
+
+    A W1B (F8) corrigiu isso no Conversas e o CRM ficou de fora. O teste irmao
+    vive em tests/test_conversas_auth_hardening.py.
+    """
+    from app import main as crm_main
+
+    assert "*" not in crm_main._allowed_origins, (
+        f"CORS do CRM usa curinga, incompativel com allow_credentials=True "
+        f"(esta {crm_main._allowed_origins!r})"
+    )
+
+    r = client.get("/api/health", headers={"Origin": "https://site-malicioso.example"})
+    ecoado = r.headers.get("access-control-allow-origin")
+    assert ecoado is None, (
+        f"Origin desconhecida foi ecoada em Access-Control-Allow-Origin "
+        f"(veio {ecoado!r})"
+    )
+
+
 TESTS = [v for k, v in globals().items() if k.startswith("test_")]
 
 if __name__ == "__main__":

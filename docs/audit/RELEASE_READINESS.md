@@ -955,3 +955,38 @@ conserta.
 desta rodada (M6) é uma mudança que só você pode fazer. O que existe é: as causas
 raiz nomeadas com prova, corrigidas com teste, e um inventário onde nenhum dos
 110 sintomas ficou sem classificação.
+
+---
+
+## Adiados conscientemente na revisão adversarial de fechamento (2026-08-26)
+
+Os dois itens abaixo foram levantados por revisores adversariais, são reais, e
+**não** foram corrigidos. Ficam aqui nomeados em vez de sumirem num `RESOLVED`
+genérico.
+
+### CSP com `script-src 'unsafe-inline'` — `DEFERRED`
+
+É o que transforma cada `innerHTML` do CRM de "injeção de HTML" em execução de
+código no navegador do usuário. Os sinks encontrados nesta rodada foram todos
+escapados (W8-10), mas enquanto o `'unsafe-inline'` estiver lá, o próximo sink
+que escapar da varredura volta a ser executável.
+
+Tirar o `'unsafe-inline'` exige remover **todo** handler inline (`onclick=`,
+`onchange=`) de todos os templates e mover para listeners — mudança ampla, em
+arquivos que esta rodada tocou por outros motivos, sem relação com nenhum
+sintoma relatado. Misturar isso aqui seria exatamente o tipo de refatoração que
+esconde regressão. Vira WP próprio.
+
+### Prompt injection lead → Perpétua → `call_internal_api` — `DEFERRED`
+
+Texto de lead escrito por terceiro (o cliente, via WhatsApp) chega ao modelo
+como saída de tool e pode voltar como ação assinada por HMAC no papel do
+usuário logado. As mitigações atuais são: nega `/api/auth/`, nega todo `DELETE`,
+e herda o papel real do usuário — mas **não** há allowlist de rotas, então um
+admin usando a Perpétua continua sendo um admin dirigível por texto de cliente.
+
+A correção certa é uma allowlist de rotas para `call_internal_api`, e ela
+precisa da lista de operações que a Perpétua legitimamente executa — que é
+decisão de produto, não de código. Enquanto isso, a superfície está reduzida
+pela allowlist de tabelas do `run_select_query` (W8-11), que fecha o vetor de
+leitura.
