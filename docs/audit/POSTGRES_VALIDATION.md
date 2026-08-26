@@ -198,3 +198,85 @@ Nenhum teste desta suíte executa contra PostgreSQL. Reduzi o gap de "invisível
 para "conhecido e travado na forma do SQL", que é bem melhor que antes e **não é
 o mesmo** que ter testes de integração no dialeto real. Subir um PostgreSQL de
 teste no CI continua sendo o passo que fecha isso de verdade.
+
+---
+
+# Rodada 2026-08-26 — validações executadas contra PostgreSQL 16 real
+
+Container `bna-postgres-audit` (PostgreSQL 16.14, porta 55432, banco
+`bna_app_audit`, descartável). **Nenhum outro container foi tocado.**
+
+## 1. `m012` — coluna `primeira_resposta_humana_at`
+
+```
+[m012] alvo (conversas): 127.0.0.1:55432/bna_app_audit
+[m012]   primeira_resposta_humana_at:added (TIMESTAMP WITH TIME ZONE)
+[m012]   ix_conversations_primeira_resposta_humana_at:ensured
+[m012]   backfill-em-atendimento:0
+[m012]   primeira_resposta_humana_at:verificado
+[m012] OK — coluna aplicada (idempotente)
+
+(2ª execução)
+[m012]   primeira_resposta_humana_at:already-present
+[m012] OK — NO-OP (já estava aplicada)
+```
+
+Backfill conferido nas **seis** combinações de estado, com linhas reais:
+
+| conversa | status | bot | atendente | outbound | marcada? | esperado |
+|---|---|---|---|---|---|---|
+| 55WA1 | aberta | off | 7 | sim | sim | sim |
+| 55WA2 | aberta | off | — | sim | não | não (está na fila) |
+| 55WA3 | aberta | off | 7 | não | não | não (nunca falou) |
+| 55WA4 | aberta | **on** | — | sim | não | não (está com a Bia) |
+| 55WA5 | encerrada | off | 7 | sim | não | não |
+| 55WA6 | aguardando | off | 7 | sim | sim | sim (status legado aberto) |
+
+Segunda execução não alterou nenhum valor. Linhas de teste removidas ao final.
+
+## 2. F-341 — `FunnelEntry` sob concorrência
+
+Duas threads, duas conexões, disputando o MESMO `(lead_id, funnel_id)`:
+nenhuma exceção, as duas convergem para a mesma entry, **uma** linha ao final.
+É o caminho `IntegrityError`-como-fluxo-normal apoiado em
+`uq_funnel_entries_lead_funnel` — o SQLite não o exercita, porque nele a
+violação de UNIQUE sob concorrência não acontece.
+
+## 3. F-043 — escape de NUL derruba o filtro de campo personalizado
+
+**Reproduzido, e não por leitura de código.** Com
+`{"origem":"\u0000instagram"}` numa linha:
+
+```
+  OK    json aceita o escape: True
+  FALHA jsonb aceita o escape?: UntranslatableCharacter: unsupported Unicode escape sequence
+  -- como o filtro montava a query (cast FORA do CASE) --
+  FALHA filtro atual: UntranslatableCharacter
+  -- com o guard de TEXTO antes do cast --
+  OK    com guard: 1
+```
+
+Uma única linha legada envenenada derrubava a consulta **inteira** — o filtro de
+campo personalizado e todo segmento que o usasse viravam 500 permanente para
+TODOS os leads, não só para o lead envenenado.
+
+Depois da correção, executando o predicado REAL (`campo_personalizado_match`)
+via SQLAlchemy contra o banco, com cinco linhas (uma envenenada, duas boas, uma
+lista e um `null`):
+
+```
+  PASS: a consulta EXECUTA com a linha envenenada presente (ids=[3])
+  PASS: devolve só a linha boa que casa (esperado [3], obtido [3])
+  PASS: presença da chave: esperado [2, 3], obtido [2, 3]
+  PASS: a linha envenenada fica invisível ao filtro (não derruba a query)
+  PASS: JSON que não é objeto continua ignorado
+```
+
+A linha envenenada some **daquele filtro**, em vez de a funcionalidade sumir
+para todo mundo. Dado novo não entra assim: `_rejeita_nul` em
+`app/schemas/lead.py` já recusa na borda; a correção é para o legado.
+
+A prova de comportamento vive aqui, e não na suíte: o SQLite não tem `jsonb` e
+**nunca** reproduz este defeito. Na suíte ficou o travamento da FORMA
+(`tests/test_postgres_dialect_divergence.py`, seção 10), que falha se o cast
+voltar para fora do `CASE` — que era exatamente o defeito.

@@ -8,7 +8,7 @@ linhas de SQL dialect-aware seria garantir que as duas copias divergissem.
 
 Mantenha este modulo pequeno e sem dependencia de router. So predicados puros.
 """
-from sqlalchemy import func, select, cast, case, literal
+from sqlalchemy import String, case, cast, func, literal, select
 from sqlalchemy.dialects.postgresql import JSONB
 
 from app.database import IS_SQLITE
@@ -33,6 +33,13 @@ _ESPACOS = (
     "            "
     "    　"
 )
+
+
+# AUDIT-2026-08-WG (F-043) — a sequencia de escape de NUL, montada em runtime.
+# Escrever `\u0000` literal num .py produziria um byte NUL de verdade no
+# fonte; o que precisamos e dos SEIS caracteres que o texto JSON guarda.
+_ESCAPE_NUL = chr(92) + "u0000"
+_LIKE_ESCAPE_NUL = "%" + _ESCAPE_NUL + "%"
 
 
 def campo_personalizado_match(coluna, chave: str, valor: str):
@@ -68,8 +75,30 @@ def campo_personalizado_match(coluna, chave: str, valor: str):
         # jsonb_each_text expande os pares e devolve o valor ja como texto —
         # "Atacama", 25 e true viram 'Atacama', '25' e 'true', igual ao str()
         # que o Python fazia.
+        #
+        # AUDIT-2026-08-WG (F-043) — a ORDEM aqui e o defeito, nao o CASE.
+        #
+        # `cast(coluna, JSONB)` estava FORA do CASE, entao era avaliado para
+        # TODA linha antes de qualquer guard. A coluna e `json` (texto), que
+        # aceita a sequencia de escape de NUL; `jsonb` NAO aceita. Uma unica
+        # linha legada com esse escape fazia a query inteira estourar
+        # `UntranslatableCharacter: unsupported Unicode escape sequence` — e o
+        # filtro de campo personalizado, mais todo segmento que o use, virava
+        # 500 permanente para TODOS os leads, nao so para o envenenado.
+        #
+        # Reproduzido no PostgreSQL 16 real: `'{"origem":"\\u0000x"}'::json` passa,
+        # `::json::jsonb` falha, e o mesmo dado numa linha derruba a consulta.
+        # Com o guard de TEXTO antes do cast, a consulta volta a responder e
+        # devolve as linhas boas.
+        #
+        # A linha envenenada fica invisivel para o filtro (vira `{}`). E a troca
+        # certa: uma linha some de um filtro, em vez de a funcionalidade sumir
+        # para todo mundo. Dado NOVO nao entra assim — `_rejeita_nul` em
+        # `app/schemas/lead.py` ja recusa na borda; isto e para o legado.
+        texto = cast(coluna, String)
+        sem_nul = texto.notlike(_LIKE_ESCAPE_NUL)
         jb = cast(coluna, JSONB)
-        seguro = case((func.jsonb_typeof(jb) == "object", jb),
+        seguro = case((sem_nul & (func.jsonb_typeof(jb) == "object"), jb),
                       else_=cast(literal("{}"), JSONB))
         pares = func.jsonb_each_text(seguro).table_valued("key", "value")
         chave_col = func.lower(func.btrim(pares.c.key, _ESPACOS))

@@ -47,7 +47,15 @@ def has(path: pathlib.Path, snippet: str) -> bool:
 print("Validador scripts/validate_bna_agent_context.py (subprocesso real)")
 result = subprocess.run(
     [sys.executable, str(ROOT / "scripts" / "validate_bna_agent_context.py")],
-    capture_output=True, text=True,
+    capture_output=True,
+    text=True,
+    # AUDIT-2026-08-WH — `encoding` explicito, exigido pelo guard em
+    # tests/test_filter_normalization_and_backup.py. Sem ele, `text=True` decodifica
+    # com a codificacao do console (cp1252 no Windows) e o validador, que imprime
+    # portugues acentuado, quebra o teste por um motivo que nada tem a ver com o
+    # que ele mede.
+    encoding="utf-8",
+    errors="replace",
 )
 check(result.returncode == 0, f"validator sai com exit 0 (saiu com {result.returncode})")
 if result.returncode != 0:

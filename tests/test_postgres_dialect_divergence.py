@@ -607,6 +607,69 @@ for _nome, _tabela, _cols, _finding in M011._UNIQUE_TARGETS:
           f"{_tabela} tem coluna `id` — _find_duplicates faz SELECT t.id e "
           f"d.id <> t.id, e sem ela a m011 quebra em producao")
 
+
+# ══════════════════════════════════════════════════════════════════════════
+print()
+print("10) campo personalizado: o cast json->jsonb precisa ficar DENTRO do guard")
+# AUDIT-2026-08-WG (F-043) — travamento da FORMA. A prova de COMPORTAMENTO exige
+# um PostgreSQL de verdade (o SQLite nao tem `jsonb` e nunca reproduz), e esta em
+# `docs/audit/POSTGRES_VALIDATION.md`: `'{"origem":"\u0000x"}'::json` e aceito,
+# `::json::jsonb` levanta `UntranslatableCharacter`, e UMA linha assim derrubava a
+# consulta inteira — o filtro de campo personalizado e todo segmento que o usasse
+# viravam 500 permanente para TODOS os leads.
+#
+# O defeito era a ORDEM: `cast(coluna, JSONB)` estava FORA do CASE, entao era
+# avaliado por linha antes de qualquer protecao. O que este check trava e
+# exatamente isso — o guard de TEXTO tem de aparecer ANTES do primeiro cast para
+# jsonb no SQL emitido. Um `check` de presenca do NOT LIKE em qualquer lugar
+# passaria com o cast de volta para fora, que e a regressao real.
+from sqlalchemy import Column as _Col, Integer as _Int, JSON as _JSON, MetaData as _MD, Table as _Tbl
+
+import app.query_filters as _qf  # noqa: E402
+
+_md_cp = _MD()
+_t_cp = _Tbl("leads_cp", _md_cp, _Col("id", _Int), _Col("campos_personalizados", _JSON))
+
+_qf_sqlite_original = _qf.IS_SQLITE
+try:
+    _qf.IS_SQLITE = False
+    _sql_pg = sql(
+        select(_t_cp.c.id).where(
+            _qf.campo_personalizado_match(_t_cp.c.campos_personalizados, "origem", "x")),
+        PG,
+    )
+finally:
+    _qf.IS_SQLITE = _qf_sqlite_original
+
+_up = _sql_pg.upper()
+_pos_guard = _up.find("NOT LIKE")
+_pos_cast = _up.find("AS JSONB")
+check(_pos_guard != -1,
+      "ramo PostgreSQL tem o guard de texto contra o escape de NUL")
+check(_pos_cast != -1, "ramo PostgreSQL ainda faz o cast para jsonb")
+check(-1 < _pos_guard < _pos_cast,
+      f"o guard vem ANTES do primeiro cast para jsonb "
+      f"(guard@{_pos_guard}, cast@{_pos_cast}) — se o cast voltar para fora do "
+      f"CASE, uma unica linha legada derruba o filtro para todos")
+check(_qf._ESCAPE_NUL == chr(92) + "u0000",
+      "o padrao procurado sao os SEIS caracteres do escape, nao um byte NUL")
+
+# O ramo SQLite NAO muda: `json` do SQLite nao tem a restricao do `jsonb`.
+_qf_sqlite_original = _qf.IS_SQLITE
+try:
+    _qf.IS_SQLITE = True
+    _sql_lite = sql(
+        select(_t_cp.c.id).where(
+            _qf.campo_personalizado_match(_t_cp.c.campos_personalizados, "origem", "x")),
+        LITE,
+    )
+finally:
+    _qf.IS_SQLITE = _qf_sqlite_original
+check("NOT LIKE" not in _sql_lite.upper(),
+      "ramo SQLite segue sem o guard — la o defeito nao existe e o custo seria gratuito")
+check("json_each" in _sql_lite,
+      "ramo SQLite continua usando json_each")
+
 _con.close()
 eng.dispose()
 
