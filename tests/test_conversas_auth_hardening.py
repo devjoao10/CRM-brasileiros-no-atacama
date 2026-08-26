@@ -19,12 +19,14 @@ Cobre, comportamentalmente, as 8 falhas confirmadas na auditoria:
 Credenciais e tokens abaixo sao FIXTURES locais (nada de segredo real).
 Roda standalone:  python tests/test_conversas_auth_hardening.py
 """
+import asyncio
 import hashlib
 import os
 import pathlib
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CONVERSAS_DIR = ROOT / "conversas"
@@ -54,6 +56,7 @@ sys.path.insert(0, str(CONVERSAS_DIR))
 # teste passaria olhando para o app errado. Todos os paths daqui sao absolutos.
 os.chdir(CONVERSAS_DIR)
 
+import httpx  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from jose import jwt  # noqa: E402
 
@@ -432,6 +435,130 @@ _r4 = client.get(_alvo, headers={"Authorization": f"Bearer {_emitido}"})
 check(_r4.status_code == 200,
       f"o token emitido pelo proprio servico entra (veio {_r4.status_code})")
 
+
+# ====== AUDIT-2026-08-WF2 (1) — o proxy ao CRM leva o IP do cliente ======
+# Em producao o login do Conversas e um PROXY servidor-a-servidor para
+# `POST /api/auth/login` do CRM, e o CRM limita essa rota em 5/minute com
+# `key_func=get_remote_address` (app/limiter.py). Sem repassar o IP de quem
+# pediu, o `remote_address` que o CRM enxerga e SEMPRE o do container do
+# Conversas: um unico balde de 5/min para TODOS os atendentes. Cinco logins com
+# credencial lixo por minuto — sem conta, sem autenticacao nenhuma — e nenhum
+# atendente legitimo entra mais no inbox.
+print()
+print("AUDIT-2026-08-WF2 (1) — o login proxy repassa o IP do cliente ao CRM")
+
+_crm_calls = []
+
+
+class _FakeCRMResponse:
+    """200 do CRM no formato que o proxy consome (token + usuario)."""
+
+    status_code = 200
+
+    @staticmethod
+    def json():
+        return {"access_token": USER_TOKEN, "token_type": "bearer",
+                "user": {"id": 2, "nome": "Atendente", "email": USER_EMAIL,
+                         "role": "user", "is_active": True}}
+
+
+class _FakeCRMClient:
+    """Entra no lugar de `httpx.AsyncClient` DENTRO do router: nada sai na rede."""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def post(self, url, **kwargs):
+        _crm_calls.append(kwargs)
+        return _FakeCRMResponse()
+
+
+_httpx_real = auth_router.httpx
+auth_router.httpx = SimpleNamespace(
+    AsyncClient=_FakeCRMClient, RequestError=_httpx_real.RequestError)
+
+
+def _login_proxy(ip_cliente, cabecalhos=None):
+    """Um login pelo ramo de PROXY. Devolve (resposta, cabecalhos vistos pelo CRM).
+
+    `ASGITransport(client=...)` em vez do `TestClient`: o TestClient do starlette
+    fixa o peer em ("testclient", 50000) e nao expoe como troca-lo — e o IP do
+    peer e justamente a variavel sob teste.
+    """
+    _crm_calls.clear()
+
+    async def _executa():
+        transporte = httpx.ASGITransport(app=main.app, client=(ip_cliente, 51234))
+        async with httpx.AsyncClient(transport=transporte,
+                                     base_url="http://testserver") as c:
+            return await c.post("/api/auth/login",
+                                json={"email": USER_EMAIL, "password": FIXTURE_PASS},
+                                headers=cabecalhos or {})
+
+    resposta = asyncio.run(_executa())
+    vistos = (_crm_calls[0].get("headers") or {}) if _crm_calls else {}
+    # nome de cabecalho e case-insensitive: o check nao pode depender da grafia
+    return resposta, {k.lower(): v for k, v in vistos.items()}
+
+
+def _chave_do_limiter(xff):
+    """A chave que o balde de 5/min do CRM usaria para esta requisicao.
+
+    O CRM sobe `uvicorn --proxy-headers --forwarded-allow-ips=*` (Dockerfile,
+    AUDIT-2026-08-W1E/F10): nesse modo o ProxyHeadersMiddleware troca
+    `scope["client"]` pelo item MAIS A ESQUERDA de X-Forwarded-For, e e esse
+    valor que `get_remote_address` (o key_func do limiter) le. Quem manda no
+    balde e a ponta ESQUERDA da cadeia.
+    """
+    return (xff or "").split(",")[0].strip()
+
+
+check(auth_router.CONVERSAS_SEED_DEV_DATA is False,
+      "o ramo exercitado e o de PRODUCAO (proxy ao CRM), nao o de auth local")
+
+_r_a, _h_a = _login_proxy("203.0.113.10")
+check(_r_a.status_code == 200,
+      f"o proxy ao CRM segue devolvendo 200 (veio {_r_a.status_code})")
+check("x-forwarded-for" in _h_a,
+      f"o POST ao CRM leva X-Forwarded-For (levou {sorted(_h_a) or 'nenhum cabecalho'})")
+check(_chave_do_limiter(_h_a.get("x-forwarded-for")) == "203.0.113.10",
+      f"o CRM chavearia no IP do cliente "
+      f"(chave={_chave_do_limiter(_h_a.get('x-forwarded-for'))!r})")
+
+_r_b, _h_b = _login_proxy("198.51.100.77")
+check(_chave_do_limiter(_h_b.get("x-forwarded-for")) == "198.51.100.77",
+      f"outro cliente, outra chave "
+      f"(chave={_chave_do_limiter(_h_b.get('x-forwarded-for'))!r})")
+
+# O defeito em uma linha: enquanto os dois caiam na MESMA chave, cinco
+# tentativas lixo por minuto derrubavam o login de todo mundo.
+check(_chave_do_limiter(_h_a.get("x-forwarded-for"))
+      != _chave_do_limiter(_h_b.get("x-forwarded-for")),
+      "dois clientes distintos NAO compartilham mais o mesmo balde de 5/min")
+
+# Producao de verdade: o Traefik ja entrega um X-Forwarded-For. Repassar a
+# cadeia mantem o cliente original na ponta esquerda; SOBRESCREVER com a nossa
+# visao do peer so acertaria enquanto o --proxy-headers do Conversas estivesse
+# ligado — e falharia em silencio no dia em que nao estivesse.
+_r_c, _h_c = _login_proxy("10.0.0.5", {"X-Forwarded-For": "198.51.100.9"})
+check(_chave_do_limiter(_h_c.get("x-forwarded-for")) == "198.51.100.9",
+      f"com cadeia do Traefik, a chave e o cliente original "
+      f"(chave={_chave_do_limiter(_h_c.get('x-forwarded-for'))!r})")
+
+_r_d, _h_d = _login_proxy("10.0.0.5", {"X-Forwarded-For": "198.51.100.9, 172.20.0.4"})
+_xff_d = _h_d.get("x-forwarded-for") or ""
+check(_chave_do_limiter(_xff_d) == "198.51.100.9",
+      f"cadeia com varios saltos: o cliente segue na ponta esquerda (got {_xff_d!r})")
+check("172.20.0.4" in _xff_d,
+      f"a cadeia recebida e REPASSADA, nao descartada (got {_xff_d!r})")
+
+check(bool(_crm_calls) and _crm_calls[0].get("json", {}).get("email") == USER_EMAIL,
+      "o corpo enviado ao CRM continua o mesmo (so o cabecalho mudou)")
+
+auth_router.httpx = _httpx_real
 
 # --- Resultado ---
 client.__exit__(None, None, None)

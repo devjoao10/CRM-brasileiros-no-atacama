@@ -106,10 +106,203 @@ def get_ai_user_context():
 # =====================================================================
 
 # AUDIT-2026-08-W1C (F3): tabelas que a IA NUNCA pode ler. `users` guarda
-# hashed_password/api_key; `chat_messages` guarda conversas privadas de outros
-# usuários. Match por word boundary + case-insensitive (pega `FROM users`,
-# `JOIN Users u`, `users.api_key`) e a query é REJEITADA, nunca reescrita.
-_FORBIDDEN_TABLES = re.compile(r'\b(users|chat_messages)\b', re.IGNORECASE)
+# hashed_password/api_key; `chat_messages`/`chat_sessions` guardam conversas
+# privadas de outros usuários. Match por word boundary + case-insensitive (pega
+# `FROM users`, `JOIN Users u`, `users.api_key`) e a query é REJEITADA, nunca
+# reescrita.
+#
+# AUDIT-2026-08-WF2: entraram também os nomes de CATÁLOGO (`pg_*`,
+# `information_schema`, `sqlite_*`) — ver `_ALLOWED_TABLES` abaixo para o porquê.
+# Esta denylist é o CINTO: pega o nome em QUALQUER posição da query, inclusive
+# onde ele não é uma tabela e o parser da allowlist não olha
+# (`to_regclass('users')`, `'users'::regclass`, `has_table_privilege('users',…)`).
+_FORBIDDEN_TABLES = re.compile(
+    r'\b(users|chat_messages|chat_sessions'
+    r'|pg_[a-z_]+|information_schema|sqlite_[a-z_]+)\b',
+    re.IGNORECASE,
+)
+
+# --- AUDIT-2026-08-WF2: allowlist de tabelas de negócio -------------------
+#
+# O DEFEITO: a denylist acima casa o NOME da tabela. As views de catálogo do
+# PostgreSQL entregam o CONTEÚDO de `users` sem que a palavra `users` apareça:
+#
+#     SELECT tablename, attname, most_common_vals, histogram_bounds FROM pg_stats
+#
+# `pg_stats` filtra por `has_column_privilege(..., 'select')` e o grant do banco
+# é `SELECT ON ALL TABLES IN SCHEMA public` (docker/postgres/init.sql), então
+# `users.hashed_password` e `users.api_key` passam no filtro e aparecem
+# literalmente em `most_common_vals` (tabela pequena) ou amostrados em
+# `histogram_bounds`. Explora quem tiver login no CRM (`POST /api/ai/chat` só
+# exige `get_current_user`) — ou ninguém, via prompt injection no texto de um
+# lead vindo do WhatsApp, que a IA lê e obedece.
+#
+# A DECISÃO: inverter para ALLOWLIST. Ampliar a denylist é corrida perdida
+# (pg_class, pg_attribute, pg_stat_user_tables, pg_stats_ext, information_schema,
+# sqlite_master — e amanhã outra view). A allowlist é fechada por construção.
+#
+# Esta lista é EXATAMENTE o que `get_database_schema()` anuncia à IA: tabela que
+# não é anunciada não é consultável. Mexeu numa, mexa na outra.
+_ALLOWED_TABLES = frozenset({
+    "leads", "tags", "lead_tags", "tasks", "funnels", "funnel_entries", "segments",
+})
+
+# Só o schema padrão de cada dialeto. `pg_catalog.pg_stats` e
+# `information_schema.columns` morrem aqui mesmo.
+_ALLOWED_SCHEMAS = frozenset({"public", "main"})
+_ALLOWED_TABLES_MSG = ", ".join(sorted(_ALLOWED_TABLES))
+
+# POR QUE A ALLOWLIST FECHA O VETOR: num SELECT o nome da tabela é um
+# IDENTIFICADOR literal — não há como computá-lo em tempo de execução.
+# `'us' || 'ers'` só concatena em posição de VALOR (por isso a query do achado
+# usa a concatenação no WHERE, e não no FROM) e `to_regclass('users')` devolve um
+# OID, não linhas. Logo o conjunto de tabelas que a query lê está inteiramente
+# escrito nela: conferir cada posição de tabela é conferir tudo.
+#
+# O QUE ELA NÃO COBRE:
+#  - o GRANT do banco continua `SELECT ON ALL TABLES` — este guard é de
+#    APLICAÇÃO. Revogá-lo segue sendo ação de operador (docker/postgres/init.sql)
+#    e continua sendo o que protege quem chega ao banco por FORA desta função.
+#  - abuso das tabelas PERMITIDAS: ler todos os leads é permitido por design.
+#  - as outras ferramentas da IA — `call_internal_api` tem os guards dela.
+#  - o tokenizador abaixo é um parser APROXIMADO de SQL. Ele erra sempre para o
+#    lado de BLOQUEAR: o que não souber classificar em posição de tabela é
+#    recusado. O custo de um erro é uma consulta exótica negada (CTE, `LATERAL`,
+#    `FROM ONLY`, comentário no meio da query) — nunca um vazamento.
+
+# Comentário SQL é recusado antes de tokenizar: ele serve para colar tokens sem
+# espaço (`FROM/**/pg_stats`) e para esconder vírgulas de lista de tabelas.
+# Nenhuma consulta analítica da IA precisa comentar código.
+_SQL_COMMENT_RE = re.compile(r"--|/\*|\*/")
+
+_SQL_TOKEN_RE = re.compile(
+    r"""(?P<ws>\s+)
+      | (?P<str>'(?:[^']|'')*')
+      | (?P<qident>"(?:[^"]|"")*")
+      | (?P<word>[A-Za-z_][A-Za-z0-9_]*)
+      | (?P<other>.)""",
+    re.VERBOSE | re.DOTALL,
+)
+
+# Palavras depois das quais vem uma TABELA. `table` entra porque
+# `SELECT * FROM (TABLE users) t` lê a tabela sem escrever `FROM users`.
+_TABLE_KEYWORDS = frozenset({"from", "join", "table"})
+
+# Palavras que ENCERRAM a lista de tabelas do FROM: depois delas uma vírgula
+# separa colunas (`ORDER BY a, b`), não tabelas.
+_END_OF_TABLE_LIST = frozenset({
+    "where", "group", "having", "order", "limit", "offset",
+    "union", "intersect", "except", "window", "fetch",
+})
+
+# As ÚNICAS construções do SQL padrão em que `FROM` aparece DENTRO de parênteses
+# sem introduzir tabela: `EXTRACT(MONTH FROM data_chegada)`,
+# `SUBSTRING(x FROM 2)`, `TRIM(BOTH ' ' FROM x)`, `OVERLAY(...)`, `POSITION(...)`.
+# Sem esta exceção, "leads por mês" — consulta óbvia da IA — seria bloqueada.
+# A exceção é segura porque o argumento dessas funções é uma EXPRESSÃO: para ler
+# uma tabela ali seria preciso abrir uma subquery, que abre um parêntese novo, e
+# esse nível já não é funcional (o `FROM` interno volta a ser analisado).
+_EXPR_FROM_FUNCTIONS = frozenset({
+    "extract", "substring", "trim", "overlay", "position",
+})
+
+
+def _normalize_ident(token: str) -> str:
+    """Reduz um identificador (com ou sem aspas) à forma comparável."""
+    if token.startswith('"'):
+        token = token[1:-1].replace('""', '"')
+    return token.lower()
+
+
+def _referenced_tables(query: str) -> list:
+    """Devolve as tabelas citadas em POSIÇÃO DE TABELA na query.
+
+    Levanta `ValueError` quando encontra algo que não sabe classificar em
+    posição de tabela — o chamador trata isso como bloqueio (fail-closed).
+    """
+    tokens = [
+        (m.lastgroup, m.group())
+        for m in _SQL_TOKEN_RE.finditer(query)
+        if m.lastgroup != "ws"
+    ]
+
+    tabelas = []
+    esperando_tabela = False
+    # Uma entrada por nível de parênteses: [vírgula aqui separa tabelas?,
+    # este nível é argumento de EXTRACT/SUBSTRING/...?]. A subquery abre nível
+    # próprio, então `IN (1, 2)` nunca vira lista de tabelas.
+    escopos = [[False, False]]
+
+    i = 0
+    while i < len(tokens):
+        kind, value = tokens[i]
+        anterior = tokens[i - 1][1].lower() if i else ""
+        i += 1
+
+        if esperando_tabela:
+            esperando_tabela = False
+            if value == "(":
+                # Subquery ou parêntese de agrupamento: o FROM interno é
+                # visitado por este mesmo laço.
+                escopos.append([False, False])
+                continue
+            if kind not in ("word", "qident"):
+                raise ValueError(f"token inesperado em posição de tabela: {value!r}")
+            nome = _normalize_ident(value)
+            while (i + 1 < len(tokens) and tokens[i][1] == "."
+                   and tokens[i + 1][0] in ("word", "qident")):
+                nome += "." + _normalize_ident(tokens[i + 1][1])
+                i += 2
+            tabelas.append(nome)
+            continue
+
+        if value == "(":
+            escopos.append([False, anterior in _EXPR_FROM_FUNCTIONS])
+        elif value == ")":
+            if len(escopos) > 1:
+                escopos.pop()
+        elif value == ",":
+            esperando_tabela = escopos[-1][0]
+        elif kind == "word":
+            palavra = value.lower()
+            if palavra in _TABLE_KEYWORDS and not escopos[-1][1]:
+                esperando_tabela = True
+                escopos[-1][0] = palavra != "table"
+            elif palavra in _END_OF_TABLE_LIST:
+                escopos[-1][0] = False
+
+    if esperando_tabela:
+        raise ValueError("query termina esperando um nome de tabela")
+    return tabelas
+
+
+def _blocked_table_reason(query: str):
+    """Mensagem de bloqueio (PT-BR) da allowlist, ou None se a query é aceita."""
+    if _SQL_COMMENT_RE.search(query):
+        return (
+            "Consulta bloqueada: comentários SQL (`--`, `/* */`) não são aceitos. "
+            "Reescreva a consulta sem comentários."
+        )
+    try:
+        tabelas = _referenced_tables(query)
+    except ValueError:
+        return (
+            "Consulta bloqueada: não foi possível identificar com segurança as "
+            f"tabelas consultadas. Tabelas disponíveis: {_ALLOWED_TABLES_MSG}."
+        )
+    for nome in tabelas:
+        partes = nome.split(".")
+        permitida = (
+            (len(partes) == 1 and partes[0] in _ALLOWED_TABLES)
+            or (len(partes) == 2 and partes[0] in _ALLOWED_SCHEMAS
+                and partes[1] in _ALLOWED_TABLES)
+        )
+        if not permitida:
+            return (
+                f"Consulta bloqueada: a tabela `{nome[:64]}` não está disponível "
+                f"para a IA. Tabelas disponíveis: {_ALLOWED_TABLES_MSG}."
+            )
+    return None
 
 
 def get_database_schema() -> str:
@@ -130,9 +323,12 @@ def get_database_schema() -> str:
       saber as de um funil, leia `funnels.etapas`.
     - segments (id, nome, rules [JSON])
 
-    OBS (AUDIT-2026-08-W1C/F3): as tabelas `users` e `chat_messages` NÃO estão
-    disponíveis para consulta — contêm hashes de senha, API keys e histórico
-    privado de conversas. Consultá-las é bloqueado no servidor.
+    OBS (AUDIT-2026-08-W1C/F3 + AUDIT-2026-08-WF2): a IA só consegue consultar as
+    tabelas listadas acima. QUALQUER outra é bloqueada no servidor — inclusive
+    `users` e `chat_messages` (hashes de senha, API keys, conversas privadas) e as
+    views de catálogo do banco (`pg_stats`, `pg_class`, `pg_stat_user_tables`,
+    `information_schema.*`, `sqlite_master`), que expõem amostras do conteúdo
+    dessas mesmas tabelas.
     """
     return schema
 
@@ -176,15 +372,31 @@ def run_select_query(query: str) -> str:
     # guards acima. Como a IA lê texto que chega do WhatsApp via n8n, uma prompt
     # injection bastava para exfiltrar hashes e API keys. Rejeitamos (não
     # sanitizamos: reescrever a query esconde a tentativa e é contornável).
-    # NOTA: o fix REAL é revogar o grant no banco — ação de operador.
+    #
+    # AUDIT-2026-08-WF2: aqui se afirmava que a query era REJEITADA e que só
+    # faltava o operador revogar o grant. Era falso para o vetor de catálogo —
+    # `SELECT most_common_vals FROM pg_stats` entrega o conteúdo de `users` sem
+    # citar `users`, e passava por este guard. A denylist virou o CINTO (pega o
+    # nome em qualquer posição) e a allowlist abaixo é o fecho estrutural.
+    # Revogar o grant continua valendo, mas já não é o único fecho deste vetor.
     if _FORBIDDEN_TABLES.search(query):
-        logger.warning(f"[AI SQL READ BLOCKED] tabela sensível referenciada: {query[:200]}")
+        logger.warning(f"[AI SQL READ BLOCKED] nome sensível referenciado: {query[:200]}")
         return json.dumps({
             "error": (
-                "Consulta bloqueada: as tabelas `users` e `chat_messages` contêm "
-                "credenciais e conversas privadas e não podem ser lidas pela IA."
+                "Consulta bloqueada: `users`, `chat_messages`/`chat_sessions` e as "
+                "views de catálogo do banco (pg_*, information_schema, sqlite_*) "
+                "contêm credenciais, conversas privadas e amostras do conteúdo das "
+                "demais tabelas — não podem ser lidas pela IA."
             )
         })
+
+    # AUDIT-2026-08-WF2: allowlist estrutural de tabelas — ver `_ALLOWED_TABLES`.
+    motivo_bloqueio = _blocked_table_reason(query)
+    if motivo_bloqueio:
+        logger.warning(
+            f"[AI SQL READ BLOCKED] {motivo_bloqueio[:160]} | query: {query[:200]}"
+        )
+        return json.dumps({"error": motivo_bloqueio})
 
     # AUDIT-2026-08-W1C (F5): sem engine read-only confiável, não rodamos nada.
     if _read_only_engine is None:

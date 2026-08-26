@@ -691,10 +691,20 @@
         const body = document.getElementById('body-' + stageId);
         if (!st || !body) return;
 
+        // AUDIT-2026-08-WF2: o botao "Carregar mais" montava o onclick por
+        // CONCATENACAO de strings, nao por template literal — por isso escapou da
+        // varredura AUDIT-2026-08-W2B-orq: o detector de
+        // tests/test_frontend_injection_contract.py so procura a forma `'${`.
+        // stageId vem de KanbanStageMeta.id, um `str` SEM pattern — o pattern de
+        // StageSchema.id so vale na ESCRITA, entao etapa legada com aspa no id
+        // chegava crua dentro do literal JS do handler. Correcao igual a das outras
+        // colunas (renderSkeleton): data-* + this.dataset.stage, porque esc() NAO
+        // protege dentro de handler inline — o parser devolve o &#39; antes de o JS
+        // compilar a linha.
         body.innerHTML = st.items.length === 0
             ? '<div class="empty-column">Nenhum lead</div>'
             : st.items.map(l => renderLeadCard(l)).join('') +
-              (st.hasMore ? '<button class="btn btn-sm" style="width:100%;margin-top:6px" onclick="loadStage(\'' + stageId + '\', false)">Carregar mais</button>' : '');
+              (st.hasMore ? '<button class="btn btn-sm" style="width:100%;margin-top:6px" data-stage="' + esc(stageId) + '" onclick="loadStage(this.dataset.stage, false)">Carregar mais</button>' : '');
 
         // "32 de 842" quando ha filtro; so o total quando nao ha.
         const cnt = document.getElementById('cnt-' + stageId);
@@ -1066,7 +1076,9 @@
         let info = '';
         info += `<div class="detail-field"><span class="detail-field-label">Email</span><span class="detail-field-value">${lead.email ? esc(lead.email) : '—'}</span></div>`;
         info += `<div class="detail-field"><span class="detail-field-label">WhatsApp</span><span class="detail-field-value">${lead.whatsapp ? esc(lead.whatsapp) : '—'}</span></div>`;
-        info += `<div class="detail-field"><span class="detail-field-label">Destinos</span><span class="detail-field-value">${(lead.destinos || []).join(', ') || '—'}</span></div>`;
+        // AUDIT-2026-08-WF2: destinos e texto livre gravado pelo n8n/WhatsApp; este
+        // bloco cai inteiro em detailInfo.innerHTML no fim da funcao.
+        info += `<div class="detail-field"><span class="detail-field-label">Destinos</span><span class="detail-field-value">${esc((lead.destinos || []).join(', ')) || '—'}</span></div>`;
         info += `<div class="detail-field"><span class="detail-field-label">Chegada</span><span class="detail-field-value">${lead.data_chegada ? fmtDate(lead.data_chegada) : '—'}</span></div>`;
         info += `<div class="detail-field"><span class="detail-field-label">Partida</span><span class="detail-field-value">${lead.data_partida ? fmtDate(lead.data_partida) : '—'}</span></div>`;
         if (lead.total_dias) {
@@ -1093,7 +1105,10 @@
             viajantesText = `${lead.num_viajantes} adulto${lead.num_viajantes > 1 ? 's' : ''}`;
             if (lead.num_criancas && lead.num_criancas > 0) {
                 viajantesText += ` + ${lead.num_criancas} criança${lead.num_criancas > 1 ? 's' : ''}`;
-                if (lead.idades_criancas) viajantesText += ` (${lead.idades_criancas} anos)`;
+                // AUDIT-2026-08-WF2: idades_criancas e string livre — o n8n preenche
+                // com o que o LLM extrai da conversa de WhatsApp. viajantesText e
+                // interpolado cru em detailInfo.innerHTML logo abaixo.
+                if (lead.idades_criancas) viajantesText += ` (${esc(lead.idades_criancas)} anos)`;
             }
         }
         info += `<div class="detail-field"><span class="detail-field-label">Viajantes</span><span class="detail-field-value">${viajantesText || '—'}</span></div>`;
@@ -1184,7 +1199,11 @@
         const funnel = funnels.find(f => f.id === funnelId);
         const select = document.getElementById('transferStage');
         if (!funnel) { select.innerHTML = '<option value="">Selecione o funil primeiro...</option>'; return; }
-        select.innerHTML = funnel.etapas.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('');
+        // AUDIT-2026-08-WF2: FunnelResponse.etapas e `list[dict]` — passthrough do
+        // JSON do banco, sem validacao na leitura. `s.id` e string livre e ia crua
+        // para dentro do atributo value. O .value lido por executeTransfer continua
+        // identico: o parser decodifica a entidade de volta.
+        select.innerHTML = funnel.etapas.map(s => `<option value="${esc(s.id)}">${esc(s.nome)}</option>`).join('');
     }
 
     async function executeTransfer() {

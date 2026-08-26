@@ -635,7 +635,11 @@
             const cls = d.toLowerCase() === 'atacama' ? 'atacama'
                 : d.toLowerCase() === 'uyuni' ? 'uyuni'
                 : d.toLowerCase() === 'santiago' ? 'santiago' : 'outro';
-            return `<span class="destino-tag ${cls}">${d}</span>`;
+            // AUDIT-2026-08-WF2: `d` e texto livre de leads.destinos, gravado
+            // pelo webhook do WhatsApp/n8n sem passar por operador. Esta string
+            // vai para tbody.innerHTML / insertAdjacentHTML via linhaDoLead.
+            // `cls` sai do ternario acima (vocabulario fechado): so `d` escapa.
+            return `<span class="destino-tag ${cls}">${esc(d)}</span>`;
         }).join(' ');
     }
 
@@ -900,7 +904,10 @@
 
             if (!resp.ok) {
                 resultsDiv.className = 'import-results show alert alert-error';
-                resultsDiv.innerHTML = `Erro: ${data.detail || 'Erro na importação'}`;
+                // AUDIT-2026-08-WF2: data.detail carrega a mensagem da excecao do
+                // parser de planilha (app/routers/leads.py: "Erro ao ler CSV: ..."),
+                // que embute trecho do arquivo enviado. Vai para innerHTML: escapar.
+                resultsDiv.innerHTML = `Erro: ${esc(data.detail || 'Erro na importação')}`;
             } else {
                 const hasErrors = data.erros > 0;
                 resultsDiv.className = `import-results show alert ${hasErrors ? 'alert-warning' : 'alert-success'}`;

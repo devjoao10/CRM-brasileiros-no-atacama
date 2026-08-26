@@ -737,6 +737,123 @@ with legacy012.begin() as conn:
         "SELECT primeira_resposta_humana_at FROM conversations WHERE id = 1")).scalar()
 check(row1_again == rows012[1], "m012: 2a execucao NAO reescreve o valor ja gravado")
 
+# ============ 20. AUDIT-2026-08-WF2 — RETOMADA HUMANA DE CONVERSA ENCERRADA ============
+# Todo predicado de `_inbox_predicates` exige status IN ('aberta','aguardando').
+# O envio humano gravava atendente_id/primeira_resposta_humana_at mas deixava
+# status='encerrada': a conversa que o atendente acabou de retomar sumia de
+# meus/fila/bia/todos e so restava em "encerradas" — e, na resposta seguinte do
+# cliente, o ramo de reabertura do webhook devolvia tudo para a BIA.
+print("20 — atendente retoma conversa encerrada: volta a ser visivel para quem escreveu")
+
+
+def ids_in_inbox(inbox):
+    r = client.get(f"/api/conversations?inbox={inbox}&limit=100")
+    assert r.status_code == 200, (inbox, r.status_code, r.text)
+    return {c["id"] for c in r.json()["conversations"]}
+
+
+def counts():
+    r = client.get("/api/conversations/counts")
+    assert r.status_code == 200, (r.status_code, r.text)
+    return r.json()
+
+
+_wf2_seq = {"n": 0}
+
+
+async def _ok_send_wf2(*a, **k):
+    _wf2_seq["n"] += 1
+    return {"messages": [{"id": f"wamid.WF2_{_wf2_seq['n']}"}]}
+
+
+_orig_send_wf2 = wh.whatsapp.send_text_message
+wh.whatsapp.send_text_message = _ok_send_wf2
+
+client.post("/webhook", json=inbound("wamid.WF2A", "5511900066671"))
+cRet = conv_id_of("5511900066671")
+# inbound() usa timestamp de 2023: abre a janela de 24h para o texto livre
+# (encerrar e retomar no mesmo dia e o caso comum do atendimento).
+_db = SessionLocal()
+_c = _db.query(Conversation).filter(Conversation.id == cRet).first()
+_c.last_customer_msg_at = _dt.datetime.now(_dt.timezone.utc)
+_db.commit()
+_db.close()
+
+client.post(f"/api/conversations/{cRet}/handoff")
+r = client.post(f"/api/conversations/{cRet}/messages",
+                json={"content": "Bom dia, aqui e a Julia", "msg_type": "text"})
+check(r.status_code == 200, f"20 — primeiro atendimento responde 200 (got {r.status_code})")
+prh_antes = state(cRet)[3]
+
+r = client.put(f"/api/conversations/{cRet}", json={"status": "encerrada"})
+check(r.status_code == 200, "20 — PUT status=encerrada responde 200")
+check(state(cRet)[4] == "encerrada", "20 — conversa encerrada antes da retomada")
+check(cRet in ids_in_inbox("encerradas"), "20 — encerrada aparece em 'encerradas'")
+check(cRet not in ids_in_inbox("meus"), "20 — encerrada NAO aparece em 'meus'")
+counts_encerrada = counts()
+
+print("20a — envio humano na conversa encerrada REABRE (status volta a 'aberta')")
+r = client.post(f"/api/conversations/{cRet}/messages",
+                json={"content": "Oi! Voltando ao seu atendimento", "msg_type": "text"})
+check(r.status_code == 200, f"20a — retomada pelo atendente responde 200 (got {r.status_code})")
+bot_r, at_r, q_r, prh_r, st_r = state(cRet)
+check(st_r == "aberta", f"20a — status volta para 'aberta' (got {st_r!r})")
+check(at_r == 1, f"20a — atendente_id preservado (got {at_r!r})")
+check(prh_r == prh_antes, "20a — primeira_resposta_humana_at do ciclo NAO e reescrita")
+check(q_r is None, "20a — nao volta para a fila (queued_at continua NULL)")
+check(bot_r is False, "20a — BIA continua desligada")
+
+print("20b — a conversa retomada volta a ser VISIVEL para quem escreveu")
+check(cRet in ids_in_inbox("meus"), "20b — retomada aparece em 'meus' de quem escreveu")
+check(cRet in ids_in_inbox("todos"), "20b — retomada aparece em 'todos'")
+check(cRet not in ids_in_inbox("encerradas"), "20b — retomada saiu de 'encerradas'")
+counts_retomada = counts()
+check(counts_retomada["meus"] == counts_encerrada["meus"] + 1,
+      f"20b — counts.meus +1 ({counts_encerrada['meus']} -> {counts_retomada['meus']})")
+check(counts_retomada["encerradas"] == counts_encerrada["encerradas"] - 1,
+      f"20b — counts.encerradas -1 ({counts_encerrada['encerradas']} -> {counts_retomada['encerradas']})")
+
+print("20c — resposta do cliente apos a retomada NAO devolve a conversa para a BIA")
+client.post("/webhook", json=inbound("wamid.WF2B", "5511900066671", "obrigado!"))
+bot_c, at_c, q_c, prh_c, st_c = state(cRet)
+check(bot_c is False, "20c — is_bot_active continua False (a BIA nao reassume)")
+check(at_c == 1, f"20c — atendente_id da retomada preservado (got {at_c!r})")
+check(prh_c == prh_antes, "20c — primeira_resposta_humana_at preservada")
+check(st_c == "aberta", "20c — continua aberta")
+check(cRet in ids_in_inbox("meus"), "20c — continua em 'meus' depois da resposta do cliente")
+check(cRet not in ids_in_inbox("bia"), "20c — NAO caiu em 'bia'")
+
+print("20d — outbound AUTOMATICO da Bia NAO reabre conversa encerrada")
+client.post("/webhook", json=inbound("wamid.WF2C", "5511900066672"))
+cBia = conv_id_of("5511900066672")
+_db = SessionLocal()
+_c = _db.query(Conversation).filter(Conversation.id == cBia).first()
+_c.status = "encerrada"
+_db.commit()
+_db.close()
+_db = SessionLocal()
+_c = _db.query(Conversation).filter(Conversation.id == cBia).first()
+record_outbound_message(
+    _db, _c, "resposta automatica da Bia", "text",
+    {"messages": [{"id": "wamid.WF2_BIA"}]}, autor_user_id=None,
+)
+_db.close()
+check(state(cBia)[4] == "encerrada",
+      f"20d — outbound sem autor_user_id NAO reabre (got {state(cBia)[4]!r})")
+
+print("20e — envio humano que FALHA na Meta NAO reabre conversa encerrada")
+_db = SessionLocal()
+_c = _db.query(Conversation).filter(Conversation.id == cBia).first()
+record_outbound_message(
+    _db, _c, "tentativa que falha", "text",
+    {"error": True, "summary": "simulado"}, autor_user_id=1,
+)
+_db.close()
+check(state(cBia)[4] == "encerrada",
+      f"20e — envio humano FALHO NAO reabre (got {state(cBia)[4]!r})")
+
+wh.whatsapp.send_text_message = _orig_send_wf2
+
 print()
 if failures:
     print(f"FALHOU ({len(failures)}):")

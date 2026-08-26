@@ -157,11 +157,38 @@ async def verify_webhook(
     """
     expected_token = _get_verify_token(db)
 
-    if hub_mode == "subscribe" and hub_verify_token == expected_token and expected_token:
+    # AUDIT-2026-08-WF2 (2) — `GET /webhook` e PUBLICO: a assinatura HMAC so
+    # existe no POST. Logo `hub.verify_token` e um palpite de terceiro contra um
+    # segredo, e `==` entre strings sai no PRIMEIRO byte diferente: o tempo da
+    # resposta diz quanto do token o palpite acertou. `compare_digest` percorre
+    # os dois operandos inteiros (mesma regra que `_verify_password` ja aplica em
+    # conversas/app/routers/auth.py, no outro sentido).
+    #
+    # Em BYTES de proposito: a query string aceita qualquer Unicode e
+    # `compare_digest` sobre `str` nao-ASCII levanta TypeError — o que
+    # transformaria uma recusa (403) num erro do servidor (500).
+    if (
+        hub_mode == "subscribe"
+        and expected_token
+        and hmac.compare_digest(
+            (hub_verify_token or "").encode("utf-8"),
+            expected_token.encode("utf-8"),
+        )
+    ):
         logger.info("Webhook verificado com sucesso!")
         return int(hub_challenge)
 
-    logger.warning(f"Webhook verification failed: mode={hub_mode}, token={hub_verify_token}")
+    # AUDIT-2026-08-WF2 (2) — nada do que o terceiro enviou entra no log. O
+    # token e um palpite contra um segredo, e a query string aceita quebra de
+    # linha: ecoar o valor deixa quem chamou FORJAR uma linha inteira dentro do
+    # log. Registramos so os fatos que servem para diagnosticar a recusa.
+    logger.warning(
+        "Verificacao do webhook Meta recusada "
+        "(mode_subscribe=%s, token_enviado=%s, token_configurado=%s)",
+        hub_mode == "subscribe",
+        hub_verify_token is not None,
+        bool(expected_token),
+    )
     raise HTTPException(status_code=403, detail="Verification failed")
 
 
@@ -851,9 +878,34 @@ def _agent_auth_headers() -> dict:
     byte. Configurar aqui e seguro com o n8n ainda aberto (um cabecalho a mais
     e ignorado); o contrario nao e. Por isso a ordem no deploy e: Conversas
     primeiro, n8n depois.
+
+    AUDIT-2026-08-WF2 (3) — com so UMA das duas variaveis definidas o retorno
+    tambem e `{}`, indistinguivel de "nao configurado": e o log que passa a
+    distinguir os dois estados.
     """
     if N8N_WEBHOOK_AUTH_HEADER and N8N_WEBHOOK_AUTH_VALUE:
         return {N8N_WEBHOOK_AUTH_HEADER: N8N_WEBHOOK_AUTH_VALUE}
+
+    # AUDIT-2026-08-WF2 (3) — meia-configuracao. Nao e atacavel de fora: e
+    # armadilha de DEPLOY. O operador define uma variavel so, ve `{}` (igual a
+    # "nao configurado"), segue a ordem documentada acima, liga o Header Auth no
+    # n8n — e a Bia para de responder a TODOS os clientes, sem uma linha no log.
+    #
+    # O RETORNO continua `{}`: mandar um cabecalho com valor vazio, ou com nome
+    # vazio, seria pior que nao mandar nada. O que muda e o aviso. Ele repete a
+    # cada tentativa de propósito — enquanto a configuracao estiver pela metade,
+    # cada mensagem de cliente e uma chance de o operador notar.
+    #
+    # Nunca o VALOR do segredo: so o NOME da variavel que falta.
+    if N8N_WEBHOOK_AUTH_HEADER or N8N_WEBHOOK_AUTH_VALUE:
+        faltando = ("N8N_WEBHOOK_AUTH_VALUE" if N8N_WEBHOOK_AUTH_HEADER
+                    else "N8N_WEBHOOK_AUTH_HEADER")
+        logger.warning(
+            "Header Auth do agente pela METADE: %s nao esta definida. Nenhum "
+            "cabecalho de autenticacao sera enviado ao n8n; se o Header Auth ja "
+            "estiver ligado la, a Bia nao respondera a nenhum cliente.",
+            faltando,
+        )
     return {}
 
 

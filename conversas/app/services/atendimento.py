@@ -195,7 +195,38 @@ def marcar_atendimento_humano(conversation: Conversation, autor_user_id: int) ->
         assume; nao existe atendimento sem dono)
       - is_bot_active = False                (defensivo: se a Bia ainda estava
         ligada por qualquer caminho, um humano falando encerra isso)
+
+    AUDIT-2026-08-WF2 — RETOMADA: outbound humano em conversa ENCERRADA REABRE.
+
+    Todo predicado de `_inbox_predicates` exige status IN ('aberta','aguardando').
+    O envio gravava atendente_id/primeira_resposta_humana_at e deixava
+    status='encerrada': a conversa que o atendente acabou de retomar (composer
+    dentro da janela, ou template de retomada fora dela — o unico caminho
+    permitido pela Meta) sumia de meus/fila/bia/todos e so restava em
+    "encerradas". Mesma classe de estado do F-085.
+
+    'aberta', nao 'aguardando': 'aguardando' e LEGADO e DERIVADO — a whitelist
+    do `PUT /{id}` recusa escreve-lo ("use 'aberta' ou 'encerrada'; 'aguardando'
+    e derivado") e ele so sobrevive em `LEGACY_OPEN_STATUSES` por tolerancia a
+    linhas antigas. A reabertura pelo webhook ja grava 'aberta'; nao ha um
+    segundo estado aberto a escolher.
+
+    Fica ANTES do early-return de proposito: uma conversa atendida antes de ser
+    encerrada tem primeira_resposta_humana_at != NULL e sairia daqui sem reabrir.
+
+    Efeito no webhook, sem precisar toca-lo: o ramo de reabertura
+    (`if conversation.status == "encerrada"`) deixa de disparar na resposta
+    seguinte do cliente, entao atendente_id e primeira_resposta_humana_at
+    sobrevivem e a Bia NAO reassume a conversa que um humano retomou.
+
+    So chega aqui envio HUMANO (`autor_user_id` != None) e BEM-SUCEDIDO: a Bia,
+    as auto-respostas e a frase de encerramento passam `autor_user_id=None` e
+    uma tentativa recusada pela Meta nem chama esta funcao — nenhuma delas
+    reabre conversa por conta propria.
     """
+    if conversation.status == "encerrada":
+        conversation.status = "aberta"
+
     if conversation.primeira_resposta_humana_at is not None:
         return False
 

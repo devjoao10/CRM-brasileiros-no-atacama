@@ -9,7 +9,7 @@ import hashlib
 import hmac
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 from jose import jwt
 from sqlalchemy.orm import Session
@@ -101,8 +101,53 @@ from app.seed import CONVERSAS_SEED_DEV_DATA
 CRM_BASE_URL = os.getenv("CRM_BASE_URL", "http://crm:8000")
 
 
+def _forwarded_for_headers(request: Request) -> dict:
+    """Cabecalhos do salto Conversas -> CRM que carregam o IP real de quem pediu.
+
+    AUDIT-2026-08-WF2 (1): o login abaixo e um PROXY servidor-a-servidor. O CRM
+    limita `/api/auth/login` em 5/minute com `key_func=get_remote_address`
+    (app/limiter.py), e nesse salto o `remote_address` e SEMPRE o container do
+    Conversas — ou seja, todos os atendentes dividiam UM balde de 5/min. Cinco
+    tentativas com credencial lixo por minuto, sem conta e sem autenticacao, e o
+    429 do CRM era repassado a todo mundo: ninguem mais entrava no inbox.
+
+    REPASSAR a cadeia, nao SOBRESCREVER. O CRM sobe `uvicorn --proxy-headers
+    --forwarded-allow-ips=*` (Dockerfile, AUDIT-2026-08-W1E/F10) e nesse modo o
+    `ProxyHeadersMiddleware` chaveia no item MAIS A ESQUERDA de X-Forwarded-For.
+    Entao:
+
+      - repassar o cabecalho que veio do Traefik mantem o cliente original nessa
+        ponta esquerda, que e exatamente a chave desejada;
+      - sobrescrever com `request.client.host` daria o mesmo resultado SO
+        enquanto o uvicorn do Conversas tambem estivesse com `--proxy-headers`.
+        No dia em que nao estiver (execucao local, override do compose, outro
+        entrypoint) `request.client.host` vira o IP do Traefik, e a sobrescrita
+        descartaria justamente o cabecalho onde estava o cliente real — o balde
+        compartilhado voltaria com a correcao parecendo aplicada.
+
+    Tambem NAO acrescentamos um salto nosso a cadeia: o `--proxy-headers` do
+    Conversas ja trocou `scope["client"]` pelo primeiro item dela, entao anexar
+    `request.client.host` duplicaria esse valor sem nomear salto algum. Sem
+    cadeia (chamada direta, dev, teste) sintetizamos a partir do peer.
+
+    Isto NAO amplia a superficie de spoofing: confiar no X-Forwarded-For que
+    chega e a postura ja escolhida em F10 para os dois servicos, e o mesmo
+    cabecalho vale batendo direto no `/api/auth/login` do CRM pelo Traefik.
+    """
+    cadeia = request.headers.get("x-forwarded-for", "").strip()
+    if not cadeia and request.client:
+        cadeia = request.client.host
+    # Cabecalho com valor vazio e pior que cabecalho ausente: nao mandamos.
+    return {"X-Forwarded-For": cadeia} if cadeia else {}
+
+
 @router.post("/login")
-async def login(data: LoginRequest, response: Response, db: Session = Depends(get_db)):
+async def login(
+    data: LoginRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
     """
     CONV-BF-AUTH-01:
     - DEV LOCAL (CONVERSAS_SEED_DEV_DATA=true): autentica na tabela `users`
@@ -140,6 +185,9 @@ async def login(data: LoginRequest, response: Response, db: Session = Depends(ge
             crm_response = await client.post(
                 f"{CRM_BASE_URL}/api/auth/login",
                 json={"email": data.email, "password": data.password},
+                # AUDIT-2026-08-WF2 (1) — sem isto o CRM limita 5/min POR
+                # CONTAINER, e nao por cliente. Ver `_forwarded_for_headers`.
+                headers=_forwarded_for_headers(request),
                 timeout=10.0
             )
 

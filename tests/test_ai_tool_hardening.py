@@ -17,6 +17,10 @@ de chat), porque o objetivo é provar o guard, não o modelo:
        (hashes de senha e API keys), mas continua respondendo sobre `leads`.
   F6 — update_lead_status recusa status fora da whitelist e recusa rodar sem
        contexto de usuário.
+  WF2 (AUDIT-2026-08-WF2) — a denylist de `users`/`chat_messages` casava o NOME
+       da tabela, e as views de catálogo entregam o CONTEÚDO dela sem citar o
+       nome (`SELECT most_common_vals FROM pg_stats`). run_select_query agora
+       exige que TODA tabela citada esteja na allowlist de tabelas de negócio.
   F7 — motivo_perda em lead que JÁ tem `campos_personalizados` não-vazio persiste
        de verdade (antes: mutação in-place do dict JSON era descartada pelo
        SQLAlchemy e a ferramenta ainda assim respondia "sucesso").
@@ -253,6 +257,139 @@ def test_f7_cancel_reason_persists_on_populated_json():
     assert lead.campos_personalizados.get("origem") == "instagram"
 
 
+# ── WF2. Allowlist de tabelas: o catálogo do banco não é consultável ───
+#
+# AUDIT-2026-08-WF2. O guard antigo casava o NOME `users`/`chat_messages` na
+# query. As views de catálogo do PostgreSQL entregam o CONTEÚDO amostrado das
+# tabelas sem que o nome apareça — `pg_stats.most_common_vals` mostra
+# `users.hashed_password` e `users.api_key` literalmente, porque o grant é
+# `SELECT ON ALL TABLES` e a view filtra por `has_column_privilege`.
+#
+# Estas listas são o contrato do guard: a primeira NÃO pode passar, a segunda
+# NÃO pode ser bloqueada. Repare que o teste roda o guard de verdade
+# (`run_select_query`) e exige a mensagem de BLOQUEIO — um erro do banco
+# ("no such table") não conta como bloqueio: é exatamente assim que o vetor
+# passava despercebido no SQLite de desenvolvimento.
+_WF2_BLOQUEADAS = [
+    # ── as 3 queries provadas na revisão adversarial ──
+    "SELECT tablename, attname, most_common_vals, histogram_bounds "
+    "FROM pg_stats WHERE schemaname = 'public'",
+    "SELECT attname, most_common_vals FROM pg_stats WHERE tablename = 'us' || 'ers'",
+    "SELECT * FROM pg_stats",
+    # ── outras views de catálogo com o mesmo poder ──
+    "SELECT * FROM pg_stat_user_tables",
+    "SELECT relname FROM pg_class",
+    "SELECT attname FROM pg_attribute",
+    "SELECT * FROM pg_catalog.pg_stats",
+    "SELECT query FROM pg_stat_activity",
+    "SELECT column_name FROM information_schema.columns",
+    "SELECT * FROM INFORMATION_SCHEMA.TABLES",
+    "SELECT sql FROM sqlite_master",
+    # ── evasões do nome da tabela proibida ──
+    "SELECT email, hashed_password FROM users",
+    'SELECT api_key FROM "users"',
+    "SELECT * FROM public.users",
+    "SELECT * FROM USERS",
+    'SELECT hashed_password FROM us"ers"',
+    "SELECT * FROM chat_messages",
+    "SELECT * FROM chat_sessions",
+    # ── evasões de POSIÇÃO: a tabela proibida não é a primeira do FROM ──
+    "SELECT u.api_key FROM leads l, users u WHERE u.id = l.responsavel_id",
+    "SELECT s.most_common_vals FROM leads l, pg_stats s",
+    "SELECT * FROM leads CROSS JOIN pg_stats",
+    "SELECT * FROM leads JOIN pg_stats ON 1 = 1",
+    "SELECT * FROM (SELECT most_common_vals FROM pg_stats) x",
+    "SELECT (SELECT most_common_vals FROM pg_stats LIMIT 1) AS vazou",
+    "SELECT * FROM (TABLE users) t",
+    "SELECT nome FROM leads UNION SELECT tablename FROM pg_stats",
+    # `ANY(...)`/`EXISTS(...)` parecem chamada de função, mas o parêntese deles é
+    # o da subquery: a exceção de `EXTRACT(... FROM ...)` NÃO pode cegar o FROM
+    # de dentro (é o preço de ter uma exceção; este caso é quem cobra o preço).
+    "SELECT * FROM leads WHERE id = ANY(SELECT most_common_vals FROM pg_stats)",
+    "SELECT EXISTS(SELECT 1 FROM pg_stats)",
+    # a exceção do EXTRACT também não pode cegar a vírgula da lista de tabelas
+    "SELECT EXTRACT(MONTH FROM created_at) AS m, nome FROM leads, teams",
+    # ── evasões por comentário SQL (separam tokens sem espaço) ──
+    "SELECT * FROM/**/pg_stats",
+    "SELECT * FROM leads/**/, pg_stats",
+    "SELECT * FROM pg_stats -- so um comentario",
+    # ── tabelas REAIS do CRM fora do escopo anunciado à IA: nenhuma delas
+    #    aparecia na denylist antiga, então todas passavam ──
+    "SELECT * FROM teams",
+    "SELECT * FROM internal_tasks",
+    "SELECT * FROM lead_history",
+    "SELECT * FROM operational_cards",
+]
+
+_WF2_PERMITIDAS = [
+    # Consultas analíticas legítimas — se alguma destas quebrar, a correção
+    # cortou a IA em silêncio (ela só veria "consulta bloqueada" e desistiria).
+    "SELECT COUNT(*) AS total FROM leads WHERE is_active = 1",
+    "SELECT t.nome, COUNT(lt.lead_id) AS qtd FROM tags t "
+    "LEFT JOIN lead_tags lt ON lt.tag_id = t.id GROUP BY t.nome ORDER BY qtd DESC",
+    "SELECT f.nome, fe.etapa_id, COUNT(*) AS total FROM funnel_entries fe "
+    "JOIN funnels f ON f.id = fe.funnel_id GROUP BY f.nome, fe.etapa_id",
+    # vírgula no FROM (cross join) é sintaxe legítima e não pode ser proibida
+    "SELECT l.nome, l.status_venda FROM leads l, tags t WHERE t.id = 1",
+    # subquery legítima
+    "SELECT nome FROM leads WHERE id IN (SELECT lead_id FROM lead_tags)",
+    "SELECT status, COUNT(*) AS qtd FROM tasks GROUP BY status",
+    "SELECT nome FROM segments",
+    'SELECT nome FROM "leads" ORDER BY created_at DESC LIMIT 5',
+    # sem FROM: não lê tabela nenhuma; test_perpetua_internal_auth depende disto
+    "SELECT 1",
+]
+
+# Sintaxe legítima que o SQLite de teste não consegue EXECUTAR (schema
+# `public` só existe no PostgreSQL). Aqui a exigência é mais fraca e é a que
+# importa: o guard não pode ser quem recusa — se o banco recusar, é problema de
+# dialeto, não over-block da allowlist.
+_WF2_PASSAM_NO_GUARD = [
+    "SELECT nome FROM public.leads",
+    "SELECT COUNT(*) FROM public.funnel_entries",
+    # `EXTRACT(... FROM ...)`/`SUBSTRING(... FROM ...)`/`TRIM(... FROM ...)` são
+    # as construções em que `FROM` NÃO introduz tabela. "Leads por mês" é a
+    # consulta analítica mais óbvia que existe: se o guard bloquear aqui, ele
+    # cortou a IA em silêncio. O SQLite não implementa essa sintaxe, então o
+    # teste exige só o que interessa — que quem recusa não seja o guard.
+    "SELECT EXTRACT(MONTH FROM created_at) AS mes, COUNT(*) AS qtd FROM leads "
+    "GROUP BY EXTRACT(MONTH FROM created_at) ORDER BY mes",
+    "SELECT SUBSTRING(nome FROM 1 FOR 3) AS inicial FROM leads",
+    "SELECT TRIM(BOTH ' ' FROM nome) AS limpo FROM leads",
+]
+
+
+def test_wf2_catalog_and_non_business_tables_refused():
+    for query in _WF2_BLOQUEADAS:
+        out = json.loads(ai_tools.run_select_query(query))
+        assert isinstance(out, dict), f"query devolveu LINHAS: {query!r} -> {out}"
+        assert "error" in out, f"query não foi recusada: {query!r} -> {out}"
+        # "bloqueada" é a marca do GUARD. Um erro do banco ("Erro na consulta:
+        # no such table") NÃO vale: no PostgreSQL a mesma query teria rodado.
+        assert "bloqueada" in out["error"].lower(), \
+            f"recusada pelo BANCO, não pelo guard: {query!r} -> {out}"
+
+
+def test_wf2_legitimate_analytics_still_run():
+    db = SessionLocal()
+    try:
+        db.add(Lead(nome="Lead Analitico WF2", campos_personalizados={}))
+        db.commit()
+    finally:
+        db.close()
+
+    for query in _WF2_PERMITIDAS:
+        out = json.loads(ai_tools.run_select_query(query))
+        assert isinstance(out, list), \
+            f"consulta analítica legítima foi bloqueada: {query!r} -> {out}"
+
+    for query in _WF2_PASSAM_NO_GUARD:
+        out = json.loads(ai_tools.run_select_query(query))
+        erro = out.get("error", "") if isinstance(out, dict) else ""
+        assert "bloqueada" not in erro.lower(), \
+            f"guard bloqueou sintaxe legítima: {query!r} -> {out}"
+
+
 # ── helpers de banco ──────────────────────────────────────────────────
 def _new_lead(campos):
     db = SessionLocal()
@@ -286,6 +423,8 @@ if __name__ == "__main__":
         test_f2_pdf_write_stays_inside_upload_dir,
         test_f3_select_on_users_refused,
         test_f3_benign_select_on_leads_still_works,
+        test_wf2_catalog_and_non_business_tables_refused,
+        test_wf2_legitimate_analytics_still_run,
         test_f6_bogus_status_refused,
         test_f6_write_tools_refuse_without_user_context,
         test_f7_cancel_reason_persists_on_populated_json,

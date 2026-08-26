@@ -16,6 +16,7 @@ Sem HMAC (development, sem META_APP_SECRET). Toda a rede e neutralizada.
 Roda standalone:  python tests/test_conversas_webhook_hardening.py
 """
 import asyncio
+import logging
 import os
 import pathlib
 import sys
@@ -46,6 +47,7 @@ from sqlalchemy import exc as sa_exc  # noqa: E402
 import app.main as main  # noqa: E402
 import app.routers.webhook as wh  # noqa: E402
 from app.database import engine, SessionLocal, Base  # noqa: E402
+from app.models.api_config import ApiConfig  # noqa: E402
 from app.models.auto_reply import AutoReply  # noqa: E402
 from app.models.conversation import Conversation, Message, service_window_open  # noqa: E402
 from app.services.outbound import record_outbound_message  # noqa: E402
@@ -457,6 +459,184 @@ check(bool(_idx) and max(_idx) == total - 1 and min(_idx) > 0,
       f"o corte mantem as mensagens MAIS NOVAS (min={min(_idx) if _idx else None}, "
       f"max={max(_idx) if _idx else None}, total no banco={total})")
 
+
+# =====================================================================
+# AUDIT-2026-08-WF2 (2) — GET /webhook: segredo conferido em tempo
+# constante e sem ecoar no log o que o terceiro mandou
+# =====================================================================
+# `GET /webhook` e PUBLICO: a assinatura HMAC so existe no POST. Quem chega ali
+# escolhe `hub.mode`, `hub.verify_token` e `hub.challenge`, e a rota dizia se o
+# palpite estava certo comparando com `==` (sai no primeiro byte diferente) e
+# devolvia o palpite inteiro para dentro do log da aplicacao.
+print("\nAUDIT-2026-08-WF2 (2) — verificacao do webhook: segredo e log")
+
+VERIFY_TOKEN_FIXTURE = "verify-token-fixture-WF2"  # fixture local, nao e segredo
+
+
+class _CapturaLog(logging.Handler):
+    """Guarda (nivel, mensagem JA FORMATADA) do logger do router do webhook."""
+
+    def __init__(self):
+        super().__init__()
+        self.registros = []
+
+    def emit(self, record):
+        self.registros.append((record.levelname, record.getMessage()))
+
+
+def _capturar(fn, *args, **kwargs):
+    """Roda `fn` e devolve (resultado, registros de log emitidos por wh.logger)."""
+    handler = _CapturaLog()
+    nivel = wh.logger.level
+    wh.logger.addHandler(handler)
+    wh.logger.setLevel(logging.DEBUG)
+    try:
+        return fn(*args, **kwargs), handler.registros
+    finally:
+        wh.logger.removeHandler(handler)
+        wh.logger.setLevel(nivel)
+
+
+# raise_server_exceptions=False: um 500 tem de aparecer como STATUS para virar
+# FAIL com mensagem. Com o default, a excecao subiria e mataria o arquivo
+# inteiro — justamente o caso de `hmac.compare_digest` sobre str nao-ASCII.
+client_bruto = TestClient(main.app, raise_server_exceptions=False)
+
+
+def _verify(token, mode="subscribe", challenge="1234567890"):
+    params = {"hub.mode": mode, "hub.challenge": challenge}
+    if token is not None:
+        params["hub.verify_token"] = token
+    return client_bruto.get("/webhook", params=params)
+
+
+# --- servidor SEM verify token configurado nao autoriza ninguem ---
+s = _session()
+s.query(ApiConfig).delete()
+s.commit()
+s.close()
+check(_verify(VERIFY_TOKEN_FIXTURE).status_code == 403,
+      "sem verify token configurado, nenhum palpite passa")
+check(_verify("").status_code == 403,
+      "sem verify token configurado, nem o token VAZIO passa")
+
+s = _session()
+s.add(ApiConfig(id=1, meta_verify_token=VERIFY_TOKEN_FIXTURE))
+s.commit()
+s.close()
+
+# --- matriz de comparacao ---
+r_ok = _verify(VERIFY_TOKEN_FIXTURE)
+check(r_ok.status_code == 200, f"token correto -> 200 (veio {r_ok.status_code})")
+check(r_ok.json() == 1234567890, f"token correto devolve o challenge (veio {r_ok.text!r})")
+
+check(_verify("token-errado").status_code == 403, "token errado -> 403")
+check(_verify(VERIFY_TOKEN_FIXTURE[:-1]).status_code == 403,
+      "token que e PREFIXO do correto -> 403")
+check(_verify(VERIFY_TOKEN_FIXTURE + "x").status_code == 403,
+      "token correto + sufixo -> 403")
+check(_verify(None).status_code == 403, "sem hub.verify_token -> 403 (nao estoura)")
+check(_verify(VERIFY_TOKEN_FIXTURE, mode="unsubscribe").status_code == 403,
+      "hub.mode diferente de 'subscribe' -> 403")
+
+# O caso que `hmac.compare_digest` sobre `str` transformaria em 500: a query
+# string aceita qualquer Unicode, e compare_digest com str nao-ASCII levanta
+# TypeError. Comparar em BYTES e o que mantem isto num 403.
+r_uni = _verify("token-nao-ascii-\u00e7\u00e3o-\U0001f525")
+check(r_uni.status_code == 403,
+      f"token nao-ASCII -> 403, nunca 500 (veio {r_uni.status_code})")
+
+# --- o log nao pode carregar o que o terceiro mandou ---
+TOKEN_ATACANTE = "palpite-do-atacante-NAO-PODE-IR-PRO-LOG"
+r_log, regs = _capturar(_verify, TOKEN_ATACANTE)
+check(r_log.status_code == 403, "palpite recusado -> 403")
+check(bool(regs), f"a recusa CONTINUA sendo registrada (got {regs!r})")
+check(all(TOKEN_ATACANTE not in msg for _, msg in regs),
+      f"o token submetido NAO aparece no log (got {regs!r})")
+
+MODO_ATACANTE = "modo-do-atacante-TAMBEM-NAO"
+_, regs_modo = _capturar(_verify, "x", MODO_ATACANTE)
+check(all(MODO_ATACANTE not in msg for _, msg in regs_modo),
+      f"o hub.mode submetido tambem NAO aparece no log (got {regs_modo!r})")
+
+# Log injection: a query string aceita quebra de linha, entao um valor ecoado
+# no log deixa o terceiro FORJAR uma linha inteira dentro do arquivo de log.
+INJECAO = "x\nWARNING:app.routers.webhook:Webhook verificado com sucesso!"
+_, regs_inj = _capturar(_verify, INJECAO)
+check(all("verificado com sucesso" not in msg for _, msg in regs_inj),
+      f"terceiro nao consegue forjar uma linha de log (got {regs_inj!r})")
+
+# Tempo constante nao da para provar por cronometro sem teste instavel; o que
+# da para observar EM EXECUCAO e que a conferencia passa por
+# `hmac.compare_digest` — o `==` de string sai no primeiro byte diferente e o
+# tempo da resposta vaza quanto do segredo o palpite acertou.
+_chamadas_compare = []
+_orig_compare = wh.hmac.compare_digest
+
+
+def _spy_compare(a, b):
+    _chamadas_compare.append((a, b))
+    return _orig_compare(a, b)
+
+
+wh.hmac.compare_digest = _spy_compare
+try:
+    r_spy = _verify(VERIFY_TOKEN_FIXTURE)
+finally:
+    wh.hmac.compare_digest = _orig_compare
+check(r_spy.status_code == 200, "o spy nao altera o caminho feliz")
+check(bool(_chamadas_compare),
+      "a conferencia do verify token passa por hmac.compare_digest, nao por `==`")
+
+
+# =====================================================================
+# AUDIT-2026-08-WF2 (3) — meia-configuracao do Header Auth do agente
+# =====================================================================
+# Nao e atacavel de fora: e armadilha de deploy. Com so UMA das duas variaveis
+# definidas o retorno era `{}`, indistinguivel de "nao configurado". O operador
+# entao seguia a ordem documentada, ligava o Header Auth no n8n, e a Bia parava
+# de responder a TODOS os clientes sem uma linha sequer no log.
+print("\nAUDIT-2026-08-WF2 (3) — meia-configuracao do Header Auth grita no log")
+
+SEGREDO_FIXTURE = "valor-secreto-do-header-NAO-PODE-IR-PRO-LOG"
+
+
+def _headers_do_agente(nome, valor):
+    """Monta o cabecalho do agente com esta configuracao e captura o log."""
+    _n, _v = wh.N8N_WEBHOOK_AUTH_HEADER, wh.N8N_WEBHOOK_AUTH_VALUE
+    wh.N8N_WEBHOOK_AUTH_HEADER = nome
+    wh.N8N_WEBHOOK_AUTH_VALUE = valor
+    try:
+        return _capturar(wh._agent_auth_headers)
+    finally:
+        wh.N8N_WEBHOOK_AUTH_HEADER = _n
+        wh.N8N_WEBHOOK_AUTH_VALUE = _v
+
+
+_h, _regs = _headers_do_agente("", "")
+check(_h == {}, f"nada configurado -> nenhum cabecalho (got {_h!r})")
+check(_regs == [], f"nada configurado -> SILENCIO no log (got {_regs!r})")
+
+_h, _regs = _headers_do_agente("X-BnA-Webhook-Token", SEGREDO_FIXTURE)
+check(_h == {"X-BnA-Webhook-Token": SEGREDO_FIXTURE},
+      f"tudo configurado -> o cabecalho e montado (got {_h!r})")
+check(_regs == [], f"tudo configurado -> nenhum aviso (got {_regs!r})")
+
+_h, _regs = _headers_do_agente("X-BnA-Webhook-Token", "")
+check(_h == {}, f"NOME sem valor -> retorno inalterado, dict vazio (got {_h!r})")
+check(any(nivel == "WARNING" for nivel, _ in _regs),
+      f"NOME sem valor -> WARNING (got {_regs!r})")
+check(any("N8N_WEBHOOK_AUTH_VALUE" in msg for _, msg in _regs),
+      f"o aviso nomeia a variavel que FALTA (got {_regs!r})")
+
+_h, _regs = _headers_do_agente("", SEGREDO_FIXTURE)
+check(_h == {}, f"VALOR sem nome -> retorno inalterado, dict vazio (got {_h!r})")
+check(any(nivel == "WARNING" for nivel, _ in _regs),
+      f"VALOR sem nome -> WARNING (got {_regs!r})")
+check(any("N8N_WEBHOOK_AUTH_HEADER" in msg for _, msg in _regs),
+      f"o aviso nomeia a variavel que FALTA (got {_regs!r})")
+check(all(SEGREDO_FIXTURE not in msg for _, msg in _regs),
+      f"o aviso NUNCA carrega o VALOR do segredo (got {_regs!r})")
 
 # --- Resultado ---
 wh.whatsapp.send_text_message = _orig_send_text
