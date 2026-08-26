@@ -120,9 +120,9 @@ Quatro exports frescos chegaram durante a execução e estão versionados em
 | W3-16 | F-073/F-074 | KB manda cotar preço `[PENDENTE_VALIDACAO]` e simultaneamente recusar | Decisao de negocio: qual preco 2026 vale | KB |  | mitigado em producao pelo bloco fixo de precos do subworkflow da KB | BLOCKED_OPERATOR | — |
 | W3-17 | F-290/F-512 | Regra de altitude para <7 anos em três formas incompatíveis | Decisao medica/negocio: altitude para menores de 7 anos | KB |  | guard no teste impede resolver inventando valor | BLOCKED_OPERATOR | — |
 | W3-18 | F-288 | Direito de arrependimento contradiz a escada de reembolso | Decisao juridica: direito de arrependimento vs escada de reembolso | KB |  | — | BLOCKED_OPERATOR | — |
-| W3-19 | F-291/F-292 | FAQ responde imigração e promete reserva garantida contra o guardrail | Decisao de negocio: o que a FAQ pode responder sobre imigracao | KB |  | — | OPEN | — |
+| W3-19 | F-291/F-292 | FAQ responde imigração e promete reserva garantida contra o guardrail | METADE resolvida: a promessa de vaga garantida contradizia um guardrail declarado inviolavel (sem decisao a tomar). A resposta sobre VISTO continua BLOCKED_OPERATOR — orientacao juridica e decisao de negocio | KB |  | test_bna_agent_context_consistency W3-19a; e checks que exigem que a metade juridica CONTINUE sinalizada | FIXED_PENDING_MANUAL_N8N | fa56f5f |
 | W3-20 | F-138 | Prompt versionado instrui o modelo a duplicar handoff | ROOT-015 — o prompt versionado nao e o prompt vivo | KB/n8n |  | reconciliacao 26/08 | NOT_REPRODUCED_WITH_EVIDENCE | 1047aec |
-| W3-21 | F-510/F-511 | Nomes de destino proibidos usados pela própria KB; sazonalidade conflitante | Decisao de negocio: nomes de destino e sazonalidade combinada | KB |  | — | OPEN | — |
+| W3-21 | F-510/F-511 | Nomes de destino proibidos usados pela própria KB; sazonalidade conflitante | METADE resolvida: `empresa.md` usava os nomes que `tom_de_voz.md` proibe (o de tom governa o que a Bia DIZ). A sazonalidade do roteiro combinado continua BLOCKED_OPERATOR | KB |  | test_bna_agent_context_consistency W3-21c/W3-21d | FIXED_PENDING_MANUAL_N8N | fa56f5f |
 | W3-22 | F-295 | Índice de pendências contradiz as próprias tabelas | A contagem do indice divergia das proprias tabelas dele | KB |  | consistency H15 | RESOLVED | 22a4e7f |
 
 ## WAVE 4 — Meta / templates / janela 24h / resiliência
@@ -148,7 +148,7 @@ Quatro exports frescos chegaram durante a execução e estão versionados em
 
 | ID | Origem/relato | Sintoma | Root cause | Componente | Repo/N8N | Teste | Status | Commit |
 |---|---|---|---|---|---|---|---|---|
-| W5-01 | Operador | Cliente para de responder e fica no limbo (sem follow-up ~8h) | | n8n + Conversas | | | OPEN | |
+| W5-01 | Operador | Cliente para de responder e fica no limbo (sem follow-up ~8h) | Nao existe scheduler no repositorio; a consulta e daqui, o disparo e do n8n (M8) | n8n + Conversas |  | test_conversas_followup_inatividade (20 checks, inclui idempotencia) + PostgreSQL real 13/13 | FIXED_PENDING_MANUAL_N8N | 7026187 |
 | W5-02 | Operador | Leads de formulário chegam sem tags | `POST /api/leads` nao aplicava tag nenhuma (o caminho do WhatsApp aplicava) | n8n + CRM |  | test_lead_funnel_entry | RESOLVED | d211d61 |
 | W5-03 | Operador | Segundo formulário (rodapé do site) não integrado | O segundo formulario nunca foi integrado a nenhum workflow | n8n |  | — | BLOCKED_OPERATOR | — |
 | W5-04 | Operador | Campos do formulário inconsistentes com o CRM | O contrato do corpo do formulario e replayado a partir do export real e travado por teste | CRM |  | test_n8n_contract_lead_update | NOT_REPRODUCED_WITH_EVIDENCE | — |

@@ -813,3 +813,111 @@ a evidência de cada um.
   auditoria.
 - **NENHUM teste foi removido** para ficar verde, **nenhum lint foi silenciado**,
   **nenhuma segurança foi reduzida** para fazer teste passar.
+
+---
+
+# RODADA 2026-08-26 — estabilização funcional
+
+19 commits locais. **Nenhum push, merge, PR ou deploy. Nenhum dado de produção
+tocado. Nenhuma migration executada fora do PostgreSQL descartável de auditoria.**
+
+`96 files changed, 10267 insertions(+), 502 deletions(-)` sobre `3206eeb`.
+
+## Inventário
+
+`docs/audit/MASTER_FUNCTIONAL_BUG_MATRIX.md` — **110 sintomas** catalogados, um
+por relato, com causa raiz, teste e commit por linha:
+
+| Status | Nº |
+|---|--:|
+| `RESOLVED` | 55 |
+| `FIXED_PENDING_MANUAL_N8N` | 18 |
+| `DUPLICATE_ROOT_CAUSE` | 16 |
+| `NOT_REPRODUCED_WITH_EVIDENCE` | 15 |
+| `BLOCKED_OPERATOR` | 5 |
+| `OPEN` | 1 |
+
+Os 110 sintomas colapsam em **cerca de 30 causas raiz**. Os 16
+`DUPLICATE_ROOT_CAUSE` são a medida disso: metade da Wave 1 inteira — fila
+vazia, Bia misturando cliente pronto, "meus atendimentos" vazio, lead que
+continua aguardando — era **um** defeito visto de sete ângulos.
+
+## As três causas que explicavam mais
+
+**1. O handoff não tinha chamador.**
+`POST /api/conversations/{id}/handoff` existe, está correto e nenhum dos 18 nós
+do workflow do Gerenciador alcança a porta 8001 — todos apontam para
+`http://crm:8000/...`. Verificado por dump de todos os `url`/`method` dos exports
+de 26/08 e por grep de `8001` em `n8n/`. `is_bot_active` nunca virava `False`,
+`queued_at` nunca era preenchido, e a Bia dizia ao cliente que ele estava numa
+fila que nunca o recebeu.
+
+**2. "Atribuído" era tratado como "atendido".**
+O inbox classificava por `atendente_id`, e `_apply_human_state` apagava
+`queued_at` no instante em que um atendente era definido. Dar dono a uma conversa
+a removia da FILA DE ESPERA antes de qualquer humano falar com o cliente.
+
+**3. `POST /api/leads` criava só a linha `leads`.**
+Sem `FunnelEntry`, sem `LeadHistory`, sem tag. Todo lead que a Bia cria passa por
+esse endpoint, e o pipeline só renderiza quem tem entry — metade do funil de
+entrada sumia em silêncio (F-341).
+
+## O que só apareceu porque foi executado, não lido
+
+- **F-043** — `json` aceita a sequência de escape de NUL, `jsonb` não. Uma linha
+  legada derrubava o filtro de campo personalizado para **todos** os leads, com
+  `UntranslatableCharacter`. Reproduzido no PostgreSQL 16 e corrigido movendo o
+  cast para dentro do guard.
+- **O botão de reenviar estava morto.** `retrySending` nunca foi declarada, e o
+  arquivo é `'use strict'`: todo clique levantava `ReferenceError` antes do
+  fetch.
+- **M6** — a aplicação da D3 introduziu `==` no `jsonBody` do formulário. Mesmo
+  mecanismo do M1. O `PUT` falha, `neverError: true` esconde, e o formulário do
+  site **não atualiza nenhum lead que já existe**. Em produção agora.
+- **A base de conhecimento da Bia não é o repositório.** O subworkflow lê a Data
+  Table n8n `bia_knowledge_base`. Os 73 markdown não são lidos em runtime.
+
+## Validações contra PostgreSQL 16 real
+
+Container `bna-postgres-audit`, descartável. Nenhum outro container tocado.
+
+| O quê | Resultado |
+|---|---|
+| `m012` (coluna + índice + backfill) | 6/6 combinações de estado, idempotente na 2ª execução |
+| `FunnelEntry` sob concorrência (2 threads, 2 conexões) | 1 linha, nenhuma exceção, ambas convergem |
+| Lock de anotação (com hold forçado de 0,5 s) | 5/5 rodadas, espera medida, as duas notas sobrevivem |
+| F-043 (linha envenenada + 4 sadias) | consulta responde, devolve só as boas |
+| `/api/conversations/inativas` | 13/13, mesma pertinência e ordenação do SQLite |
+
+## Suíte
+
+70 → **80 arquivos** de teste. `python tests/test_<nome>.py`, um processo por
+arquivo, como o CI faz. Resultado da execução completa desta rodada registrado
+abaixo.
+
+**Dois testes tiveram asserções invertidas, de propósito, porque a REGRA mudou**
+(`test_conversas_agent_timeout`: falha da Bia agora move para a fila;
+`test_conversas_operational_state`: atribuir preserva a fila). Nenhum teste foi
+enfraquecido para fazer uma correção passar. Onde um teste bloqueou uma mudança
+sem que a regra tivesse mudado — o filtro de viajantes — a mudança **não** foi
+forçada: virou parâmetro novo convivendo com o antigo.
+
+## O que continua dependendo de você
+
+| Item | O quê |
+|---|---|
+| **M6** | apagar um `=` no `jsonBody` do formulário — o formulário está quebrado agora |
+| **M7** | definir `CONVERSAS_API_KEY` no ambiente do CRM para a ponte de handoff funcionar (sem ela é no-op, nada regride) |
+| **M8** | criar o workflow de follow-up por inatividade (o endpoint já existe) |
+| **M9** | apontar o formulário do rodapé para o mesmo webhook |
+| **M10** | consolidar leads duplicados por sufixo de WhatsApp (consequência conhecida do 409) |
+| **Data Table** | inserir as linhas de `N8N_KB_DATATABLE_ROWS.md` — sem isso a Bia não muda |
+| **D2** | autenticar `/webhook/agent-bia` |
+| **Decisões de negócio** | preços 2026 `[PENDENTE_VALIDACAO]`, altitude para menores de 7, resposta sobre visto, sazonalidade do roteiro combinado |
+
+## Veredito
+
+**Não é "release ready".** Nada foi validado em produção, e o item mais urgente
+desta rodada (M6) é uma mudança que só você pode fazer. O que existe é: as causas
+raiz nomeadas com prova, corrigidas com teste, e um inventário onde nenhum dos
+110 sintomas ficou sem classificação.

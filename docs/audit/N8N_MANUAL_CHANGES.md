@@ -523,6 +523,17 @@ chegou e (b) a mesma conversa **não** aparece na chamada seguinte.
 
 **Rollback:** desativar o workflow. Nada persiste além da mensagem enviada.
 
+**TETO CONHECIDO — leia antes de ligar.** A quarta condição ("no máximo uma
+outbound desde a última entrada do cliente") assume que já existe uma resposta
+anterior na conversa, o que é o caso normal: a Bia responde, o cliente some, o
+follow-up vira a segunda outbound e a conversa sai da varredura.
+
+Numa conversa que nunca teve **nenhuma** outbound — ninguém respondeu, nem a Bia
+— o próprio follow-up vira a outbound nº 1, e um segundo pode sair cerca de
+`horas` depois, antes de a condição fechar. São no máximo **duas** perguntas, não
+um loop. Marcar "já perguntei" exigiria uma coluna nova, e o teto não justifica
+o preço. Se na prática incomodar, avise: aí sim vale a coluna.
+
 **STATUS:** repo-side implementado nesta rodada; disparo
 `FIXED_PENDING_MANUAL_N8N`.
 
