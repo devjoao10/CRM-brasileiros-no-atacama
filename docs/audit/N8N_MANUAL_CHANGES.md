@@ -399,15 +399,62 @@ Preencha ao aplicar. Enquanto uma linha estiver vazia, o item segue
 
 | Item | Aplicado em | Por | Testado | Observação |
 |---|---|---|---|---|
-| M1 `pronto_para_humano` | | | | |
-| M2 remover Notificador | | | | |
-| M3 `Ignorar mensagem` 204 | | | | |
-| M4 anotação em query param | | | | |
-| M5 ramo de erro do Gerenciador | | | | |
-| D1 autenticar gerenciador-leads | | | | |
-| D2 autenticar agent-bia | | | | |
-| D3 decisão do formulário | | | | |
-| D4 verificar nome do modelo | | | | |
-| D5 rotação da API key | | | | |
-| D6 exportar subworkflow da KB | | | | |
-| D7 defesa de injeção no prompt da Bia | | | | |
+| M1 `pronto_para_humano` | 2026-08-26 | operador | ✅ export | um `=`, verificado no export de 26/08 |
+| M2 remover Notificador | 2026-08-26 | operador | ✅ export | nó ausente nos 18 do Gerenciador |
+| M3 `Ignorar mensagem` 204 | 2026-08-26 | operador | ✅ export | `respondWith=noData`, `responseCode: 204` |
+| M4 anotação em query param | 2026-08-26 | operador | ✅ export | `sendQuery: true` + `parametersQuery.texto` |
+| M5 ramo de erro do Gerenciador | 2026-08-26 | operador | ✅ export | nó `Fallback — erro Gerenciador` na 2ª saída |
+| **M6 `jsonBody` do formulário com `==`** | — | — | — | **PENDENTE — regressão introduzida pela D3; ver abaixo** |
+| D1 autenticar gerenciador-leads | 2026-08-26 | operador | ✅ export | `authentication: "headerAuth"` |
+| D2 autenticar agent-bia | — | — | — | continua sem `authentication` |
+| D3 decisão do formulário | 2026-08-26 | operador | ⚠️ parcial | lógica e CORS corretos, **mas ver M6** |
+| D4 verificar nome do modelo | 2026-08-26 | operador | ℹ️ | Bia agora em `Gemini 3.5-flash-lite`; Gerenciador em `Gemini 2.5 Flash` |
+| D5 rotação da API key | — | — | — | continua pendente |
+| D6 exportar subworkflow da KB | 2026-08-26 | operador | ✅ | `BIA — Consultar Knowledge Base` versionado — ver a descoberta da Data Table |
+| D7 defesa de injeção no prompt da Bia | 2026-08-26 | operador | ✅ export | system message de 31.269 caracteres com hierarquia de instruções |
+
+Verificação campo a campo: `docs/audit/N8N_RECONCILIACAO_20260826.md`.
+Exports correspondentes: `n8n/workflows/live_exports/20260826_wa/`.
+
+---
+
+## M6 — `jsonBody` do `Atualizar lead existente` com dois sinais de igual
+
+**Regressão nova, introduzida pela aplicação da D3. Silenciosa.**
+Instrução campo a campo, com evidência e teste manual, em
+`docs/audit/N8N_RECONCILIACAO_20260826.md` § 2.
+
+Resumo: o corpo do nó começa com `==`. Como no M1, o `=` sobrando vira texto
+literal na frente do JSON, o corpo deixa de ser JSON válido e o
+`PUT /api/leads/{id}` falha — mas `neverError: true` esconde a falha e o
+workflow segue como se tivesse dado certo. Efeito operacional: **o formulário
+do site não atualiza nenhum lead que já existe**. Correção: apagar um `=`.
+
+Das nove expressões do workflow do formulário, esta é a **única** com dois
+sinais de igual — inclusive o nó irmão `Criar novo lead`, de corpo idêntico,
+usa um. Nos outros dois workflows não há nenhuma ocorrência.
+
+---
+
+## M7 — (opcional) fazer o Gerenciador chamar o handoff do Conversas
+
+**Provavelmente desnecessário.** Esta rodada construiu a ponte no repositório:
+`PUT /api/leads/{id}/responsavel` — a rota que o `Tool Alterar Responsavel` já
+chama — passa a notificar
+`POST /api/conversations/by-lead/{lead_id}/handoff` quando o novo responsável é
+uma pessoa. Nenhuma mudança de n8n é necessária para o handoff funcionar.
+
+Só é preciso **configurar duas variáveis de ambiente do CRM**:
+
+| Variável | Valor | Efeito se ausente |
+|---|---|---|
+| `CONVERSAS_BASE_URL` | URL interna do Conversas (ex. `http://conversas:8001`) | usa o default `http://127.0.0.1:8001` |
+| `CONVERSAS_API_KEY` | API key de um usuário ativo do CRM | **ponte desligada** (no-op silencioso, comportamento de hoje) |
+
+Sem `CONVERSAS_API_KEY` nada quebra e nada muda — por isso o item não é
+bloqueante. Com ela, o handoff passa a funcionar de ponta a ponta.
+
+Alternativa, se o operador preferir manter a decisão no n8n: acrescentar ao
+Gerenciador um nó HTTP `POST http://conversas:8001/api/conversations/by-lead/{{lead_id}}/handoff`
+com header `X-API-Key`, disparado no mesmo ramo do `Tool Alterar Responsavel`.
+As duas soluções são idempotentes e podem coexistir sem duplicar efeito.

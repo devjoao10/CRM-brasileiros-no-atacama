@@ -1,0 +1,120 @@
+{
+  "name": "BIA — Consultar Knowledge Base",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "query"
+            },
+            {
+              "name": "destination"
+            },
+            {
+              "name": "journey_stage"
+            },
+            {
+              "name": "customer_status"
+            },
+            {
+              "name": "is_first_message",
+              "type": "boolean"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "38291bd8-23f1-4fa7-b111-f9f8fa888d8c",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "value": "tFOsRhxI3RneMccG",
+          "mode": "list",
+          "cachedResultName": "bia_knowledge_base",
+          "cachedResultUrl": "/projects/3trKfKFaOe4P2pDh/datatables/tFOsRhxI3RneMccG"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "validation_status",
+              "keyValue": "validado"
+            },
+            {
+              "keyName": "active",
+              "condition": "isTrue"
+            }
+          ]
+        },
+        "returnAll": true
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        208,
+        0
+      ],
+      "id": "f613bf0a-a5c6-418b-badf-72ac82756602",
+      "name": "Get row(s)"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('When Executed by Another Workflow').first().json ?? {};\n\nconst query = String(input.query ?? '').trim();\nconst destinationInput = String(input.destination ?? '').trim();\nconst journeyStage = String(input.journey_stage ?? '').trim();\nconst customerStatus = String(input.customer_status ?? '').trim();\n\nconst isFirstMessage =\n  input.is_first_message === true ||\n  String(input.is_first_message ?? '').toLowerCase() === 'true';\n\n/*\n * Remove valores monetários que possam existir em registros\n * de passeios, políticas ou outros domínios.\n *\n * Horários, altitudes, distâncias, idades e percentuais\n * continuam preservados.\n */\nfunction sanitizeMoneyText(value) {\n  return String(value ?? '')\n    .replace(\n      /(?:R\\$|US\\$)\\s*\\d[\\d.\\s]*(?:,\\d{1,2})?/gi,\n      '[valor confirmado pela equipe]'\n    )\n    .replace(\n      /\\b(?:USD|BRL|CLP)\\s*\\d[\\d.,]*/gi,\n      '[valor confirmado pela equipe]'\n    )\n    .replace(\n      /\\$\\s*\\d[\\d.,]*/g,\n      '[valor confirmado pela equipe]'\n    )\n    .replace(\n      /\\b\\d[\\d.\\s]*(?:,\\d{1,2})?\\s*(?:CLP|USD|BRL|pesos?\\s+chilenos?|d[oó]lares?|reais)\\b/gi,\n      '[valor confirmado pela equipe]'\n    );\n}\n\nfunction sanitizeRecord(record) {\n  return {\n    ...record,\n    content: sanitizeMoneyText(record.content)\n  };\n}\n\n/*\n * Primeira barreira contra preços:\n *\n * - somente registros ativos e validados;\n * - nenhum registro do domínio prices;\n * - nenhum índice de preços;\n * - sanitização de valores monetários residuais.\n */\nconst records = items\n  .map(item => item.json)\n  .filter(record =>\n    record.validation_status === 'validado' &&\n    record.active === true &&\n    record.domain !== 'prices' &&\n    record.record_key !== 'idx_prices'\n  )\n  .map(sanitizeRecord);\n\nfunction normalize(value) {\n  return String(value ?? '')\n    .normalize('NFD')\n    .replace(/[\\u0300-\\u036f]/g, '')\n    .toLowerCase()\n    .replace(/[^\\p{L}\\p{N}\\s]/gu, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nfunction normalizeDestination(value) {\n  const normalized = normalize(value);\n\n  if (\n    normalized.includes('uyuni') ||\n    normalized.includes('salar de uyuni') ||\n    normalized === 'bolivia'\n  ) {\n    return 'Uyuni';\n  }\n\n  if (normalized.includes('santiago')) {\n    return 'Santiago';\n  }\n\n  if (\n    normalized.includes('atacama') ||\n    normalized.includes('san pedro')\n  ) {\n    return 'Atacama';\n  }\n\n  return '';\n}\n\nfunction containsAny(text, expressions) {\n  return expressions.some(expression =>\n    text.includes(normalize(expression))\n  );\n}\n\nfunction unique(values) {\n  return [...new Set(values)];\n}\n\nconst normalizedQuery = normalize(query);\nconst normalizedJourneyStage = normalize(journeyStage);\nconst normalizedCustomerStatus = normalize(customerStatus);\n\nconst stopwords = new Set([\n  'a',\n  'o',\n  'as',\n  'os',\n  'um',\n  'uma',\n  'uns',\n  'umas',\n  'de',\n  'da',\n  'do',\n  'das',\n  'dos',\n  'em',\n  'no',\n  'na',\n  'nos',\n  'nas',\n  'para',\n  'por',\n  'com',\n  'sem',\n  'e',\n  'ou',\n  'que',\n  'qual',\n  'quais',\n  'como',\n  'quando',\n  'onde',\n  'quanto',\n  'quantos',\n  'quantas',\n  'me',\n  'eu',\n  'voce',\n  'voces',\n  'ele',\n  'ela',\n  'eles',\n  'minha',\n  'meu',\n  'nosso',\n  'nossa',\n  'seu',\n  'sua',\n  'tem',\n  'ter',\n  'ser',\n  'esta',\n  'estou',\n  'quero',\n  'queria',\n  'gostaria',\n  'pode',\n  'podem',\n  'pra',\n  'pro',\n  'ao',\n  'aos',\n  'del',\n  'el',\n  'la',\n  'los',\n  'las',\n  'al'\n]);\n\nconst queryTerms = unique(\n  normalizedQuery\n    .split(' ')\n    .filter(term =>\n      term.length >= 3 &&\n      !stopwords.has(term)\n    )\n);\n\nconst destination =\n  normalizeDestination(destinationInput) ||\n  normalizeDestination(query);\n\n/*\n * Detecta pedido de preço, mas nunca pesquisa nem retorna preços.\n */\nconst priceRequested = containsAny(\n  normalizedQuery,\n  [\n    'preço',\n    'preco',\n    'valor',\n    'quanto custa',\n    'quanto fica',\n    'qual o valor',\n    'custa',\n    'orçamento',\n    'orcamento',\n    'cotação',\n    'cotacao',\n    'clp',\n    'usd',\n    'dólar',\n    'dolar',\n    'reais'\n  ]\n);\n\nconst indexes = records.filter(\n  record => record.record_type === 'index'\n);\n\nconst selectedIndexes = new Map();\n\nfunction selectIndex(indexKey, reason, score = 100) {\n  const existing = selectedIndexes.get(indexKey);\n\n  if (!existing || score > existing.score) {\n    selectedIndexes.set(indexKey, {\n      index_key: indexKey,\n      reason,\n      score\n    });\n  }\n}\n\n/*\n * Índices obrigatórios.\n */\nconst mandatoryIndexKeys = [\n  'idx_communication',\n  'idx_brand',\n  'idx_conversion',\n  'idx_sales_operation'\n];\n\nfor (const indexKey of mandatoryIndexKeys) {\n  selectIndex(\n    indexKey,\n    'regra obrigatória',\n    1000\n  );\n}\n\n/*\n * Primeira interação.\n */\nif (isFirstMessage) {\n  selectIndex(\n    'idx_onboarding',\n    'primeira mensagem do contato',\n    1000\n  );\n}\n\n/*\n * Jornada do cliente.\n */\nif (\n  normalizedJourneyStage &&\n  ![\n    'unknown',\n    'desconhecido'\n  ].includes(normalizedJourneyStage)\n) {\n  selectIndex(\n    'idx_journey',\n    `etapa da jornada: ${journeyStage}`,\n    500\n  );\n}\n\nconst existingCustomerStatuses = [\n  'client',\n  'cliente',\n  'travelling',\n  'viajando',\n  'former client',\n  'ex cliente'\n];\n\nif (\n  [\n    'pre trip',\n    'pre viagem'\n  ].includes(normalizedJourneyStage) ||\n  existingCustomerStatuses.includes(normalizedCustomerStatus)\n) {\n  selectIndex(\n    'idx_pretrip',\n    'cliente existente ou em pré-viagem',\n    900\n  );\n}\n\n/*\n * Destino identificado.\n */\nif (destination) {\n  selectIndex(\n    'idx_destinations',\n    `destino identificado: ${destination}`,\n    600\n  );\n}\n\n/*\n * Regras semânticas explícitas.\n *\n * Não existe gatilho para idx_prices.\n */\nconst indexTriggers = [\n  {\n    key: 'idx_tours',\n    expressions: [\n      'passeio',\n      'passeios',\n      'tour',\n      'tours',\n      'geisers',\n      'geysers',\n      'tatio',\n      'laguna',\n      'lagunas',\n      'valle',\n      'termas',\n      'vulcão',\n      'vulcao',\n      'trekking',\n      'bike',\n      'cavalgada',\n      'embalse',\n      'farellones',\n      'portillo',\n      'vinícola',\n      'vinicola',\n      'uyuni'\n    ],\n    reason: 'pergunta sobre passeio',\n    score: 850\n  },\n  {\n    key: 'idx_modalities',\n    expressions: [\n      'privado',\n      'privativa',\n      'privativo',\n      'semi privado',\n      'semiprivado',\n      'regular',\n      'exclusivo',\n      'exclusiva',\n      'vip',\n      'personalizado',\n      'personalizada',\n      'grupo fechado'\n    ],\n    reason: 'modalidade de serviço',\n    score: 900\n  },\n  {\n    key: 'idx_handoff',\n    expressions: [\n      'privado',\n      'privativa',\n      'privativo',\n      'exclusivo',\n      'exclusiva',\n      'vip',\n      'personalizado',\n      'personalizada',\n      'grupo fechado',\n      'atendente',\n      'humano',\n      'falar com alguem',\n      'falar com alguém',\n      'problema',\n      'urgente',\n      'reclamação',\n      'reclamacao',\n      'alteração',\n      'alteracao',\n      'cancelamento'\n    ],\n    reason: 'possível encaminhamento humano',\n    score: 950\n  },\n  {\n    key: 'idx_health',\n    expressions: [\n      'criança',\n      'crianca',\n      'menor',\n      'idade',\n      'filho',\n      'filha',\n      'bebê',\n      'bebe',\n      'gestante',\n      'grávida',\n      'gravida',\n      'cardíaco',\n      'cardiaco',\n      'respiratório',\n      'respiratorio',\n      'hipertensão',\n      'hipertensao',\n      'altitude',\n      'aclimatação',\n      'aclimatacao',\n      'saúde',\n      'saude'\n    ],\n    reason: 'saúde, idade ou altitude',\n    score: 900\n  },\n  {\n    key: 'idx_date_blocks',\n    expressions: [\n      'natal',\n      'ano novo',\n      'réveillon',\n      'reveillon',\n      'feriado',\n      'bloqueio',\n      'disponibilidade',\n      'disponível',\n      'disponivel',\n      'tem vaga',\n      'funciona',\n      'opera nessa data'\n    ],\n    reason: 'data ou disponibilidade',\n    score: 900\n  },\n  {\n    key: 'idx_policies',\n    expressions: [\n      'cancelamento',\n      'cancelar',\n      'reembolso',\n      'pix',\n      'cartão',\n      'cartao',\n      'parcela',\n      'pagamento',\n      'seguro',\n      'drone',\n      'entrada de 30',\n      'saldo'\n    ],\n    reason: 'política comercial',\n    score: 850\n  },\n  {\n    key: 'idx_pretrip',\n    expressions: [\n      'já comprei',\n      'ja comprei',\n      'minha viagem',\n      'meu embarque',\n      'embarque',\n      'bagagem',\n      'mala',\n      'roupa',\n      'o que levar',\n      'documento',\n      'horário de busca',\n      'horario de busca',\n      'ponto de encontro',\n      'já sou cliente',\n      'ja sou cliente'\n    ],\n    reason: 'assunto de pré-viagem',\n    score: 900\n  },\n  {\n    key: 'idx_faq',\n    expressions: [\n      'transfer',\n      'traslado',\n      'hospedagem',\n      'hotel',\n      'hostel',\n      'chip',\n      'internet',\n      'melhor época',\n      'melhor epoca',\n      'como chegar',\n      'guia',\n      'fala português',\n      'fala portugues',\n      'uber',\n      'didi'\n    ],\n    reason: 'pergunta frequente',\n    score: 800\n  },\n  {\n    key: 'idx_company',\n    expressions: [\n      'quem vocês são',\n      'quem voces sao',\n      'empresa',\n      'agência',\n      'agencia',\n      'site',\n      'instagram',\n      'contato',\n      'whatsapp',\n      'vocês trabalham',\n      'voces trabalham'\n    ],\n    reason: 'informação sobre a empresa',\n    score: 800\n  }\n];\n\nfor (const trigger of indexTriggers) {\n  if (\n    containsAny(\n      normalizedQuery,\n      trigger.expressions\n    )\n  ) {\n    selectIndex(\n      trigger.key,\n      trigger.reason,\n      trigger.score\n    );\n  }\n}\n\n/*\n * Regras compostas.\n */\nconst privateRequested = containsAny(\n  normalizedQuery,\n  [\n    'privado',\n    'privativa',\n    'privativo',\n    'exclusivo',\n    'exclusiva',\n    'vip',\n    'personalizado',\n    'personalizada',\n    'grupo fechado'\n  ]\n);\n\nif (privateRequested) {\n  selectIndex(\n    'idx_modalities',\n    'serviço privado solicitado',\n    1200\n  );\n\n  selectIndex(\n    'idx_handoff',\n    'privado exige encaminhamento imediato',\n    1200\n  );\n}\n\nconst childMentioned = containsAny(\n  normalizedQuery,\n  [\n    'criança',\n    'crianca',\n    'filho',\n    'filha',\n    'menor',\n    'bebê',\n    'bebe',\n    'anos'\n  ]\n);\n\nconst ageMatch = normalizedQuery.match(\n  /\\b(\\d{1,2})\\s*anos?\\b/\n);\n\nconst childAge = ageMatch\n  ? Number(ageMatch[1])\n  : null;\n\nconst uyuniMentioned =\n  destination === 'Uyuni' ||\n  containsAny(\n    normalizedQuery,\n    [\n      'uyuni',\n      'salar de uyuni',\n      'bolivia'\n    ]\n  );\n\nif (\n  childMentioned &&\n  uyuniMentioned\n) {\n  selectIndex(\n    'idx_health',\n    'Uyuni com criança',\n    1300\n  );\n\n  selectIndex(\n    'idx_handoff',\n    'Uyuni com criança exige avaliação',\n    1300\n  );\n\n  selectIndex(\n    'idx_tours',\n    'informações da expedição Uyuni',\n    900\n  );\n}\n\n/*\n * Pontuação semântica dos índices.\n */\nfor (const index of indexes) {\n  const title = normalize(index.title);\n  const content = normalize(index.content);\n  const keywords = normalize(index.keywords);\n  const domain = normalize(index.domain);\n\n  let score = 0;\n  const matchedTerms = [];\n\n  for (const term of queryTerms) {\n    let matched = false;\n\n    if (domain.includes(term)) {\n      score += 14;\n      matched = true;\n    }\n\n    if (title.includes(term)) {\n      score += 10;\n      matched = true;\n    }\n\n    if (keywords.includes(term)) {\n      score += 8;\n      matched = true;\n    }\n\n    if (content.includes(term)) {\n      score += 3;\n      matched = true;\n    }\n\n    if (matched) {\n      matchedTerms.push(term);\n    }\n  }\n\n  if (score > 0) {\n    selectIndex(\n      index.record_key,\n      `termos relacionados: ${unique(matchedTerms).join(', ')}`,\n      score\n    );\n  }\n}\n\nconst selectedIndexKeys = [\n  ...selectedIndexes.keys()\n];\n\n/*\n * Regras essenciais que entram em todas as consultas.\n */\nconst mandatoryRecordKeys = [\n  'style_whatsapp',\n  'style_one_question',\n  'style_emoji',\n  'style_natural',\n  'style_no_empty',\n  'style_no_markdown',\n  'style_name',\n  'style_transparency',\n  'sales_progressive_collection',\n  'sales_email_optional',\n  'sales_manager_all_fields',\n  'brand_value_question',\n  'conversion_reduce_effort',\n  'conversion_context'\n];\n\nconst mandatoryRecords = records\n  .filter(record =>\n    mandatoryRecordKeys.includes(\n      record.record_key\n    )\n  )\n  .sort((a, b) =>\n    Number(b.priority ?? 0) -\n    Number(a.priority ?? 0)\n  );\n\nfunction recordMatchesDestination(record) {\n  const recordDestination = normalizeDestination(\n    record.destination\n  );\n\n  if (!destination) {\n    return true;\n  }\n\n  if (\n    !recordDestination ||\n    normalize(record.destination) === 'geral'\n  ) {\n    return true;\n  }\n\n  return recordDestination === destination;\n}\n\nfunction scoreRecord(record) {\n  const title = normalize(record.title);\n  const content = normalize(record.content);\n  const keywords = normalize(record.keywords);\n  const topic = normalize(record.topic);\n  const recordKey = normalize(record.record_key);\n\n  let score =\n    Number(record.priority ?? 0) / 10;\n\n  const matchedTerms = [];\n\n  for (const term of queryTerms) {\n    let matched = false;\n\n    if (recordKey.includes(term)) {\n      score += 12;\n      matched = true;\n    }\n\n    if (title.includes(term)) {\n      score += 10;\n      matched = true;\n    }\n\n    if (keywords.includes(term)) {\n      score += 8;\n      matched = true;\n    }\n\n    if (topic.includes(term)) {\n      score += 5;\n      matched = true;\n    }\n\n    const occurrences =\n      content.split(term).length - 1;\n\n    if (occurrences > 0) {\n      score +=\n        Math.min(occurrences, 4) * 3;\n\n      matched = true;\n    }\n\n    if (matched) {\n      matchedTerms.push(term);\n    }\n  }\n\n  if (destination) {\n    const recordDestination =\n      normalizeDestination(record.destination);\n\n    if (\n      recordDestination === destination\n    ) {\n      score += 20;\n    }\n\n    if (\n      normalize(record.destination) === 'geral'\n    ) {\n      score += 3;\n    }\n  }\n\n  if (\n    normalizedJourneyStage &&\n    normalize(record.journey_stage) ===\n      normalizedJourneyStage\n  ) {\n    score += 20;\n  }\n\n  if (\n    normalize(record.journey_stage) === 'all'\n  ) {\n    score += 2;\n  }\n\n  if (\n    privateRequested &&\n    record.record_key === 'handoff_private'\n  ) {\n    score += 100;\n  }\n\n  if (\n    childMentioned &&\n    uyuniMentioned &&\n    [\n      'handoff_uyuni_child',\n      'health_uyuni_child_no_denial'\n    ].includes(record.record_key)\n  ) {\n    score += 120;\n  }\n\n  if (\n    isFirstMessage &&\n    record.parent_key === 'idx_onboarding'\n  ) {\n    score += 100;\n  }\n\n  return {\n    ...record,\n    retrieval_score: score,\n    matched_terms: unique(matchedTerms)\n  };\n}\n\nconst situationalIndexKeys =\n  selectedIndexKeys.filter(\n    key => !mandatoryIndexKeys.includes(key)\n  );\n\nconst limitsByIndex = {\n  idx_onboarding: 5,\n  idx_journey: 6,\n  idx_company: 5,\n  idx_destinations: 4,\n  idx_modalities: 6,\n  idx_tours: 6,\n  idx_policies: 6,\n  idx_health: 6,\n  idx_date_blocks: 5,\n  idx_handoff: 8,\n  idx_pretrip: 8,\n  idx_faq: 6\n};\n\nconst situationalRecords = [];\n\nfor (const indexKey of situationalIndexKeys) {\n  const candidates = records\n    .filter(record =>\n      record.parent_key === indexKey &&\n      record.record_type !== 'index' &&\n      recordMatchesDestination(record)\n    )\n    .filter(record => {\n      /*\n       * Pedido privado de Uyuni não precisa\n       * trazer a modalidade regular.\n       */\n      if (\n        privateRequested &&\n        record.record_key ===\n          'tour_uyuni_regular'\n      ) {\n        return false;\n      }\n\n      /*\n       * Criança com 7 anos ou mais não deve\n       * receber a regra exclusiva para menores\n       * de 7 anos.\n       */\n      if (\n        childAge !== null &&\n        childAge >= 7 &&\n        record.record_key ===\n          'health_under7_altitude'\n      ) {\n        return false;\n      }\n\n      return true;\n    })\n    .map(scoreRecord)\n    .sort((a, b) =>\n      b.retrieval_score -\n      a.retrieval_score\n    );\n\n  const limit =\n    limitsByIndex[indexKey] ?? 5;\n\n  const relevant = candidates.filter(\n    record =>\n      record.retrieval_score >= 20 ||\n      indexKey === 'idx_onboarding' ||\n      (\n        indexKey === 'idx_pretrip' &&\n        [\n          'pre trip',\n          'pre viagem'\n        ].includes(normalizedJourneyStage)\n      )\n  );\n\n  const selected =\n    (\n      relevant.length > 0\n        ? relevant\n        : candidates.slice(0, 1)\n    ).slice(0, limit);\n\n  situationalRecords.push(...selected);\n}\n\n/*\n * Remove duplicidades.\n */\nconst mandatoryKeys = new Set(\n  mandatoryRecords.map(\n    record => record.record_key\n  )\n);\n\nconst relevantRecords = situationalRecords\n  .filter(record =>\n    !mandatoryKeys.has(record.record_key)\n  )\n  .filter(\n    (record, index, array) =>\n      array.findIndex(\n        item =>\n          item.record_key ===\n          record.record_key\n      ) === index\n  );\n\n/*\n * Detalhes dos índices selecionados.\n */\nconst selectedIndexDetails =\n  selectedIndexKeys\n    .map(indexKey => {\n      const index = indexes.find(\n        item =>\n          item.record_key === indexKey\n      );\n\n      const selection =\n        selectedIndexes.get(indexKey);\n\n      return {\n        index_key: indexKey,\n        domain: index?.domain ?? '',\n        title: index?.title ?? indexKey,\n        reason: selection?.reason ?? '',\n        score: selection?.score ?? 0\n      };\n    })\n    .filter(index =>\n      index.index_key !== 'idx_prices'\n    )\n    .sort((a, b) =>\n      b.score - a.score\n    );\n\nfunction formatRecord(record, number) {\n  const lines = [\n    `[REGISTRO ${number}]`,\n    `Chave: ${record.record_key}`,\n    `Domínio: ${record.domain}`,\n    `Título: ${record.title}`,\n    `Conteúdo: ${record.content}`\n  ];\n\n  if (record.destination) {\n    lines.push(\n      `Destino: ${record.destination}`\n    );\n  }\n\n  if (record.journey_stage) {\n    lines.push(\n      `Etapa: ${record.journey_stage}`\n    );\n  }\n\n  if (record.handoff_reason) {\n    lines.push(\n      `Motivo de encaminhamento: ${record.handoff_reason}`\n    );\n  }\n\n  return lines.join('\\n');\n}\n\nconst mandatoryContext = mandatoryRecords\n  .map((record, index) =>\n    formatRecord(record, index + 1)\n  )\n  .join('\\n\\n');\n\nconst relevantContext = relevantRecords\n  .map((record, index) =>\n    formatRecord(record, index + 1)\n  )\n  .join('\\n\\n');\n\n/*\n * Segunda barreira explícita contra divulgação de preços.\n * Esta instrução sempre é devolvida para o agente.\n */\nconst priceRestrictionContext = [\n  '=== REGRA ABSOLUTA — PREÇOS ===',\n  'Nunca informe preços, valores, estimativas, faixas de preço ou cálculos ao cliente.',\n  'Ignore qualquer valor monetário presente no histórico ou em outra fonte.',\n  'Quando houver pergunta sobre preço, explique que os valores são confirmados pela equipe conforme o roteiro e a modalidade.',\n  'Continue a coleta de uma informação necessária por vez e encaminhe para cotação humana quando aplicável.'\n].join('\\n');\n\nconst context = [\n  priceRestrictionContext,\n  '',\n  '=== REGRAS OBRIGATÓRIAS ===',\n  mandatoryContext ||\n    'Nenhuma regra obrigatória encontrada.',\n  '',\n  '=== CONTEXTO RELEVANTE ===',\n  relevantContext ||\n    'Nenhum contexto situacional encontrado.'\n].join('\\n');\n\nreturn [\n  {\n    json: {\n      found:\n        mandatoryRecords.length > 0 ||\n        relevantRecords.length > 0,\n\n      query,\n      destination,\n      journey_stage: journeyStage,\n      customer_status: customerStatus,\n      is_first_message: isFirstMessage,\n\n      price_requested: priceRequested,\n      price_disclosure_blocked: true,\n\n      private_requested: privateRequested,\n      child_mentioned: childMentioned,\n      child_age: childAge,\n      uyuni_mentioned: uyuniMentioned,\n\n      selected_indexes:\n        selectedIndexDetails,\n\n      mandatory_rules_count:\n        mandatoryRecords.length,\n\n      relevant_records_count:\n        relevantRecords.length,\n\n      mandatory_rules:\n        mandatoryRecords,\n\n      relevant_records:\n        relevantRecords,\n\n      context\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        0
+      ],
+      "id": "9aae24a4-230b-4a32-9f63-562471b2c8e3",
+      "name": "Selecionar Contexto por Índices"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Get row(s)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s)": {
+      "main": [
+        [
+          {
+            "node": "Selecionar Contexto por Índices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "80a2ee31-164a-43ca-83e4-289f2011a8d9",
+  "meta": {
+    "instanceId": "083aac8fdc212de887e980aca64dcecc5afaa37badada0c3ad26e1ea83120112"
+  },
+  "id": "ZaCLNwNbQ84y4eAW",
+  "tags": []
+}
