@@ -324,7 +324,7 @@ POST conversas:8101/api/conversations/by-lead/{id}/handoff
   PASS: retry NAO manda a conversa para o fim da fila
 ```
 
-19/19. Usuários, lead e conversa do smoke removidos ao final.
+17/17, zero falhas. Usuários, lead e conversa do smoke removidos ao final.
 
 É a prova de que o defeito principal desta rodada acabou: antes, a Bia dizia ao
 cliente que ele estava na fila e **nada** acontecia do lado do inbox, porque
