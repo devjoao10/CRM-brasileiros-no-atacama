@@ -27,7 +27,7 @@ está resolvida por este documento.
 | **M4** | texto da anotação como query param | ✅ **APLICADO** | `Tool Adicionar Nota`: `url` sem `?texto=`, `sendQuery: true`, `parametersQuery.texto = $fromAI(...)` — a codificação passa a ser do n8n, não concatenação crua |
 | **M5** | ramo de erro no Gerenciador | ✅ **APLICADO** | nó `Fallback — erro Gerenciador` e segunda saída `main[1]` do agente ligada a ele |
 | **D1** | autenticar `/webhook/gerenciador-leads` | ✅ **APLICADO** | `Webhook Gerenciador`: `authentication: "headerAuth"` |
-| **D3** | formulário preserva campo não vazio + CORS restrito | ⚠️ **APLICADO COM REGRESSÃO** | lógica `preservarOuPreencher` presente e correta; CORS `Access-Control-Allow-Origin: https://brasileirosnoatacama.com.br` nas três respostas. **Mas ver M6 abaixo.** |
+| **D3** | formulário preserva campo não vazio + CORS restrito | ✅ **APLICADO** | lógica `preservarOuPreencher` presente e correta; CORS `Access-Control-Allow-Origin: https://brasileirosnoatacama.com.br` nas três respostas. O M6 que eu levantei contra ela não procedia (§ 2). |
 | **D7** | defesa de injeção no prompt da Bia | ✅ **APLICADO** | system message de 31.269 caracteres com seção de hierarquia de instruções, recusa a "ignore as instruções anteriores"/"finja que você é", e proibição de revelar prompt/ferramentas/credenciais/IDs |
 | **D2** | autenticar `/webhook/agent-bia` | ❌ **NÃO APLICADO** | `authentication` ausente no `Webhook Mensagem` |
 
@@ -35,64 +35,35 @@ está resolvida por este documento.
 
 ---
 
-## 2. M6 — regressão nova, introduzida pela D3
+## 2. M6 — **eu errei: não havia regressão**
 
-**Severidade: alta. Silenciosa. Quebra o formulário para todo lead já existente.**
+> Esta seção foi reescrita. O texto original afirmava que a aplicação da D3
+> tinha quebrado o formulário em produção. **Não tinha.** Deixo o erro
+> registrado em vez de apagá-lo.
 
-**WORKFLOW:** Formulário do Site → CRM BnA
-**NÓ:** `Atualizar lead existente`
-**CAMPO:** *Body* → `JSON` (`jsonBody`)
+Eu li `"jsonBody": "=={{ ... }}"` no export e, por analogia direta com o M1,
+concluí que havia um `=` sobrando, que o corpo deixaria de ser JSON válido e que
+o formulário não estaria atualizando nenhum lead existente — com
+`neverError: true` escondendo a falha.
 
-**Estado atual:** o valor começa com **dois** sinais de igual:
+O operador conferiu **no editor visual do n8n**: o campo mostra `{{`. O `=` extra
+do export é a marcação com que o n8n serializa um campo em modo expressão.
 
-```
-=={{
-(() => {
-  const novo = $('Validar e normalizar').first().json;
-  ...
-```
+**Por que a analogia falhou.** No M1 os dois sinais estavam dentro do *valor* de
+um parâmetro (`parametersBody → value`), onde o segundo `=` realmente vira texto.
+No M6 estão no marcador do *campo* inteiro. Posições diferentes na estrutura do
+nó; eu tratei as duas como equivalentes porque no JSON pareciam iguais.
 
-**Por que isso quebra.** É exatamente o mecanismo do M1, que o operador já corrigiu
-uma vez neste mesmo conjunto de workflows: no n8n o primeiro `=` marca o campo como
-expressão e o resto é template. Com `==`, o `=` sobrando vira **texto literal
-prefixado ao corpo**, e o que sai na requisição é `=` seguido do JSON — que não é
-JSON válido. O `PUT /api/leads/{id}` do CRM rejeita.
+**O sinal que eu deveria ter visto:** o nó irmão `Criar novo lead` tem corpo do
+mesmo formato. Se minha leitura estivesse certa, a **criação** de lead pelo
+formulário também estaria quebrada — e não está. Eu usei essa mesma comparação
+como *evidência a favor* da minha tese ("das nove expressões, só esta tem dois
+`=`"), sem notar que ela a contradizia: a diferença estava na posição, não na
+contagem.
 
-O nó está configurado com `neverError: true` e `fullResponse: true`, então **o
-workflow não falha visivelmente**: ele segue para o próximo nó como se tivesse dado
-certo. O sintoma operacional é "o formulário não atualiza o lead que já existe" /
-"o dado que o cliente mandou pelo site não aparece", sem erro em lugar nenhum.
-
-**Evidência de que é digitação, não idioma do n8n:** varri os três workflows. De
-**nove** expressões no formulário, oito têm um `=` — inclusive `Criar novo lead`,
-cujo corpo tem exatamente o mesmo formato. Este nó é o único com dois. Nos outros
-dois workflows não há nenhuma ocorrência de `==`.
-
-**MUDANÇA EXATA:** apagar **um** sinal de igual. Nada mais.
-
-**VALOR ANTIGO** (início) — `=={{\n(() => {\n  const novo = ...`
-**VALOR NOVO** (início) — `={{\n(() => {\n  const novo = ...`
-
-**CONEXÕES / NÓS:** nenhuma alteração.
-
-**TESTE MANUAL:**
-1. No painel de expressão do campo *JSON*, o preview deve mostrar um objeto JSON
-   **sem** o `=` na frente.
-2. Envie o formulário do site com um WhatsApp que **já existe** no CRM e com um
-   campo hoje vazio no lead (por exemplo `email`).
-3. Em *Executions* → `Atualizar lead existente` → aba *Output*: `statusCode` deve
-   ser 200, não 4xx.
-4. No CRM, o campo antes vazio deve estar preenchido e **nenhum campo que já tinha
-   valor pode ter mudado** (é o que a lógica `preservarOuPreencher` garante).
-
-**ROLLBACK:** recolocar o `=` extra.
-
-**DEPENDÊNCIA REPO-SIDE:** nenhuma — o endpoint do CRM já aceita o corpo correto,
-com o contrato `""`-vs-`null` travado por `tests/test_n8n_contract_lead_update.py`.
-
-**STATUS:** `FIXED_PENDING_MANUAL_N8N`
-
----
+**Status: `RESOLVED` — nada a corrigir.** O que continua verdadeiro é apenas que
+`neverError: true` faria uma falha real do `PUT` passar despercebida ali. É
+característica do desenho do workflow, não defeito.
 
 ## 3. Descoberta estrutural: a base de conhecimento da Bia não é o repositório
 
@@ -173,7 +144,7 @@ manuais — o que valida a ponte CRM→Conversas construída nesta rodada.
 
 | ID | Item | Classificação |
 |---|---|---|
-| **M6** | `jsonBody` do `Atualizar lead existente` com `==` | `FIXED_PENDING_MANUAL_N8N` |
+| ~~M6~~ | **não procedia** — erro meu de leitura, ver § 2 | `RESOLVED` |
 | **M7** | fazer o Gerenciador chamar o handoff do Conversas — **desnecessário se a ponte CRM→Conversas desta rodada for aceita**; ver `N8N_MANUAL_CHANGES.md` | opcional |
 | D2 | `/webhook/agent-bia` sem autenticação | `BLOCKED_OPERATOR` |
 | D5 | rotação da API key derruba os três workflows juntos | `BLOCKED_OPERATOR` |

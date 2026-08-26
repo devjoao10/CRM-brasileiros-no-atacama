@@ -874,9 +874,11 @@ entrada sumia em silêncio (F-341).
 - **O botão de reenviar estava morto.** `retrySending` nunca foi declarada, e o
   arquivo é `'use strict'`: todo clique levantava `ReferenceError` antes do
   fetch.
-- **M6** — a aplicação da D3 introduziu `==` no `jsonBody` do formulário. Mesmo
-  mecanismo do M1. O `PUT` falha, `neverError: true` esconde, e o formulário do
-  site **não atualiza nenhum lead que já existe**. Em produção agora.
+- **M6 — eu errei.** Afirmei que a D3 tinha quebrado o formulário em produção.
+  O operador conferiu no editor do n8n: o campo mostra `{{`; o `=` extra do
+  export é a marcação de expressão do próprio n8n. A analogia com o M1 falhou
+  porque lá os dois sinais estavam no *valor* de um parâmetro e aqui estão no
+  marcador do *campo*. `RESOLVED`, sem correção necessária.
 - **A base de conhecimento da Bia não é o repositório.** O subworkflow lê a Data
   Table n8n `bia_knowledge_base`. Os 73 markdown não são lidos em runtime.
 
@@ -909,7 +911,7 @@ forçada: virou parâmetro novo convivendo com o antigo.
 
 | Item | O quê |
 |---|---|
-| **M6** | apagar um `=` no `jsonBody` do formulário — o formulário está quebrado agora |
+| ~~M6~~ | **cancelado** — não procedia (erro meu de leitura, corrigido na reconciliação) |
 | **M7** | definir `CONVERSAS_API_KEY` no ambiente do CRM para a ponte de handoff funcionar (sem ela é no-op, nada regride) |
 | **M8** | criar o workflow de follow-up por inatividade (o endpoint já existe) |
 | **M9** | apontar o formulário do rodapé para o mesmo webhook |

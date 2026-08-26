@@ -404,10 +404,10 @@ Preencha ao aplicar. Enquanto uma linha estiver vazia, o item segue
 | M3 `Ignorar mensagem` 204 | 2026-08-26 | operador | ✅ export | `respondWith=noData`, `responseCode: 204` |
 | M4 anotação em query param | 2026-08-26 | operador | ✅ export | `sendQuery: true` + `parametersQuery.texto` |
 | M5 ramo de erro do Gerenciador | 2026-08-26 | operador | ✅ export | nó `Fallback — erro Gerenciador` na 2ª saída |
-| **M6 `jsonBody` do formulário com `==`** | — | — | — | **PENDENTE — regressão introduzida pela D3; ver abaixo** |
+| **M6 `jsonBody` do formulário** | 2026-08-26 | operador | ✅ verificado no editor | ✅ **RESOLVED** — não era o defeito do M1; ver a correção da minha leitura abaixo |
 | D1 autenticar gerenciador-leads | 2026-08-26 | operador | ✅ export | `authentication: "headerAuth"` |
 | D2 autenticar agent-bia | — | — | — | continua sem `authentication` |
-| D3 decisão do formulário | 2026-08-26 | operador | ⚠️ parcial | lógica e CORS corretos, **mas ver M6** |
+| D3 decisão do formulário | 2026-08-26 | operador | ✅ | lógica de preservação e CORS corretos; o M6 que eu havia levantado não procedia |
 | D4 verificar nome do modelo | 2026-08-26 | operador | ℹ️ | Bia agora em `Gemini 3.5-flash-lite`; Gerenciador em `Gemini 2.5 Flash` |
 | D5 rotação da API key | — | — | — | continua pendente |
 | D6 exportar subworkflow da KB | 2026-08-26 | operador | ✅ | `BIA — Consultar Knowledge Base` versionado — ver a descoberta da Data Table |
@@ -418,21 +418,32 @@ Exports correspondentes: `n8n/workflows/live_exports/20260826_wa/`.
 
 ---
 
-## M6 — `jsonBody` do `Atualizar lead existente` com dois sinais de igual
+## M6 — `jsonBody` do `Atualizar lead existente` — **NÃO PROCEDIA**
 
-**Regressão nova, introduzida pela aplicação da D3. Silenciosa.**
-Instrução campo a campo, com evidência e teste manual, em
-`docs/audit/N8N_RECONCILIACAO_20260826.md` § 2.
+**Correção da minha própria leitura. Registrada por inteiro, não apagada.**
 
-Resumo: o corpo do nó começa com `==`. Como no M1, o `=` sobrando vira texto
-literal na frente do JSON, o corpo deixa de ser JSON válido e o
-`PUT /api/leads/{id}` falha — mas `neverError: true` esconde a falha e o
-workflow segue como se tivesse dado certo. Efeito operacional: **o formulário
-do site não atualiza nenhum lead que já existe**. Correção: apagar um `=`.
+Eu li `"jsonBody": "=={{ ... }}"` no arquivo exportado e, por analogia direta
+com o M1, concluí que havia um `=` sobrando e que o corpo enviado deixaria de
+ser JSON válido — o que quebraria o `PUT /api/leads/{id}` para todo lead já
+existente vindo do formulário.
 
-Das nove expressões do workflow do formulário, esta é a **única** com dois
-sinais de igual — inclusive o nó irmão `Criar novo lead`, de corpo idêntico,
-usa um. Nos outros dois workflows não há nenhuma ocorrência.
+O operador verificou **no editor visual do n8n**: o campo mostra `{{`. O `=`
+extra que aparece no export é a marcação com que o próprio n8n serializa um
+campo em modo expressão.
+
+**Por que a analogia com o M1 falhou:** no M1 os dois sinais estavam dentro do
+*valor* de um parâmetro (`parametersBody → value`), onde o segundo `=` de fato
+vira texto. Aqui estão no marcador do *campo* inteiro. São posições diferentes
+na estrutura do nó, e eu tratei as duas como equivalentes por olharem igual no
+JSON. O sinal que me deveria ter alertado estava à vista: o nó `Criar novo lead`
+tem corpo do mesmo formato — se a leitura estivesse certa, a **criação** de lead
+pelo formulário também estaria quebrada, e não está.
+
+**Status:** `RESOLVED` — nada a corrigir.
+
+**O que sobra desta análise e continua valendo:** o nó usa `neverError: true`,
+então uma falha real do `PUT` ali não apareceria como erro no n8n — apenas como
+lead não atualizado. É característica do desenho do workflow, não defeito.
 
 ---
 
