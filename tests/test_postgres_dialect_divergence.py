@@ -734,13 +734,16 @@ if _PG_URL:
                   f"que o PostgreSQL nao processa sai do RESULTADO, nunca derruba a "
                   f"consulta para todos os leads (F-043). Estourou com: {_erro_cp}")
 
-            _sumiram = [r for _i, (r, _t, _leg) in enumerate(CORPUS_F043, 1)
-                        if _leg and _i not in _ids]
-            check(_erro_cp is None and not _sumiram,
-                  f"(P2) nenhuma linha LEGITIMA sumiu em silencio: {_sumiram}. "
-                  f"Acento, emoji e barra do Windows chegam ao banco como escape de "
-                  f"codepoint — um guard que barre escape em bloco, ou que case a "
-                  f"substring errada, apaga lead sem erro nenhum")
+            # P2 so tem resposta se houve resultado: com a consulta estourada
+            # nao existe "sumiu em silencio" para medir, e P1 acima ja reprovou.
+            if _erro_cp is None:
+                _sumiram = [r for _i, (r, _t, _leg) in enumerate(CORPUS_F043, 1)
+                            if _leg and _i not in _ids]
+                check(not _sumiram,
+                      f"(P2) nenhuma linha LEGITIMA sumiu em silencio: {_sumiram}. "
+                      f"Acento, emoji e barra do Windows chegam ao banco como escape "
+                      f"de codepoint — um guard que barre escape em bloco, ou que "
+                      f"case a substring errada, apaga lead sem erro nenhum")
     finally:
         _eng_cp.dispose()
 else:

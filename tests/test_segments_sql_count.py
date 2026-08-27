@@ -71,7 +71,9 @@ SEMENTE = [
     ("dup-chave",    {"Origem": "facebook", "origem  ": "instagram"}, ["Atacama"], "venda", 1, 1, "2026-05-15"),
 ]
 
-# campos_personalizados legado que nao e objeto JSON — jsonb_each_text estoura.
+# campos_personalizados legado que nao e objeto JSON — a expansao dos pares
+# estoura no PostgreSQL (AUDIT-2026-08-WF2: hoje `json_each_text`, antes
+# `jsonb_each_text`; o nome muda, o estouro nao).
 # Ficam num destino/status proprios para nao entrarem nos demais filtros: o
 # LeadResponse nao valida campos_personalizados nao-dict (ver relatorio do PR,
 # achado pre-existente), entao preview/leads com eles no conjunto quebraria por
@@ -318,8 +320,8 @@ def test_tags_nao_multiplicam_a_contagem():
 def test_segmento_legado_nao_derruba_a_listagem():
     """
     campos_personalizados que nao e objeto (lista/string) existia no banco.
-    jsonb_each_text estoura nesse caso; sem a guarda CASE, UM lead legado
-    derrubaria GET /api/segments inteiro com 500.
+    A expansao dos pares estoura nesse caso no PostgreSQL; sem a guarda de
+    tipo, UM lead legado derrubaria GET /api/segments inteiro com 500.
     """
     from app.database import SessionLocal
     from app.routers.segments import _count_segment_leads
