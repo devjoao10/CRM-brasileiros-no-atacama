@@ -1,0 +1,48 @@
+==============================================================================
+A) Gerenciador :: Tool Criar Lead  -> POST /api/leads
+==============================================================================
+  PASS: criar lead completo -> ACEITO
+        resultado: {"nome": "Joao Teste", "whatsapp": "5548988711776", "destinos": ["Atacama", "Uyuni"], "email": "joao@example.com", "num_viajantes": 2, "num_criancas": 1, "idades_criancas": "6", "data_chegada": "2026-09-10", "data_partid
+  PASS: criar lead com campos vazios (instrucao literal da tool) -> ACEITO
+        resultado: {"nome": "Maria Teste", "whatsapp": "5548988711777", "destinos": ["Atacama"], "email": null, "num_viajantes": null, "num_criancas": 0, "idades_criancas": null, "data_chegada": null, "data_partida": null, "total_dias": nu
+  PASS: criar lead com placeholder nao substituido -> RECUSADO
+        data_chegada: Input should be a valid date or datetime, invalid character in year
+        data_partida: Input should be a valid date or datetime, invalid character in year
+        total_dias: Input should be a valid integer, unable to parse string as an integer
+        num_viajantes: Input should be a valid integer, unable to parse string as an integer
+
+==============================================================================
+B) Formulario do Site :: POST /api/leads  (numeros como NUMERO)
+==============================================================================
+  PASS: formulario, payload real -> ACEITO
+        resultado: {"nome": "Cliente Site", "whatsapp": "5548988711778", "destinos": ["Atacama", "Uyuni"], "email": "site@example.com", "num_viajantes": 2, "num_criancas": 0, "data_chegada": "2026-10-01", "data_partida": "2026-10-08", "dat
+
+==============================================================================
+C) Gerenciador :: Tool Atualizar Lead -> PUT /api/leads/{id}
+==============================================================================
+  FAIL: atualizar com todos os campos vazios -> RECUSADO
+        nome: String should have at least 1 character
+
+==============================================================================
+D) Gerenciador :: Tool Criar Tarefa -> POST /api/tasks (lead_id STRING)
+==============================================================================
+  PASS: criar tarefa com lead_id string -> ACEITO
+        resultado: {"titulo": "Follow-up", "descricao": "Lead qualificado pela Bia", "lead_id": 42, "tipo": "automatica", "data_vencimento": "2026-09-01 10:00:00"}
+  PASS: criar tarefa com data_vencimento vazia -> RECUSADO
+        data_vencimento: Input should be a valid datetime or date, input is too short
+
+==============================================================================
+E) etapa_id que os workflows usam de fato
+==============================================================================
+  PASS: StageSchema.id = 'nova_oportunidade' -> ACEITO
+        resultado: {"id": "nova_oportunidade", "nome": "x"}
+  PASS: StageSchema.id = 'sem_contato' -> ACEITO
+        resultado: {"id": "sem_contato", "nome": "x"}
+  PASS: StageSchema.id = 'Sem Contato' -> RECUSADO
+        id: String should match pattern '^[A-Za-z0-9_-]+$'
+  PASS: StageSchema.id = '{etapa_id}' -> RECUSADO
+        id: String should match pattern '^[A-Za-z0-9_-]+$'
+
+==============================================================================
+1 divergencia(s) de contrato
+  !! atualizar com todos os campos vazios

@@ -715,20 +715,53 @@ def test_postgres_telefone_usa_trim_e_not_null():
     assert "leads.whatsapp" in sql
 
 
-def test_postgres_campo_personalizado_e_jsonb_exists():
+def test_postgres_campo_personalizado_e_exists_com_guarda_de_tipo():
+    """O ramo PostgreSQL varre pares chave/valor sob uma guarda de tipo.
+
+    AUDIT-2026-08-WF2 — este teste exigia `jsonb_each_text` e `jsonb_typeof`.
+    Isso era o MECANISMO, nao a propriedade: o cast para `jsonb` foi removido de
+    proposito porque era ele quem morria com `{"orcamento": 1e1000000}` — JSON
+    valido, aceito pela coluna `json`, e que derrubava com
+    `NumericValueOutOfRange` TODA consulta de campo personalizado, para TODOS os
+    leads, inclusive as que nada tinham a ver com a linha envenenada.
+
+    O que precisa continuar valendo, e o que este teste passa a exigir:
+      - a varredura e por par chave/valor dentro de um EXISTS (nao um LIKE no
+        JSON serializado, que casaria chave com valor);
+      - ha guarda de tipo antes de varrer (linha que nao e objeto no topo tem
+        de ser descartada, nao explodir);
+      - a forma do SQLite nao vaza para o PostgreSQL.
+
+    A propriedade de fundo — uma linha ruim nao derruba a consulta das outras —
+    e exercitada contra PostgreSQL real em tests/test_leads_segment_drift.py.
+    """
     from app.models.lead import Lead
     sql = _sql_pg(lambda db, L, QF: db.query(Lead.id).filter(
         QF.campo_personalizado_match(Lead.campos_personalizados, "origem", "insta")))
-    assert "EXISTS" in sql and "jsonb_each_text" in sql, sql[:300]
-    assert "jsonb_typeof" in sql, "guarda de tipo tem que sobreviver"
+    assert "EXISTS" in sql, sql[:300]
+    assert "json_each_text" in sql, f"a varredura e por par chave/valor: {sql[:300]}"
+    assert "json_typeof" in sql, f"guarda de tipo tem que sobreviver: {sql[:300]}"
     assert "json_each(" not in sql, "forma SQLite vazou para o PostgreSQL"
+    # O cast saiu de proposito: e ele que morre com overflow numerico.
+    assert "AS JSONB" not in sql.upper(), (
+        f"o cast para jsonb voltou — e ele que quebra com 1e1000000: {sql[:300]}"
+    )
 
 
-def test_postgres_destino_e_jsonb_contains():
+def test_postgres_destino_nao_casta_para_jsonb():
+    """AUDIT-2026-08-WF2 — o assert antigo era `@>` + `JSONB`, e ele guardava
+    apenas "o SQL compila" (a coluna e `json` e `json @> unknown` nao existe).
+    So que o proprio cast e a operacao PARCIAL: `[1e1000000]` e json valido,
+    armazenavel, e derruba a consulta de TODOS os leads. A propriedade foi
+    parar em tests/test_leads_destino_filter_dialect.py, que mede o corpus
+    inteiro contra PostgreSQL real; aqui fica o tripwire de forma."""
     from app.models.lead import Lead
     sql = _sql_pg(lambda db, L, QF: db.query(Lead.id).filter(
         L._json_list_contains(Lead.destinos, "Atacama")))
-    assert "@>" in sql and "JSONB" in sql.upper(), sql[:300]
+    assert "JSONB" not in sql.upper(), (
+        f"o cast para jsonb voltou — e ele que quebra com [1e1000000]: {sql[:300]}")
+    assert "json_array_elements_text(" in sql, sql[:300]
+    assert "json_typeof(" in sql, f"guarda de tipo tem que sobreviver: {sql[:300]}"
 
 
 def test_postgres_busca_usa_ilike_nos_tres_campos():
@@ -825,7 +858,7 @@ def _roda_js(corpo, valores=None, resposta=None, atraso=0):
         json.dumps(valores or {}), json.dumps(resposta), atraso,
         _fn("filtrosAtuais"), _fn("reloadLeads"), _fn("loadLeads"), _fn("loadMore"),
         corpo)
-    p = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    p = subprocess.run([node, "-e", script], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert p.returncode == 0, f"node falhou: {p.stderr.strip()[:400]}"
     return json.loads(p.stdout)
 

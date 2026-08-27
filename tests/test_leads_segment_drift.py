@@ -33,7 +33,12 @@ import os  # noqa: E402
 pathlib.Path("scratch").mkdir(exist_ok=True)
 os.environ.update({
     "ENVIRONMENT": "development",
-    "DATABASE_URL": "sqlite:///./scratch/leads_segment_test.db",
+    # AUDIT-2026-08-WF2 — respeita DATABASE_URL do ambiente para o mesmo
+    # arquivo rodar contra o PostgreSQL de auditoria; sem nada definido cai no
+    # SQLite descartavel de sempre, que e o que o CI tem. Mesmo desvio de
+    # tests/test_pipeline_funnel_race.py.
+    "DATABASE_URL": (os.environ.get("DATABASE_URL")
+                     or "sqlite:///./scratch/leads_segment_test.db"),
     "SEED_INITIAL_ADMIN": "true",
     "ADMIN_INITIAL_EMAIL": "admin@local.test",
     "ADMIN_INITIAL_PASSWORD": "LocalSmoke123!",
@@ -72,12 +77,17 @@ def _seed_leads():
     from app.models.lead import Lead
     db = SessionLocal()
     try:
-        if db.query(Lead).count() == 0:
-            db.add(Lead(nome="Lead Teste Um", email="um@teste.local",
-                        whatsapp="+56000000001", destinos=["Atacama"]))
-            db.add(Lead(nome="Lead Teste Dois", email="dois@teste.local",
-                        whatsapp="+56000000002", destinos=["Uyuni"]))
-            db.commit()
+        # AUDIT-2026-08-WF2 — semeia pelo e-mail de cada lead, nao por "tabela
+        # vazia": com DATABASE_URL apontando para o PostgreSQL de auditoria o
+        # banco e COMPARTILHADO e quase nunca esta vazio, e o `count() == 0`
+        # pulava o seed, derrubando os dois testes de segment por falta de dado.
+        for nome, email, whats, destinos in (
+                ("Lead Teste Um", "um@teste.local", "+56000000001", ["Atacama"]),
+                ("Lead Teste Dois", "dois@teste.local", "+56000000002", ["Uyuni"])):
+            if not db.query(Lead).filter(Lead.email == email).first():
+                db.add(Lead(nome=nome, email=email, whatsapp=whats,
+                            destinos=destinos))
+        db.commit()
     finally:
         db.close()
 
@@ -188,6 +198,185 @@ def test_env_example_documenta_variavel():
     assert "INTERNAL_AI_AUTH_SECRET" in env_example, (
         ".env.example deveria documentar INTERNAL_AI_AUTH_SECRET (nome, sem valor)"
     )
+
+
+# ── 4. AUDIT-2026-08-WF2: o filtro de campo personalizado nao pode morrer ──
+#
+# `leads.campos_personalizados` e `json` (validado so na sintaxe). O filtro
+# castava cada linha para `jsonb`, e UMA linha que nao castasse derrubava a
+# query inteira, para TODOS os leads (F-043). O guard que veio depois so
+# reconhecia o escape de NUL — a revisao adversarial mediu, contra PostgreSQL
+# 16.14, que `{"orcamento": 1e1000000}` passa por ele e mata a query
+# (NumericValueOutOfRange), e que ele ainda excluia por engano a linha que
+# guarda a BARRA escapada, que casta sem problema nenhum.
+#
+# Estes testes cobrem os dois lados:
+#   - compilacao: o ramo PostgreSQL nao pode voltar a castar para jsonb;
+#   - execucao: o corpus adversarial no banco ATIVO (SQLite no CI, PostgreSQL
+#     quando DATABASE_URL apontar para ele) nao derruba a query e nao some com
+#     linha legitima.
+
+WF2_BARRA = chr(92)
+
+# texto JSON CRU, como psql/n8n/COPY gravariam (ver migrations/m011, F5).
+WF2_CORPUS = [
+    (1, "objeto normal",   '{"origem": "instagram"}'),
+    (2, "array no topo",   '["instagram"]'),
+    (3, "json null",       'null'),
+    (4, "string no topo",  '"instagram"'),
+    (5, "num 1e1000000",   '{"orcamento": 1e1000000}'),
+    (6, "NUL real",        '{"origem": "instagram", "obs": "' + WF2_BARRA + 'u0000"}'),
+    (7, "barra literal",   '{"origem": "ref' + WF2_BARRA * 2 + 'u0000alpha"}'),
+    (8, "u0000 sem barra", '{"origem": "ref-u0000-alpha"}'),
+    (9, "numero 1e2",      '{"orcamento": 1e2}'),
+]
+
+
+def _wf2_resumo(sql):
+    """Corta o SQL antes do bloco _ESPACOS: ele tem caracteres que o console do
+    Windows (cp1252) nao imprime, e derrubaria o proprio relatorio de falha."""
+    corte = sql.find("WHERE lower(")
+    return (sql[:corte] if corte > 0 else sql)[:400]
+
+
+def _wf2_sql(is_sqlite, dialect):
+    """Compila o predicado REAL forcando o ramo desejado, sem conexao."""
+    import app.query_filters as qf
+    from app.models.lead import Lead
+    original = qf.IS_SQLITE
+    qf.IS_SQLITE = is_sqlite
+    try:
+        expr = qf.campo_personalizado_match(Lead.campos_personalizados, "origem", "x")
+        return str(expr.compile(dialect=dialect,
+                                compile_kwargs={"literal_binds": True}))
+    finally:
+        qf.IS_SQLITE = original
+
+
+def test_wf2_ramo_postgres_nao_casta_mais_para_jsonb():
+    """O cast era a causa raiz: some com ele e a classe inteira de falha de
+    conversao (o overflow numerico incluso) deixa de existir."""
+    from sqlalchemy.dialects import postgresql
+    sql = _wf2_sql(False, postgresql.dialect())
+    assert "JSONB" not in sql.upper(), (
+        "ramo PostgreSQL voltou a castar para jsonb — uma linha que nao caste "
+        f"derruba a query inteira de novo: {_wf2_resumo(sql)}"
+    )
+    assert "json_each_text(" in sql, (
+        f"esperava json_each_text sobre a coluna json: {_wf2_resumo(sql)}"
+    )
+    assert "json_typeof(" in sql, (
+        f"esperava json_typeof (total) no lugar de jsonb_typeof: {_wf2_resumo(sql)}"
+    )
+
+
+def test_wf2_guard_nao_e_denylist_de_um_escape_so():
+    """Guard tem de ser allowlist: remove os escapes que SABE converter e exige
+    que nao sobre nenhum. Uma denylist de padroes ja perdeu duas vezes."""
+    from sqlalchemy.dialects import postgresql
+    sql = _wf2_sql(False, postgresql.dialect())
+    # so a regiao do GUARD: depois de "WHERE lower(" vem a comparacao de
+    # chave/valor, que usa LIKE de proposito (contains + autoescape).
+    guard = _wf2_resumo(sql)
+    assert guard.count("regexp_replace(") >= 2, (
+        "guard voltou a ser procura de padrao unico; o allowlist precisa "
+        f"remover par substituto E escape conversivel: {guard}"
+    )
+    assert "strpos(" in guard, (
+        f"esperava strpos (substring literal), nao LIKE: {guard}"
+    )
+    # tripwire da revisao 1: LIKE trata a barra como escape e ja barrou linha boa
+    assert " LIKE " not in guard.upper(), (
+        f"guard nao pode usar LIKE — a barra e o escape default: {guard}"
+    )
+
+
+def test_wf2_ramo_sqlite_inalterado():
+    """Sem regressao de dialeto: o SQLite nunca teve o defeito e continua igual."""
+    from sqlalchemy.dialects import sqlite as sqlite_dialect
+    sql = _wf2_sql(True, sqlite_dialect.dialect())
+    assert "json_each(" in sql, f"ramo SQLite deveria usar json_each: {_wf2_resumo(sql)}"
+    assert "json_type(" in sql, f"ramo SQLite deveria usar json_type: {_wf2_resumo(sql)}"
+    baixo = sql.lower()
+    assert "jsonb" not in baixo, f"jsonb vazou para o ramo SQLite: {_wf2_resumo(sql)}"
+    assert "regexp_replace" not in baixo, (
+        f"o guard do PostgreSQL vazou para o ramo SQLite: {_wf2_resumo(sql)}"
+    )
+
+
+def _wf2_tabela(engine):
+    """Cria a tabela descartavel do corpus no backend ATIVO e a semeia com o
+    texto JSON cru (sem passar por json.dumps, que nunca produziria estas
+    linhas)."""
+    from sqlalchemy import Column, Integer, JSON, MetaData, String, Table, text
+    from app.database import IS_SQLITE
+    md = MetaData()
+    t = Table("wf2_corpus", md,
+              Column("id", Integer, primary_key=True),
+              Column("nome", String),
+              Column("campos_personalizados", JSON))
+    with engine.begin() as c:
+        c.execute(text("DROP TABLE IF EXISTS wf2_corpus"))
+    md.create_all(engine)
+    valor = ":j" if IS_SQLITE else "CAST(:j AS json)"
+    with engine.begin() as c:
+        for i, nome, js in WF2_CORPUS:
+            c.execute(text("INSERT INTO wf2_corpus (id, nome, campos_personalizados) "
+                           "VALUES (:i, :n, " + valor + ")"),
+                      {"i": i, "n": nome, "j": js})
+    return t
+
+
+def _wf2_ids(engine, t, chave, valor):
+    from sqlalchemy import select
+    from app.query_filters import campo_personalizado_match
+    q = select(t.c.id).where(
+        campo_personalizado_match(t.c.campos_personalizados, chave, valor))
+    with engine.connect() as c:
+        return {r[0] for r in c.execute(q)}
+
+
+def test_wf2_corpus_adversarial_no_banco_ativo():
+    from sqlalchemy import text
+    from app.database import engine, IS_SQLITE
+    t = _wf2_tabela(engine)
+    try:
+        # Defeito 1 (HIGH): a linha 5 nao tem nada a ver com a busca, mas o cast
+        # para jsonb estourava nela e matava a query para TODO mundo.
+        # Defeito 2 (MEDIUM): a linha 7 guarda a BARRA escapada, casta sem
+        # problema, e o guard de NUL a excluia em silencio.
+        ids = _wf2_ids(engine, t, "origem", "ref")
+        assert ids == {7, 8}, (
+            "busca origem~'ref' deveria achar a linha da barra escapada (7) e a "
+            f"que so tem a substring sem barra (8); veio {sorted(ids)}"
+        )
+
+        # A linha 6 tem o escape de NUL de verdade: no PostgreSQL ela e
+        # descartada do filtro (a troca deliberada — some UMA linha, em vez de a
+        # funcionalidade sumir para todos); no SQLite nunca houve defeito e ela
+        # aparece normalmente.
+        ids = _wf2_ids(engine, t, "origem", "instagram")
+        esperado = {1, 6} if IS_SQLITE else {1}
+        assert ids == esperado, (
+            f"busca origem~'instagram' deveria devolver {sorted(esperado)} neste "
+            f"backend; veio {sorted(ids)}"
+        )
+
+        # A linha do overflow numerico deixa de ser fatal e volta a ser achavel.
+        ids = _wf2_ids(engine, t, "orcamento", "")
+        assert ids == {5, 9}, (
+            f"busca so por presenca da chave 'orcamento' deveria achar 5 e 9; "
+            f"veio {sorted(ids)}"
+        )
+
+        # Nao-objeto no topo continua descartado, sem derrubar nada.
+        ids = _wf2_ids(engine, t, "origem", "instagram")
+        assert not ({2, 3, 4} & ids), (
+            f"JSON legado que nao e objeto nao pode casar chave: {sorted(ids)}"
+        )
+    finally:
+        with engine.begin() as c:
+            c.execute(text("DROP TABLE IF EXISTS wf2_corpus"))
 
 
 ALL_TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

@@ -4,17 +4,17 @@ Includes responsavel (owner) management and CRM integration.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import set_committed_value
-from sqlalchemy import and_, desc, func, update as sa_update
+from sqlalchemy import and_, case, desc, func, or_, update as sa_update
 from sqlalchemy.orm import selectinload
 
-from app.database import get_db
-from app.auth import get_current_user, User
-from app.models.conversation import Conversation, Message, service_window_open
+from app.database import get_db, IS_SQLITE
+from app.auth import get_current_user, is_admin_role, User
+from app.models.conversation import Conversation, Message, service_window_open, SERVICE_WINDOW
 from app.schemas.conversation import (
     ConversationResponse,
     ConversationDetail,
@@ -29,7 +29,12 @@ from app.schemas.conversation import (
 from app.services import whatsapp
 from app.services import crm as crm_service
 from app.services import variables as variables_service
+from app.services.atendimento import (
+    aplicar_estado_humano as _apply_human_state,
+    resolver_atendente_elegivel,
+)
 from app.services.outbound import (
+    NOT_FAILED_STATUSES,
     record_outbound_message,
     classify_wa_response,
     send_media_upload,
@@ -44,6 +49,12 @@ router = APIRouter(prefix="/api/conversations", tags=["Conversas"])
 # status='aguardando' persistido. Ate a normalizacao (m007, opcional), essas
 # linhas sao tratadas como ABERTAS em todos os filtros derivados.
 LEGACY_OPEN_STATUSES = ("aberta", "aguardando")
+
+# AUDIT-2026-08-W2F (F12) — tetos dos payloads de POLLING (5s por aba aberta).
+# Nao sao paginacao: sao limites de seguranca para que o custo de um poll nao
+# cresca com a idade do inbox nem com o tamanho do historico.
+UNREAD_MAP_LIMIT = 200
+CONVERSATION_MESSAGES_LIMIT = 200
 
 # ─── CONV-WINDOW-01: janela de 24h da Meta ────────────────────────────
 # O BACKEND e a autoridade. O frontend desabilita o composer por UX, mas quem
@@ -76,6 +87,39 @@ def _require_open_window(conversation: Conversation) -> None:
             status_code=409,
             detail={"code": "WINDOW_CLOSED", "message": WINDOW_CLOSED_MESSAGE},
         )
+
+
+def _service_window_expires_at(last_customer_msg_at: Optional[datetime]) -> Optional[datetime]:
+    """
+    AUDIT-2026-08-WD (D1) — instante em que a janela de 24h fecha, exposto
+    como TIMESTAMP para o frontend RENDERIZAR em vez de recalcular. Mesma
+    regra de `Conversation.service_window_open` (app/models/conversation.py:
+    SERVICE_WINDOW = 24h a partir do ultimo inbound) — so em outro formato;
+    `service_window_open` continua INALTERADO e continua sendo quem DECIDE se
+    a janela esta aberta.
+
+    None quando nao ha inbound ainda (`last_customer_msg_at is None`).
+    """
+    if last_customer_msg_at is None:
+        return None
+    if last_customer_msg_at.tzinfo is None:
+        last_customer_msg_at = last_customer_msg_at.replace(tzinfo=timezone.utc)
+    return last_customer_msg_at + SERVICE_WINDOW
+
+
+class ConversationDetailWithWindow(ConversationDetail):
+    """
+    AUDIT-2026-08-WD (D1) — estende `ConversationDetail` com
+    `service_window_expires_at` (ver `_service_window_expires_at` acima).
+
+    Subclasse LOCAL a este router, e nao um campo novo em
+    `app/schemas/conversation.py`: aquele arquivo esta fora do conjunto de
+    arquivos deste pacote de auditoria. Puramente aditiva — nao redefine nem
+    repete nenhum campo de `ConversationDetail`, so response_model de
+    `GET /{conversation_id}` (unico endpoint que alimenta `activeConversation`
+    no frontend, tanto na abertura quanto no polling de 5s).
+    """
+    service_window_expires_at: Optional[datetime] = None
 
 
 async def _build_template_send(
@@ -195,15 +239,38 @@ def _inbox_predicates(inbox: str, current_user_id: int) -> list:
     """
     Predicados de cada categoria. `meus` recebe o id do usuario AUTENTICADO —
     a rota nunca aceita user_id do cliente para esta categoria.
+
+    AUDIT-2026-08-WA — o eixo de `fila` vs `meus` deixou de ser `atendente_id`.
+
+    Antes: `fila` = sem atendente, `meus` = atendente sou eu. Isso fazia de
+    *atribuir* sinonimo de *atender*: o handoff que define um dono removia a
+    conversa da fila antes de qualquer humano falar com o cliente, e a FILA DE
+    ESPERA ficava vazia enquanto a Bia dizia ao cliente que ele estava nela.
+
+    Agora o eixo e `primeira_resposta_humana_at`:
+
+        NULL      -> ninguem respondeu ainda -> FILA DE ESPERA
+        NOT NULL  -> alguem ja atendeu       -> MEUS ATENDIMENTOS (do dono)
+
+    `atendente_id` continua sendo o dono, e continua filtrando `meus` — ele so
+    nao decide mais se a conversa esta esperando. Uma conversa atribuida a
+    Julia e ainda nao respondida aparece na FILA (para qualquer um ver que ha
+    alguem esperando), nao em "meus atendimentos" dela.
     """
     aberta = Conversation.status.in_(LEGACY_OPEN_STATUSES)
     humana = Conversation.is_bot_active.is_(False)
+    aguardando = Conversation.primeira_resposta_humana_at.is_(None)
     if inbox == "bia":
         return [aberta, Conversation.is_bot_active.is_(True)]
     if inbox == "fila":
-        return [aberta, humana, Conversation.atendente_id.is_(None)]
+        return [aberta, humana, aguardando]
     if inbox == "meus":
-        return [aberta, humana, Conversation.atendente_id == current_user_id]
+        return [
+            aberta,
+            humana,
+            Conversation.primeira_resposta_humana_at.isnot(None),
+            Conversation.atendente_id == current_user_id,
+        ]
     if inbox == "todos":
         return [aberta, humana]
     if inbox == "encerradas":
@@ -219,6 +286,11 @@ def _inbox_order(inbox: str) -> list:
     Fila = FIFO por entrada na fila (regra de negocio rigida): mais antigo
     primeiro, legado sem queued_at por ultimo, `id` como desempate
     deterministico. Demais categorias: atividade recente.
+
+    AUDIT-2026-08-WA — `id` como ultimo criterio em TODOS os ramos. Sem
+    desempate, `ORDER BY updated_at DESC` com duas linhas de mesmo timestamp
+    tem ordem indefinida, e o offset/limit do poll de 5s pode repetir ou pular
+    uma conversa entre duas paginas (F-523).
     """
     if inbox == "fila":
         return [Conversation.queued_at.asc().nullslast(), Conversation.id.asc()]
@@ -226,37 +298,135 @@ def _inbox_order(inbox: str) -> list:
 
 
 
-def _apply_human_state(
-    conversation: Conversation,
-    atendente_id: Optional[int],
-    *,
-    keep_queue_position: bool = False,
+def _preencher_atendente_nome(db: Session, conversations: list) -> None:
+    """
+    AUDIT-2026-08-WA — resolve o nome do ATENDENTE em UMA query por pagina.
+
+    A lista mostrava so `responsavel_nome` (comercial, vindo do CRM). Uma
+    conversa operacionalmente do Beto aparecia rotulada com o responsavel
+    comercial — frequentemente "Agente IA" — e nao havia como o atendente saber
+    de quem era o atendimento. `atendente_nome` nao e coluna: e apresentacao,
+    preenchida aqui em lote (nunca uma query por linha).
+    """
+    ids = {c.atendente_id for c in conversations if c.atendente_id}
+    if not ids:
+        return
+    nomes = dict(db.query(User.id, User.nome).filter(User.id.in_(sorted(ids))).all())
+    for conv in conversations:
+        conv.atendente_nome = nomes.get(conv.atendente_id)
+
+
+def _lock_conversation(db: Session, conversation_id: int) -> Conversation:
+    """
+    Carrega a conversa com a linha TRAVADA ate o fim da transacao.
+
+    AUDIT-2026-08-WA (F-087/F-318) — claim, assign, release e handoff eram
+    todos check-then-act com `SELECT` simples: dois atendentes clicando junto
+    passavam os dois pelo `if`, e o 409 anti-duplo-atendimento nao acontecia.
+    O mesmo vale para o callback de handoff correndo contra um claim humano.
+
+    No PostgreSQL o `FOR UPDATE` serializa a segunda transacao ate a primeira
+    commitar, entao ela le o estado JA atualizado e o `if` decide certo. No
+    SQLite `with_for_update()` nao e suportado — e tambem nao e necessario: o
+    banco inteiro e serializado por lock de arquivo. Por isso o ramo.
+    """
+    query = db.query(Conversation).filter(Conversation.id == conversation_id)
+    if not IS_SQLITE:
+        query = query.with_for_update()
+    conversation = query.first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+    return conversation
+
+
+def _lock_message(db: Session, conversation_id: int, message_id: int) -> Message:
+    """
+    AUDIT-2026-08-WD (D4) — mesmo padrao de `_lock_conversation`, na linha da
+    MENSAGEM: e o campo `status` dela que `retry_message` faz check-then-act.
+    Duas requisicoes concorrentes (duplo clique, ou duas abas) paravam as duas
+    no mesmo `if message.status != 'failed'` e reenviavam AS DUAS — o cliente
+    recebia a mesma mensagem duas vezes. No Postgres, `FOR UPDATE` serializa a
+    segunda ate a primeira commitar; no SQLite `with_for_update()` nao existe
+    (mesmo motivo do `_lock_conversation`). Ver o CLAIM logo no inicio de
+    `retry_message`: e ele (uma UPDATE condicional, nao esta trava sozinha)
+    que fecha a corrida no intervalo real do bug — a chamada de REDE entre a
+    leitura do status e a escrita, que nenhuma trava de linha cobre sozinha.
+    """
+    query = db.query(Message).filter(
+        Message.id == message_id, Message.conversation_id == conversation_id
+    )
+    if not IS_SQLITE:
+        query = query.with_for_update()
+    message = query.first()
+    if not message:
+        raise HTTPException(status_code=404, detail="Mensagem nao encontrada")
+    return message
+
+
+# AUDIT-2026-08-WA — `_apply_human_state` mudou de casa.
+# A escrita do estado operacional agora vive em `app.services.atendimento`
+# (importada acima com este mesmo nome). Motivo: quem precisa escrever esse
+# estado sao DOIS caminhos — as rotas de fila deste arquivo e o registro de
+# mensagem outbound em services/outbound.py. Enquanto as duas metades moravam
+# em modulos diferentes, uma delas passou a escrever direto (F-085).
+
+
+def _require_active_user(db: Session, user_id: int) -> User:
+    """
+    AUDIT-2026-08-W2F (F7) — MESMA validacao que `/assign` ja fazia.
+
+    Sem ela, `responsavel_id` chegava como query param cru, o lookup falhava,
+    `responsavel_nome` virava None e o id INEXISTENTE era commitado do mesmo
+    jeito — e depois empurrado para a tabela `leads` do CRM por
+    `sync_responsavel_to_crm`, cujo `UPDATE leads SET responsavel_id` nao tem
+    FK. Resultado: leads do CRM atribuidos a usuarios que nao existem (ou
+    inativos) e `lead_history` gravando a transicao fantasma.
+    """
+    target = db.query(User).filter(User.id == user_id, User.is_active == True).first()  # noqa: E712
+    if not target:
+        raise HTTPException(status_code=404, detail="Usuario nao encontrado ou inativo")
+    return target
+
+
+async def _apply_responsavel(
+    db: Session, conversation: Conversation, responsavel_id: Optional[int]
 ) -> None:
     """
-    PACOTE-A — ponto UNICO que escreve o estado operacional da conversa.
+    AUDIT-2026-08-W2F (F7+F8) — ponto UNICO de escrita do responsavel COMERCIAL.
 
-    Invariante (fonte unica de verdade do futuro inbox):
-      atendente definido -> alguem esta atendendo  -> queued_at = NULL
-      atendente NULL     -> esperando na fila      -> queued_at = momento de entrada
+    Os dois caminhos (`PUT /{id}` e `PUT /{id}/responsavel`) tinham a mesma
+    dupla de defeitos: id nao validado (F7) e sync com o CRM disparado DEPOIS
+    do commit, com o booleano de retorno jogado fora (F8). Como
+    `_repair_responsavel_cache` reescreve o cache local a partir do CRM em toda
+    listagem (5s) e em toda abertura, um sync que falhava produzia um 200
+    mentiroso e a atribuicao "voltava sozinha" no refresh seguinte.
 
-    `is_bot_active` vira False em TODOS os casos: chegar aqui significa que a
-    conversa saiu do universo da BIA (handoff, claim, assign, release, initiate).
-    A unica volta para a BIA e a REABERTURA de uma conversa encerrada (webhook).
-
-    `keep_queue_position=True` preserva um queued_at existente — e o que torna o
-    handoff idempotente: retry do n8n NAO manda a conversa para o fim da fila.
-    O release NAO usa essa flag: liberar e, por decisao de negocio, entrar de
-    novo no fim da fila.
-
-    NAO toca responsavel_id/responsavel_nome: responsabilidade COMERCIAL e do
-    CRM e nao pode ser escrita por operacao de fila.
+    Aqui a escrita local e a do CRM ficam na MESMA transacao (base unica,
+    session factory unica): ou as duas valem, ou nenhuma vale e o operador
+    recebe 502. NAO commita — quem chama fecha a transacao, para que o PUT
+    completo (status + estado operacional + responsavel) seja atomico.
     """
-    conversation.atendente_id = atendente_id
-    conversation.is_bot_active = False
-    if atendente_id is not None:
-        conversation.queued_at = None
-    elif not (keep_queue_position and conversation.queued_at):
-        conversation.queued_at = datetime.now(timezone.utc)
+    real_resp_id = None if (responsavel_id is None or responsavel_id == 0) else responsavel_id
+
+    if real_resp_id is None:
+        conversation.responsavel_id = None
+        conversation.responsavel_nome = "Agente IA"
+    else:
+        target = _require_active_user(db, real_resp_id)
+        conversation.responsavel_id = target.id
+        conversation.responsavel_nome = target.nome
+
+    if conversation.lead_id and conversation.lead_id > 0:
+        ok = await crm_service.sync_responsavel_to_crm(conversation.lead_id, real_resp_id, db)
+        if not ok:
+            db.rollback()
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Nao foi possivel sincronizar o responsavel com o CRM. "
+                    "A atribuicao NAO foi salva — tente novamente."
+                ),
+            )
 
 
 def _repair_responsavel_cache(db: Session, conversation: Conversation, lead_resp: dict) -> bool:
@@ -378,6 +548,11 @@ async def initiate_conversation(
             # PACOTE-A: quem inicia o contato ja e o atendente — nao entra na
             # fila de espera. Sempre o usuario autenticado, nunca hardcode.
             atendente_id=current_user.id,
+            # AUDIT-2026-08-WA — a conversa nasce ATENDIDA: foi um humano que a
+            # abriu. Sem isto ela nasceria com `primeira_resposta_humana_at`
+            # NULL e apareceria na FILA DE ESPERA, como se estivesse esperando
+            # por alguem — sendo que quem falou primeiro foi o atendente.
+            primeira_resposta_humana_at=datetime.now(timezone.utc),
         )
         db.add(conversation)
         db.commit()
@@ -417,11 +592,16 @@ async def initiate_conversation(
 
             # CONV-08b: persiste com status fiel ao resultado (nunca 'sent' em falha);
             # preview so e atualizado em sucesso (dentro do helper).
+            # AUDIT-2026-08-WA — quem inicia o contato ja e o atendente e ja
+            # falou com o cliente: a conversa nunca entra na fila.
             msg = record_outbound_message(
                 db, conversation, body_text, 'template', wa_response,
-                update_preview=True,
+                update_preview=True, autor_user_id=current_user.id,
             )
-            message_sent = (msg.status == 'sent')
+            # AUDIT-2026-08-WA — usar a constante em vez do literal 'sent':
+            # em development um envio simulado tem status 'simulated' e era
+            # reportado como falha para o operador.
+            message_sent = (msg.status in NOT_FAILED_STATUSES)
             if message_sent:
                 logger.info(f"Template '{data.template_name}' ({lang}) enviado para {wpp_clean}")
         except Exception as e:
@@ -497,19 +677,31 @@ async def list_conversations(
             query = query.filter(Conversation.atendente_id == atendente_id)
 
     # PACOTE-B: categoria do inbox — MESMOS predicados do /counts.
-    order_by = [desc(Conversation.updated_at)]
+    # AUDIT-2026-08-W2F (F14): `id.desc()` como desempate, igual ao que
+    # `_inbox_order` ja fazia. `updated_at` tem granularidade grosseira o
+    # bastante para empatar (mesmo lote de webhook, mesma migracao) e sem
+    # desempate o LIMIT/OFFSET de uma lista repaginada a cada 5s pode repetir
+    # ou PULAR uma conversa entre paginas — o operador perde uma linha da fila.
+    order_by = [desc(Conversation.updated_at), Conversation.id.desc()]
     if inbox is not None:
         query = query.filter(*_inbox_predicates(inbox, current_user.id))
         order_by = _inbox_order(inbox)
 
     # CONV-06 (legado): fila e ESTADO DERIVADO (status + atendente_id).
+    #
+    # AUDIT-2026-08-WA — este ramo NAO foi migrado para os predicados novos, de
+    # proposito. Ele e um contrato de API legado, com consumidores proprios
+    # ("aberta e sem atendente", incluindo conversas ainda com a Bia), e a tela
+    # atual nao o usa: o frontend manda `?inbox=`. Unificar os dois mudaria o
+    # significado de `queue=fila` para quem depende dele hoje, sem que nada
+    # nesta missao pedisse isso. O que foi corrigido aqui e so o desempate.
     if queue == "fila":
         query = query.filter(
             Conversation.status.in_(LEGACY_OPEN_STATUSES),
             Conversation.atendente_id.is_(None),
         )
-        # quem espera ha mais tempo primeiro
-        order_by = [Conversation.last_customer_msg_at.asc()]
+        # quem espera ha mais tempo primeiro (AUDIT-2026-08-W2F/F14: desempate)
+        order_by = [Conversation.last_customer_msg_at.asc(), Conversation.id.asc()]
     elif queue == "em_atendimento":
         query = query.filter(
             Conversation.status.in_(LEGACY_OPEN_STATUSES),
@@ -535,6 +727,8 @@ async def list_conversations(
                 info = responsaveis.get(conv.lead_id)
                 if info is not None:
                     repaired = _repair_responsavel_cache(db, conv, info) or repaired
+
+    _preencher_atendente_nome(db, conversations)
 
     payload = ConversationListResponse(
         conversations=[ConversationResponse.model_validate(c) for c in conversations],
@@ -572,12 +766,187 @@ async def conversation_counts(
     row = counts_query.one()
     payload = {cat: int(getattr(row, cat) or 0) for cat in INBOX_CATEGORIES}
 
+    # AUDIT-2026-08-W2F (F12): o mapa `unread` era ILIMITADO — toda conversa
+    # aberta com pendencia, serializada a cada 5 segundos por aba aberta. Num
+    # fim de semana sem atendimento isso e o inbox inteiro no corpo de um poll.
+    # O limite e por ATIVIDADE (as mais recentes sao as que a UI mostra e as
+    # que geram notificacao); o COUNT por categoria acima continua exato, entao
+    # o badge nao mente — so a lista auxiliar e truncada.
     unread_rows = db.query(Conversation.id, Conversation.unread_count).filter(
         Conversation.status.in_(LEGACY_OPEN_STATUSES),
         Conversation.unread_count > 0,
-    ).all()
+    ).order_by(desc(Conversation.updated_at), Conversation.id.desc()).limit(UNREAD_MAP_LIMIT).all()
     payload["unread"] = {str(cid): int(n or 0) for cid, n in unread_rows}
+
+    # AUDIT-2026-08-WA (F-337) — `unread` e `aguardando_humano` sao coisas
+    # DIFERENTES e o badge da fila precisa da segunda.
+    #
+    # `unread_count` significa "mensagens que ninguem leu" e o proprio bot o
+    # zera depois de responder; alem disso a abertura da conversa zera. Se o
+    # badge da FILA DE ESPERA fosse pintado a partir dele, bastava alguem ABRIR
+    # a conversa para a pendencia sumir da tela — sem nenhum humano ter
+    # respondido ao cliente.
+    #
+    # `aguardando_humano` e a contagem da propria categoria `fila`: a Bia
+    # terminou e nenhum humano respondeu ainda. So some quando alguem responde.
+    payload["aguardando_humano"] = payload.get("fila", 0)
     return payload
+
+
+# ─── AUDIT-2026-08-WE (M8): follow-up por inatividade ─────────────────
+# docs/audit/N8N_MANUAL_CHANGES.md § M8. O repositorio NAO tem scheduler
+# (varredura completa: zero ocorrencias de APScheduler/cron/schedule.every); o
+# unico mecanismo temporal existente (webhook.py:_schedule_agent_debounce)
+# reseta a cada ATIVIDADE, o oposto do que se precisa aqui. O disparo (a cada
+# 30 min) e o envio do texto sao do n8n (Schedule Trigger); esta rota e SO a
+# consulta — "quais conversas estao em silencio agora".
+#
+# Piso pequeno (nao zero): `horas=0` tornaria a regra 3 (nenhuma mensagem nas
+# ultimas `horas`) sempre verdadeira, inclusive para uma conversa que acabou
+# de receber o proprio follow-up — reabriria o loop de perseguicao que a
+# regra 4 fecha. 0.01h (36s) ainda permite validar manualmente sem esperar
+# 8h de verdade.
+_INATIVAS_HORAS_MIN = 0.01
+# Teto derivado de SERVICE_WINDOW (a MESMA constante de service_window_open),
+# nunca de um 24 hardcoded: acima da janela da Meta nenhuma linha pode
+# satisfazer a condicao 2 (um follow-up fora da janela exigiria template).
+_INATIVAS_HORAS_MAX = SERVICE_WINDOW / timedelta(hours=1)
+
+
+@router.get(
+    "/inativas",
+    response_model=ConversationListResponse,
+    summary="M8: conversas silenciosas ha `horas`, elegiveis para follow-up",
+)
+async def list_inactive_conversations(
+    horas: float = Query(
+        8, ge=_INATIVAS_HORAS_MIN, le=_INATIVAS_HORAS_MAX,
+        description="Silencio minimo, em qualquer direcao, desde a ultima mensagem",
+    ),
+    limite: int = Query(50, ge=1, le=200, description="Teto de linhas por chamada"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    M8 — consulta pura para o Schedule Trigger do n8n (docs/audit/
+    N8N_MANUAL_CHANGES.md § M8). O n8n dispara a cada 30 min, le esta lista e
+    manda UMA mensagem de texto por conversa via `POST /{id}/messages`; esta
+    rota nao envia nada, so decide QUEM esta elegivel agora.
+
+    Elegivel = TODAS as condicoes:
+      1. status aberto (`LEGACY_OPEN_STATUSES`);
+      2. `last_customer_msg_at` dentro da janela de 24h da Meta (`SERVICE_WINDOW`,
+         a MESMA constante de `service_window_open`) E com pelo menos `horas`
+         de silencio: `agora-24h < last_customer_msg_at <= agora-horas`. Fora
+         da janela um follow-up precisaria de template aprovado — outro
+         problema, fora do escopo desta rota;
+      3. nenhuma mensagem, em QUALQUER direcao, nas ultimas `horas` — o lado
+         cliente e a propria condicao 2 (`<= agora-horas`); o lado outbound e
+         verificado abaixo, contra `silence_cutoff`;
+      4. no maximo UMA mensagem outbound desde a ultima entrada do cliente —
+         o guard anti-perseguicao. Mandado o follow-up, ele PROPRIO passa a
+         ser a mensagem mais recente da conversa e reprova a condicao 3 no
+         proximo poll (30 min depois); quando as `horas` se completarem de
+         novo, o CASO NORMAL ja tinha uma resposta anterior (Bia ou humano)
+         antes do follow-up — que assim vira a SEGUNDA outbound e reprova esta
+         condicao 4 PARA SEMPRE, ate o cliente mandar uma entrada nova (o que
+         avanca `last_customer_msg_at` e reinicia a contagem a partir dela).
+
+    DECISAO — conversa ainda com a Bia (`is_bot_active=True`) ESTA incluida
+    (nenhum filtro extra sobre essa coluna). Este endpoint nao distingue
+    "silencio na fila humana" de "silencio no meio da triagem com a Bia": as
+    quatro condicoes acima sao as UNICAS. Motivos:
+      - e exatamente o relato original ("o cliente para de responder e fica
+        no limbo") — um cliente que parou de responder a Bia NO MEIO da
+        triagem fica tao no limbo quanto um que parou de responder na fila
+        humana; excluir a Bia deixaria esse caso sem cobertura nenhuma;
+      - com o handoff degradado da Bia (rodada anterior desta auditoria), uma
+        Bia que falha ja MOVE a conversa para a fila humana (is_bot_active
+        vira False) em vez de deixá-la presa em is_bot_active=True — entao
+        `is_bot_active=True` aqui tende a significar "triagem em andamento e
+        pausada pelo silencio do cliente", nao "travada por um erro";
+      - o texto sugerido no work package (`docs/audit/N8N_MANUAL_CHANGES.md`
+        § M8) ja foi escrito para cobrir os dois casos com a MESMA pergunta:
+        "quer que eu siga com o seu roteiro [continuar com a Bia], ou prefere
+        falar com alguem do nosso time agora? [ir para humano]".
+
+    Custo: 3 queries no maximo, independente do tamanho do inbox — (1)
+    candidatas por status+janela, (2) `selectinload` em lote das tags dessas
+    candidatas (`ConversationResponse.tags` — sem isto a serializacao faria
+    lazy-load de tags UMA conversa por vez, o N+1 que `list_conversations` ja
+    evita do mesmo jeito), (3) agregado de outbound por conversa em UMA query
+    (join + GROUP BY). Nunca uma query por linha (mesmo padrao de
+    `_preencher_atendente_nome`/`crm_service.get_leads_responsaveis`). Sem
+    candidatas, para na query (1) — (2) e (3) so disparam quando ha o que buscar.
+    """
+    now = datetime.now(timezone.utc)
+    window_floor = now - SERVICE_WINDOW            # exclusivo — condicao 2 (janela Meta)
+    silence_cutoff = now - timedelta(hours=horas)   # inclusivo — condicoes 2 e 3 (lado cliente)
+
+    # Query 1/3: candidatas por status + janela, com tags em lote
+    # (selectinload — dispara so se `candidatas` nao vier vazio). `last_customer_
+    # msg_at IS NULL` nunca casa `>`/`<=` (logica de tres valores do SQL) —
+    # conversa sem inbound nunca teve janela, mesma regra de `service_window_open`.
+    candidatas = (
+        db.query(Conversation)
+        .options(selectinload(Conversation.tags))
+        .filter(
+            Conversation.status.in_(LEGACY_OPEN_STATUSES),
+            Conversation.last_customer_msg_at > window_floor,
+            Conversation.last_customer_msg_at <= silence_cutoff,
+        )
+        .all()
+    )
+    if not candidatas:
+        return ConversationListResponse(conversations=[], total=0)
+
+    # Query 3/3: outbound POSTERIOR ao ultimo inbound, em lote — join direto
+    # (cada conversa compara contra o SEU PROPRIO last_customer_msg_at; sem
+    # subquery correlacionada por linha). Ausente do dict = zero outbound.
+    candidate_ids = [c.id for c in candidatas]
+    outbound_stats = {
+        conversation_id: (outbound_count, last_outbound_at)
+        for conversation_id, outbound_count, last_outbound_at in (
+            db.query(
+                Message.conversation_id,
+                func.count(Message.id),
+                func.max(Message.created_at),
+            )
+            .join(Conversation, Conversation.id == Message.conversation_id)
+            .filter(
+                Conversation.id.in_(candidate_ids),
+                Message.direction == "outbound",
+                Message.created_at > Conversation.last_customer_msg_at,
+            )
+            .group_by(Message.conversation_id)
+            .all()
+        )
+    }
+
+    elegiveis = []
+    for c in candidatas:
+        outbound_count, last_outbound_at = outbound_stats.get(c.id, (0, None))
+        if outbound_count > 1:
+            continue  # condicao 4 — ja foi seguido (ou mais) desde o ultimo inbound
+        if last_outbound_at is not None:
+            # normaliza (SQLite devolve naive) — mesmo padrao de service_window_open
+            if last_outbound_at.tzinfo is None:
+                last_outbound_at = last_outbound_at.replace(tzinfo=timezone.utc)
+            if last_outbound_at > silence_cutoff:
+                continue  # condicao 3 — houve outbound dentro de `horas`
+        elegiveis.append(c)
+
+    # Mais silenciosa primeiro; id como desempate deterministico (F-523 —
+    # consulta sem desempate pode duplicar/pular linha entre chamadas).
+    elegiveis.sort(key=lambda c: (c.last_customer_msg_at, c.id))
+
+    pagina = elegiveis[:limite]
+    _preencher_atendente_nome(db, pagina)
+
+    return ConversationListResponse(
+        conversations=[ConversationResponse.model_validate(c) for c in pagina],
+        total=len(elegiveis),
+    )
 
 
 @router.get("/by-lead/{lead_id}", response_model=Optional[ConversationResponse])
@@ -594,6 +963,7 @@ async def get_conversation_by_lead(
     if not conversation:
         raise HTTPException(status_code=404, detail="Nenhuma conversa encontrada para este lead")
 
+    _preencher_atendente_nome(db, [conversation])
     return ConversationResponse.model_validate(conversation)
 
 
@@ -607,39 +977,96 @@ async def list_users_for_responsavel(
     return {"users": users}
 
 
-@router.get("/{conversation_id}", response_model=ConversationDetail)
+@router.get("/{conversation_id}", response_model=ConversationDetailWithWindow)
 async def get_conversation(
     conversation_id: int,
+    opening: bool = Query(
+        # AUDIT-2026-08-W2F-orq: o default era False, e NENHUM cliente manda o
+        # parametro — nem o conversas.js, nem o n8n, nem os testes. Na pratica
+        # isso desligou o espelho de tags CRM->Conversas (CONV-TAGS-SYNC-01) e o
+        # read-repair de responsavel para todo o trafego, nao so para o polling.
+        # Uma otimizacao nao pode mudar o comportamento de quem nao optou por
+        # ela: o default preserva o contrato, e quem pode abrir mao (o poll de
+        # 5s, que e o unico custo real) manda opening=false explicitamente.
+        True,
+        description="False no POLLING de 5s; True (default) na abertura e para "
+                    "qualquer cliente que nao conheca este parametro",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get a conversation with all its messages."""
-    conversation = db.query(Conversation).filter(
+    """
+    Get a conversation with its messages.
+
+    AUDIT-2026-08-W2F (F12) — esta rota e POLLADA a cada 5s por aba aberta.
+    Antes cada poll fazia: SELECT de TODAS as mensagens ja trocadas + um SELECT
+    de `media_asset` por mensagem (N+1 lazy na serializacao) + dois read-repairs
+    no CRM + COMMIT. Tres mudancas, todas sem alterar o que a UI ve num
+    atendimento normal:
+
+    1. `selectinload` de `messages.media_asset` e `tags`: o N+1 vira 2 queries.
+    2. Historico limitado as ultimas CONVERSATION_MESSAGES_LIMIT mensagens,
+       devolvidas em ordem cronologica (a UI ja rola do fim para cima).
+    3. Read-repair do CRM (tags + responsavel) so com `opening=true`. A LISTA
+       (`GET /api/conversations`) ja refaz o repair do responsavel em lote a
+       cada refresh, entao o cache continua convergindo sozinho; repetir por
+       conversa a cada 5s era trabalho duplicado.
+    4. COMMIT so quando ha o que escrever (unread pendente ou repair sujo).
+    """
+    conversation = db.query(Conversation).options(
+        selectinload(Conversation.tags),
+    ).filter(
         Conversation.id == conversation_id
     ).first()
 
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversa nao encontrada")
 
-    # CONV-TAGS-SYNC-01: espelha as tags do lead (CRM) ao abrir a conversa
-    # (read-repair; no-op se conversa sem lead ou CRM inacessivel em dev)
-    crm_service.sync_lead_tags_to_conversation(conversation, db)
+    dirty = False
+    if opening:
+        # CONV-TAGS-SYNC-01: espelha as tags do lead (CRM) ao abrir a conversa
+        # (read-repair; no-op se conversa sem lead ou CRM inacessivel em dev)
+        crm_service.sync_lead_tags_to_conversation(conversation, db)
 
-    # CONV-HOTFIX-POSTDEPLOY-01: read-repair do responsavel a partir do lead
-    # (mesmo padrao do espelho de tags; no-op sem lead ou CRM inacessivel).
-    # Persistido pelo commit logo abaixo.
-    if conversation.lead_id and conversation.lead_id > 0:
-        responsaveis = crm_service.get_leads_responsaveis([conversation.lead_id], db)
-        if responsaveis:
-            info = responsaveis.get(conversation.lead_id)
-            if info is not None:
-                _repair_responsavel_cache(db, conversation, info)
+        # CONV-HOTFIX-POSTDEPLOY-01: read-repair do responsavel a partir do lead
+        # (mesmo padrao do espelho de tags; no-op sem lead ou CRM inacessivel).
+        if conversation.lead_id and conversation.lead_id > 0:
+            responsaveis = crm_service.get_leads_responsaveis([conversation.lead_id], db)
+            if responsaveis:
+                info = responsaveis.get(conversation.lead_id)
+                if info is not None:
+                    _repair_responsavel_cache(db, conversation, info)
+        dirty = True
 
     # Mark as read
-    conversation.unread_count = 0
-    db.commit()
+    if conversation.unread_count:
+        conversation.unread_count = 0
+        dirty = True
+    if dirty:
+        db.commit()
 
-    return ConversationDetail.model_validate(conversation)
+    # DEPOIS do commit (que expira os objetos): as ultimas N mensagens, com
+    # `media_asset` carregado em LOTE. `desc+limit` no BANCO — nao um slice em
+    # Python — e o que impede a query de crescer com o historico; a lista volta
+    # a ordem cronologica antes de virar payload. `set_committed_value` planta
+    # o resultado na relacao SEM sujar a sessao, entao a serializacao nao
+    # dispara o lazy load da colecao completa.
+    recent = db.query(Message).options(
+        selectinload(Message.media_asset),
+    ).filter(
+        Message.conversation_id == conversation.id
+    ).order_by(desc(Message.created_at), Message.id.desc()).limit(
+        CONVERSATION_MESSAGES_LIMIT
+    ).all()
+    set_committed_value(conversation, "messages", list(reversed(recent)))
+
+    _preencher_atendente_nome(db, [conversation])
+    # AUDIT-2026-08-WD (D1): `service_window_expires_at` nao e atributo do
+    # model — setado explicitamente apos a validacao (from_attributes so le o
+    # que existe em `conversation`).
+    detail = ConversationDetailWithWindow.model_validate(conversation)
+    detail.service_window_expires_at = _service_window_expires_at(conversation.last_customer_msg_at)
+    return detail
 
 
 @router.put("/{conversation_id}", response_model=ConversationResponse)
@@ -649,7 +1076,26 @@ async def update_conversation(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Update conversation status, assignee, or responsavel."""
+    """
+    Update conversation status, assignee, or responsavel.
+
+    AUDIT-2026-08-W2F (F6) — este PUT escrevia `atendente_id` e `is_bot_active`
+    DIRETO no objeto, furando `_apply_human_state`, que o proprio codigo declara
+    o "ponto UNICO que escreve o estado operacional". `queued_at` nunca era
+    tocado, violando a invariante documentada em `_apply_human_state`, e o
+    `atendente_id` nao era validado contra a tabela de usuarios (ao contrario
+    de `/assign`).
+
+    O estado resultante — dono definido E `is_bot_active=True` — nao e apenas
+    inconsistente: ele nao existe para o inbox. Casa APENAS com o predicado de
+    `bia` e com NENHUM de `meus`/`fila`/`todos`. Na pratica o atendente recebia
+    a conversa e ela sumia da caixa dele, enquanto a BIA continuava respondendo
+    o cliente. O toggle do bot da UI (static/js/conversas.js:648-651) chega aqui.
+
+    Agora os dois campos operacionais passam por `_apply_human_state`, o alvo e
+    validado como `/assign` valida, e o PUT inteiro (status + estado operacional
+    + responsavel + sync no CRM) commita UMA vez.
+    """
     conversation = db.query(Conversation).filter(
         Conversation.id == conversation_id
     ).first()
@@ -668,28 +1114,36 @@ async def update_conversation(
                 detail="Status invalido (use 'aberta' ou 'encerrada'; 'aguardando' e derivado)",
             )
         conversation.status = data.status
-    if data.atendente_id is not None:
-        conversation.atendente_id = data.atendente_id
-    if data.is_bot_active is not None:
-        conversation.is_bot_active = data.is_bot_active
-
-    # Update responsavel
-    if data.responsavel_id is not None:
-        conversation.responsavel_id = data.responsavel_id if data.responsavel_id != 0 else None
-        # Get name
-        if data.responsavel_id == 0 or data.responsavel_id is None:
-            conversation.responsavel_nome = "Agente IA"
+    # AUDIT-2026-08-WA (F-085) — o docstring acima ja prometia isto; o codigo
+    # nao fazia. `atendente_id` e `is_bot_active` eram escritos DIRETO, fora do
+    # ponto unico, e produziam estados que nao existem em nenhuma aba (por
+    # exemplo atendente definido com a BIA ligada). Agora passam por
+    # `_apply_human_state`, que mantem os quatro campos operacionais coerentes.
+    if data.atendente_id is not None or data.is_bot_active is not None:
+        if data.is_bot_active is True:
+            # Religar a BIA e a unica transicao que `_apply_human_state` nao faz
+            # (ela sempre desliga). Devolver para a BIA significa devolver a
+            # conversa inteira: sem dono, sem fila, sem atendimento humano.
+            conversation.is_bot_active = True
+            conversation.atendente_id = None
+            conversation.queued_at = None
+            conversation.primeira_resposta_humana_at = None
         else:
-            user = db.query(User).filter(User.id == data.responsavel_id).first()
-            conversation.responsavel_nome = user.nome if user else None
+            alvo = data.atendente_id if data.atendente_id is not None else conversation.atendente_id
+            if alvo is not None:
+                _require_active_user(db, alvo)
+            _apply_human_state(conversation, alvo, keep_queue_position=True)
+
+    # AUDIT-2026-08-WA (F-086/F-304/F-316) — o responsavel COMERCIAL passa pelo
+    # ponto unico, que valida o usuario e mantem o sync com o CRM na MESMA
+    # transacao. Antes: id nao validado, commit local antes do sync e booleano
+    # de retorno descartado — um sync que falhava produzia 200 mentiroso e a
+    # atribuicao "voltava sozinha" no refresh seguinte.
+    if data.responsavel_id is not None:
+        await _apply_responsavel(db, conversation, data.responsavel_id)
 
     db.commit()
     db.refresh(conversation)
-
-    # Sync responsavel to CRM
-    if data.responsavel_id is not None and conversation.lead_id and conversation.lead_id > 0:
-        real_resp_id = None if data.responsavel_id == 0 else data.responsavel_id
-        await crm_service.sync_responsavel_to_crm(conversation.lead_id, real_resp_id, db)
 
     # Send auto-reply for status changes
     from app.models.auto_reply import AutoReply
@@ -733,6 +1187,7 @@ async def update_conversation(
             # auto_text None -> resposta pulada; render_auto_reply ja registrou
             # o log estruturado (trigger, conversa, token, problema).
 
+    _preencher_atendente_nome(db, [conversation])
     return ConversationResponse.model_validate(conversation)
 
 
@@ -743,28 +1198,21 @@ async def update_responsavel(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Update conversation responsavel and sync to CRM."""
-    conversation = db.query(Conversation).filter(
-        Conversation.id == conversation_id
-    ).first()
+    """
+    Atualiza o responsavel COMERCIAL da conversa e espelha no CRM.
 
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+    AUDIT-2026-08-WA (F-086/F-304/F-316) — passou a usar `_apply_responsavel`,
+    que ate aqui era codigo morto (definido e nunca chamado). Ele valida que o
+    usuario existe e esta ativo (404 caso contrario) e mantem a escrita local e
+    o UPDATE no CRM na MESMA transacao: ou as duas valem, ou o operador recebe
+    502. Antes, um id inexistente era commitado assim mesmo e empurrado para
+    `leads.responsavel_id`, que nao tem FK.
+    """
+    conversation = _lock_conversation(db, conversation_id)
 
-    real_resp_id = None if (responsavel_id is None or responsavel_id == 0) else responsavel_id
-
-    conversation.responsavel_id = real_resp_id
-    if real_resp_id is None:
-        conversation.responsavel_nome = "Agente IA"
-    else:
-        user = db.query(User).filter(User.id == real_resp_id).first()
-        conversation.responsavel_nome = user.nome if user else None
-
+    await _apply_responsavel(db, conversation, responsavel_id)
     db.commit()
-
-    # Sync to CRM
-    if conversation.lead_id and conversation.lead_id > 0:
-        await crm_service.sync_responsavel_to_crm(conversation.lead_id, real_resp_id, db)
+    db.refresh(conversation)
 
     return {
         "message": f"Responsavel atualizado para {conversation.responsavel_nome or 'Agente IA'}",
@@ -887,6 +1335,7 @@ async def send_message(
     message = record_outbound_message(
         db, conversation, content, data.msg_type, wa_response,
         media_url=data.media_url, update_preview=True, reset_unread=True,
+        autor_user_id=current_user.id,
     )
 
     if message.status == "failed":
@@ -913,28 +1362,39 @@ async def handoff_conversation(
     `get_current_user` de todas as rotas: o n8n ja se autentica por X-API-Key.
     NAO ha mecanismo de auth novo.
 
-    A conversa e identificada por `conversation_id` — inequivoco. Nao existe
-    variante por lead: um lead pode ter mais de uma conversa e escolher "a mais
-    recente" seria heuristica silenciosa.
+    A conversa e identificada por `conversation_id`. `POST /by-lead/{lead_id}/handoff`
+    existe para quem so conhece o lead (o CRM, via ponte) e delega para esta.
+
+    AUDIT-2026-08-WA — o handoff passou a ATRIBUIR de verdade.
+
+    Antes, esta rota reaplicava `conversation.atendente_id` — que no handoff e
+    sempre NULL — entao a conversa entrava na fila sem dono e ninguem era
+    notificado. E, pior, ela nao tinha chamador nenhum: nenhum dos 18 nos do
+    workflow do Gerenciador alcanca a porta 8001. O cliente ouvia da Bia que
+    estava na fila enquanto a conversa continuava em ATENDIMENTOS BIA.
 
     Efeito (idempotente):
       - is_bot_active = False (a BIA para de ser acionada no proximo inbound)
-      - atendente_id NULL     -> queued_at = queued_at OR now()  (preserva a
-        posicao na fila em retries do n8n)
-      - atendente_id definido -> queued_at = NULL (RACE: um humano assumiu
-        antes do callback chegar; nao recolocar na fila)
+      - atendente_id NULL -> resolve um atendente elegivel (menor carga); se
+        nao houver nenhum, fica NULL e a conversa espera sem dono
+      - queued_at = queued_at OR now() — retry do n8n NAO manda a conversa
+        para o fim da fila
+      - a conversa CONTINUA na FILA DE ESPERA: atribuir nao e atender. Ela so
+        sai quando o atendente enviar a primeira mensagem.
 
     NAO escreve responsavel_id/responsavel_nome nem toca a tabela `leads`.
     """
-    conversation = db.query(Conversation).filter(
-        Conversation.id == conversation_id
-    ).first()
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+    conversation = _lock_conversation(db, conversation_id)
+
+    if conversation.atendente_id is None:
+        atendente_id = resolver_atendente_elegivel(db)
+    else:
+        # Um humano assumiu antes do callback chegar: respeitamos o dono atual.
+        atendente_id = conversation.atendente_id
 
     _apply_human_state(
         conversation,
-        conversation.atendente_id,
+        atendente_id,
         keep_queue_position=True,
     )
     db.commit()
@@ -943,7 +1403,45 @@ async def handoff_conversation(
         f"Handoff BIA->humano na conversa {conversation_id} "
         f"(atendente={conversation.atendente_id}, queued_at={conversation.queued_at})"
     )
+    _preencher_atendente_nome(db, [conversation])
     return ConversationResponse.model_validate(conversation)
+
+
+@router.post("/by-lead/{lead_id}/handoff", response_model=ConversationResponse)
+async def handoff_by_lead(
+    lead_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    AUDIT-2026-08-WA — handoff identificado pelo LEAD, nao pela conversa.
+
+    Existe porque quem dispara o handoff nao conhece `conversation_id`. O sinal
+    deterministico chega no CRM (`PUT /api/leads/{id}/responsavel`, a unica
+    ferramenta do Gerenciador que muda estado de atribuicao), e o CRM so tem o
+    `lead_id`. A ponte `app/services/conversas_bridge.py` chama esta rota.
+
+    Um lead pode ter mais de uma conversa. Escolher "a mais recente" as cegas
+    seria a heuristica silenciosa que a rota por `conversation_id` evita — por
+    isso a escolha aqui e explicita e estreita: a conversa ABERTA mais recente.
+    Conversas encerradas nunca sao reabertas por handoff; se nao houver
+    nenhuma aberta, 404 e o CRM registra que nao havia conversa a mover.
+    """
+    conversation = (
+        db.query(Conversation)
+        .filter(
+            Conversation.lead_id == lead_id,
+            Conversation.status.in_(LEGACY_OPEN_STATUSES),
+        )
+        .order_by(desc(Conversation.updated_at), Conversation.id.desc())
+        .first()
+    )
+    if not conversation:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Nenhuma conversa aberta para o lead {lead_id}",
+        )
+    return await handoff_conversation(conversation.id, db=db, current_user=current_user)
 
 
 @router.post("/{conversation_id}/claim", response_model=ConversationResponse)
@@ -953,24 +1451,27 @@ async def claim_conversation(
     current_user: User = Depends(get_current_user),
 ):
     """
-    CONV-06: assumir a conversa (tira da fila). TRAVA anti-duplo-atendimento:
-    se outro atendente ja assumiu, 409. O atendente e SEMPRE o usuario
-    autenticado (nunca vem do request).
+    CONV-06: assumir a conversa. TRAVA anti-duplo-atendimento: se outro
+    atendente ja assumiu, 409. O atendente e SEMPRE o usuario autenticado
+    (nunca vem do request).
+
+    AUDIT-2026-08-WA — assumir NAO tira mais da fila. Assumir e dizer "este
+    atendimento e meu"; a conversa so sai da FILA DE ESPERA quando o atendente
+    efetivamente responder ao cliente. A trava do 409 continua identica, agora
+    sobre a linha travada (`_lock_conversation`).
     """
-    conversation = db.query(Conversation).filter(
-        Conversation.id == conversation_id
-    ).first()
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+    conversation = _lock_conversation(db, conversation_id)
     if conversation.status not in LEGACY_OPEN_STATUSES:
         raise HTTPException(status_code=409, detail="Conversa encerrada — reabra antes de assumir")
     if conversation.atendente_id and conversation.atendente_id != current_user.id:
         raise HTTPException(status_code=409, detail="Conversa ja esta em atendimento por outro usuario")
-    # PACOTE-A: assumir tira da fila e desliga a BIA (trava 409 acima intacta).
-    _apply_human_state(conversation, current_user.id)
+    # PACOTE-A: assumir desliga a BIA (trava 409 acima intacta).
+    # AUDIT-2026-08-WA: mantem a posicao na fila — quem tira e a resposta.
+    _apply_human_state(conversation, current_user.id, keep_queue_position=True)
     db.commit()
     db.refresh(conversation)
     logger.info(f"Conversa {conversation_id} assumida pelo usuario {current_user.id}")
+    _preencher_atendente_nome(db, [conversation])
     return ConversationResponse.model_validate(conversation)
 
 
@@ -985,25 +1486,28 @@ async def assign_conversation(
     CONV-07: atribuicao dirigida/handoff — atribui a QUALQUER usuario ativo
     (diferente do claim, que atribui a si mesmo com trava). Reatribuicao e
     permitida por design (handoff entre atendentes).
+
+    AUDIT-2026-08-WA — atribuir NAO tira da fila (ver `/claim`).
     """
-    conversation = db.query(Conversation).filter(
-        Conversation.id == conversation_id
-    ).first()
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+    conversation = _lock_conversation(db, conversation_id)
     if conversation.status not in LEGACY_OPEN_STATUSES:
         raise HTTPException(status_code=409, detail="Conversa encerrada — reabra antes de atribuir")
     target = db.query(User).filter(User.id == data.user_id, User.is_active == True).first()  # noqa: E712
     if not target:
         raise HTTPException(status_code=404, detail="Usuario nao encontrado ou inativo")
-    # PACOTE-A: /assign = "este atendimento agora e seu" (nao e reserva),
-    # entao sai da fila exatamente como o claim.
-    _apply_human_state(conversation, target.id)
+    # PACOTE-A: /assign = "este atendimento agora e seu". AUDIT-2026-08-WA:
+    # continua na fila ate a primeira resposta, exatamente como o claim —
+    # inclusive na POSICAO. Sem `keep_queue_position`, reatribuir uma conversa
+    # que ainda espera carimbava um `queued_at` novo e mandava o cliente para o
+    # fim da fila: uma decisao interna da equipe (trocar de atendente) custava
+    # tempo de espera a quem nao tem nada a ver com ela.
+    _apply_human_state(conversation, target.id, keep_queue_position=True)
     db.commit()
     db.refresh(conversation)
     logger.info(
         f"Conversa {conversation_id} atribuida ao usuario {target.id} por {current_user.id} (handoff)"
     )
+    _preencher_atendente_nome(db, [conversation])
     return ConversationResponse.model_validate(conversation)
 
 
@@ -1016,19 +1520,21 @@ async def release_conversation(
     """
     CONV-06: liberar a conversa de volta para a fila (idempotente).
     Handoff dirigido (reatribuir a alguem) = CONV-07.
+
+    AUDIT-2026-08-WA — liberar tambem APAGA `primeira_resposta_humana_at`:
+    devolver a conversa a fila significa que ela volta a esperar por uma
+    primeira resposta. Sem isso ela ficaria sem dono e fora da fila, invisivel
+    em todas as abas.
     """
-    conversation = db.query(Conversation).filter(
-        Conversation.id == conversation_id
-    ).first()
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
-    if conversation.atendente_id is not None:
+    conversation = _lock_conversation(db, conversation_id)
+    if conversation.atendente_id is not None or conversation.primeira_resposta_humana_at is not None:
         # PACOTE-A: liberar = volta para o FIM da fila (queued_at novo).
         # Diferente do retry de handoff, que preserva a posicao.
-        _apply_human_state(conversation, None)
+        _apply_human_state(conversation, None, resetar_atendimento=True)
         db.commit()
         db.refresh(conversation)
         logger.info(f"Conversa {conversation_id} devolvida a fila pelo usuario {current_user.id}")
+    _preencher_atendente_nome(db, [conversation])
     return ConversationResponse.model_validate(conversation)
 
 
@@ -1081,6 +1587,7 @@ async def send_media_message_upload(
             mime_type=file.content_type or "",
             caption=caption or "",
             filename=file.filename,
+            autor_user_id=current_user.id,
         )
     except MediaRejection as e:
         raise HTTPException(status_code=e.status_code, detail=e.reason)
@@ -1111,6 +1618,19 @@ async def retry_message(
       salvo e o corpo renderizado, nao os parametros do template).
     Atualiza a MESMA linha (sem duplicar mensagem), incrementa send_attempts
     e last_attempt_at, e limpa/atualiza last_error conforme o resultado.
+
+    AUDIT-2026-08-WD (D4) — o check-then-act original (`if message.status !=
+    'failed'`) tinha uma corrida: duas requisicoes concorrentes (duplo clique,
+    duas abas) passavam AS DUAS pelo `if` e reenviavam AS DUAS — o cliente
+    recebia a mesma mensagem duplicada. `_lock_message` ja ajuda no Postgres,
+    mas o intervalo real do bug e a chamada de REDE entre a leitura do status
+    e a escrita, que uma trava de linha sozinha nao cobre (ela so serializa
+    leitura+escrita, sem rede no meio). O que fecha a corrida de fato e o
+    CLAIM logo abaixo: uma UPDATE ATOMICA condicionada a `status='failed'`,
+    commitada ANTES de qualquer chamada a Meta — so a requisicao cujo UPDATE
+    realmente casar a condicao segue adiante; a outra ve rowcount=0 e para
+    ali, sem jamais tocar a rede. Funciona identico em SQLite e Postgres (a
+    atomicidade e da propria UPDATE, nao de `FOR UPDATE`).
     """
     conversation = db.query(Conversation).filter(
         Conversation.id == conversation_id
@@ -1118,12 +1638,7 @@ async def retry_message(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversa nao encontrada")
 
-    message = db.query(Message).filter(
-        Message.id == message_id,
-        Message.conversation_id == conversation_id,
-    ).first()
-    if not message:
-        raise HTTPException(status_code=404, detail="Mensagem nao encontrada")
+    message = _lock_message(db, conversation_id, message_id)
 
     if message.direction != "outbound":
         raise HTTPException(status_code=400, detail="Apenas mensagens enviadas podem ser reenviadas")
@@ -1136,43 +1651,87 @@ async def retry_message(
     # (template ja e recusado logo abaixo, entao aqui so ha free-form.)
     _require_open_window(conversation)
 
-    if message.msg_type == "text":
-        wa_response = await whatsapp.send_text_message(conversation.whatsapp, message.content, db)
-    elif message.msg_type in ("image", "audio", "document", "video"):
-        # CONV-03: midia com espelho local (upload do operador) -> re-upload + send
-        from app.services import media_storage
-        asset = message.media_asset
-        local = media_storage.resolve_local_file(asset) if asset else None
-        if local is not None:
-            up = await whatsapp.upload_media(local.read_bytes(), asset.meta_mime_type or "application/octet-stream", db)
-            if not isinstance(up, dict) or up.get("error"):
-                wa_response = {
-                    "error": True,
-                    "summary": (up.get("summary") if isinstance(up, dict) else None)
-                    or "falha no re-upload da midia",
-                }
-            elif up.get("simulated"):
-                wa_response = {"simulated": True}
-            else:
-                asset.meta_media_id = up.get("id")
+    # AUDIT-2026-08-WD (D4): CLAIM atomico — ver docstring acima. 'retrying'
+    # e um status TRANSIENTE: o codigo abaixo SEMPRE termina em 'sent' ou
+    # 'failed' (nunca deixa a linha presa aqui, mesmo quando a Meta recusa o
+    # reenvio ou o tipo de midia nao e suportado).
+    claim = db.execute(
+        sa_update(Message)
+        .where(Message.id == message.id, Message.status == "failed")
+        .values(status="retrying")
+    )
+    if claim.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Apenas mensagens com falha podem ser reenviadas")
+    db.commit()
+
+    try:
+        if message.msg_type == "text":
+            wa_response = await whatsapp.send_text_message(conversation.whatsapp, message.content, db)
+        elif message.msg_type in ("image", "audio", "document", "video"):
+            # CONV-03: midia com espelho local (upload do operador) -> re-upload + send
+            from app.services import media_storage
+            asset = message.media_asset
+            local = media_storage.resolve_local_file(asset) if asset else None
+            if local is not None:
+                up = await whatsapp.upload_media(local.read_bytes(), asset.meta_mime_type or "application/octet-stream", db)
+                if not isinstance(up, dict) or up.get("error"):
+                    wa_response = {
+                        "error": True,
+                        "summary": (up.get("summary") if isinstance(up, dict) else None)
+                        or "falha no re-upload da midia",
+                    }
+                elif up.get("simulated"):
+                    wa_response = {"simulated": True}
+                else:
+                    asset.meta_media_id = up.get("id")
+                    wa_response = await whatsapp.send_media_message(
+                        conversation.whatsapp, message.msg_type,
+                        caption=message.content or "", db=db, media_id=up.get("id"),
+                    )
+            elif message.media_url:
                 wa_response = await whatsapp.send_media_message(
-                    conversation.whatsapp, message.msg_type,
-                    caption=message.content or "", db=db, media_id=up.get("id"),
+                    conversation.whatsapp, message.msg_type, message.media_url, message.content, db
                 )
-        elif message.media_url:
-            wa_response = await whatsapp.send_media_message(
-                conversation.whatsapp, message.msg_type, message.media_url, message.content, db
-            )
+            else:
+                raise HTTPException(status_code=400, detail="Reenvio nao suportado para este tipo de mensagem")
         else:
             raise HTTPException(status_code=400, detail="Reenvio nao suportado para este tipo de mensagem")
-    else:
-        raise HTTPException(status_code=400, detail="Reenvio nao suportado para este tipo de mensagem")
+    except Exception:
+        # AUDIT-2026-08-WD (D4): reverte o CLAIM ('retrying' -> 'failed') antes
+        # de propagar — senao a mensagem ficaria presa sem o botao de reenvio
+        # (que so aparece para status='failed') para sempre.
+        #
+        # AUDIT-2026-08-WD (revisao): era `except HTTPException`, e o comentario
+        # acima do claim promete que o bloco SEMPRE termina em 'sent' ou
+        # 'failed'. Nao terminava: `local.read_bytes()` le do disco e pode
+        # levantar OSError/FileNotFoundError (arquivo removido entre o
+        # `is_file()` do resolve e a leitura, permissao, disco cheio). Isso
+        # escapava do `except HTTPException` com a linha ja commitada como
+        # 'retrying' — e o guard da propria rota (`status != 'failed'` -> 409)
+        # tornava a mensagem PERMANENTEMENTE nao-reenviavel, sem botao e sem
+        # caminho de volta pela interface.
+        #
+        # `except Exception` com `raise` nu nao muda nada para os dois
+        # HTTPException(400) intencionais: eles continuam propagando iguais. O
+        # que muda e que qualquer outra falha tambem devolve a linha para
+        # 'failed' antes de subir.
+        message.status = "failed"
+        db.commit()
+        raise
 
     r = classify_wa_response(wa_response)
     message.send_attempts = (message.send_attempts or 0) + 1
     message.last_attempt_at = datetime.now(timezone.utc)
 
     if r["ok"]:
+        # AUDIT-2026-08-WA — o reenvio bem-sucedido de uma mensagem do operador
+        # tambem e a primeira resposta humana: o cliente recebeu o texto que
+        # um humano escreveu. Sem isto, uma conversa cuja unica resposta falhou
+        # e foi reenviada ficaria presa na FILA DE ESPERA para sempre.
+        from app.services.atendimento import marcar_atendimento_humano
+
+        marcar_atendimento_humano(conversation, current_user.id)
         message.status = "sent"
         message.whatsapp_msg_id = r["wamid"]
         message.last_error = None
@@ -1182,6 +1741,10 @@ async def retry_message(
         logger.info(f"Reenvio OK da mensagem {message.id} (conversa {conversation.id})")
         return MessageResponse.model_validate(message)
 
+    # AUDIT-2026-08-WD (D4): Meta recusou o reenvio -> volta para 'failed'
+    # explicitamente (o CLAIM acima ja tirou a linha de 'failed'; sem isto ela
+    # ficaria presa em 'retrying' e o botao de reenvio nunca mais apareceria).
+    message.status = "failed"
     message.last_error = r["error_summary"]
     db.commit()
     logger.warning(

@@ -26,6 +26,11 @@ last_review: "2026-07-08"
 
 ## Uso do nome do cliente
 
+- Falar com o cliente usando SÓ o primeiro nome (ex.: "Roberto Silva" →
+  chamar de "Roberto"), nunca o nome completo/sobrenome. O nome completo só
+  existe no campo `nome` do CRM (ver
+  `08_operacao_agente/campos_obrigatorios_crm.md`) — é dado de cadastro, não
+  de conversa.
 - No máximo **1 vez a cada 10 mensagens**; nunca em mensagens consecutivas.
 - Na maioria das respostas, NÃO usar o nome.
 - Variações sem nome: "boa!", "anotado!", "show!", "tranquilo!".

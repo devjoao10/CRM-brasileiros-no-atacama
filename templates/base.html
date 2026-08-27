@@ -27,11 +27,11 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
-    <link rel="stylesheet" href="/static/css/variables.css?v=2">
-    <link rel="stylesheet" href="/static/css/base.css?v=2">
-    <link rel="stylesheet" href="/static/css/components.css?v=2">
-    <link rel="stylesheet" href="/static/css/layout.css?v=1">
-    <link rel="icon" href="/static/img/logo.png" type="image/png">
+    <link rel="stylesheet" href="/static/css/variables.css?v={{ asset_version }}">
+    <link rel="stylesheet" href="/static/css/base.css?v={{ asset_version }}">
+    <link rel="stylesheet" href="/static/css/components.css?v={{ asset_version }}">
+    <link rel="stylesheet" href="/static/css/layout.css?v={{ asset_version }}">
+    <link rel="icon" href="/static/img/logo.png?v={{ asset_version }}" type="image/png">
 
     {% block extra_head %}{% endblock %}
     {% block extra_css %}{% endblock %}
@@ -54,9 +54,9 @@
     </div>
 
     <!-- Auth module first, then shared layout behavior, then page scripts -->
-    <script src="/static/js/auth.js"></script>
-    <script src="/static/js/layout.js"></script>
-    <script src="/static/js/notifications.js"></script>
+    <script src="/static/js/auth.js?v={{ asset_version }}"></script>
+    <script src="/static/js/layout.js?v={{ asset_version }}"></script>
+    <script src="/static/js/notifications.js?v={{ asset_version }}"></script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

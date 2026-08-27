@@ -115,13 +115,39 @@ async def apply_tag(
 ):
     """Aplica a tag (idempotente — aplicar 2x nao duplica)."""
     conv, tag = _get_conv_and_tag(conversation_id, tag_id, db)
+    # AUDIT-2026-08-WF2 (CONV-TAGS-SYNC-01): mesmo raciocinio de remove_tag
+    # (AUDIT-2026-08-WC/WD) — sync_lead_tags_to_conversation espelha o
+    # conjunto de tags do CRM a cada abertura da conversa. Aplicar so
+    # localmente e nao propagar para o CRM faz a tag sumir sozinha na proxima
+    # abertura, sem aviso nenhum. Por isso a sincronizacao roda ANTES do
+    # commit local (reordenado como remove_tag): se falhar com o CRM
+    # alcancavel, a aplicacao e recusada em vez de aplicar e deixar a tag
+    # desaparecer sozinha depois. Se o CRM estiver inacessivel, a aplicacao
+    # local segue — o espelho tambem nao roda nesse estado, entao nada some
+    # sozinho (mesma excecao que remove_tag ja faz: recusar aqui quebraria o
+    # inbox por um risco que nao existe, como aconteceu em dev isolado).
+    if conv.lead_id and conv.lead_id > 0:
+        aplicada_no_crm = crm_service.add_tag_to_lead(conv.lead_id, tag.nome, tag.cor, db)
+        if not aplicada_no_crm and crm_service.get_lead_tags(conv.lead_id, db) is not None:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Não foi possível aplicar a tag no CRM. A aplicação foi "
+                    "cancelada para evitar que a tag desaparecesse sozinha ao "
+                    "reabrir a conversa."
+                ),
+            )
+        if not aplicada_no_crm:
+            logger.warning(
+                "Tag %r aplicada so no Conversas: o CRM esta inacessivel "
+                "(conversa %s, lead %s). O espelho tambem nao roda nesse "
+                "estado, entao a tag nao some sozinha — mas o CRM segue sem "
+                "ela ate a proxima sincronizacao.",
+                tag.nome, conv.id, conv.lead_id,
+            )
     if tag not in conv.tags:
         conv.tags.append(tag)
         db.commit()
-    # CONV-TAGS-SYNC-01: conversa vinculada replica no lead do CRM
-    # (cria a tag por NOME no CRM se faltar; falha em dev isolado so loga)
-    if conv.lead_id and conv.lead_id > 0:
-        crm_service.add_tag_to_lead(conv.lead_id, tag.nome, tag.cor, db)
     return conv.tags
 
 
@@ -133,10 +159,42 @@ async def remove_tag(
     current_user: User = Depends(get_current_user),
 ):
     conv, tag = _get_conv_and_tag(conversation_id, tag_id, db)
+    # AUDIT-2026-08-WC (F-529): o CRM e sincronizado ANTES do commit local, e
+    # nao depois. Antes disto o commit local acontecia primeiro e o resultado
+    # de crm_service.remove_tag_from_lead era descartado (a funcao ja fazia o
+    # DELETE e o commit de verdade — so o retorno True/False era ignorado
+    # aqui). Se essa chamada falhasse, a tag reaparecia sozinha na proxima
+    # abertura da conversa, porque sync_lead_tags_to_conversation espelha o
+    # conjunto de tags do lead a cada abertura (fonte de verdade = CRM).
+    # Sincronizando primeiro e falhando a request se nao der certo, a remocao
+    # local so acontece quando ela vai sobreviver ao proximo reabrir.
+    #
+    # AUDIT-2026-08-WD — a recusa vale SO quando o espelho pode ressuscitar a
+    # tag. `sync_lead_tags_to_conversation` desiste sem tocar nas tags locais
+    # quando o CRM esta inacessivel (`get_lead_tags` devolve None) — nesse caso
+    # a remocao local NAO reaparece, e recusar seria quebrar o inbox por um
+    # risco que nao existe ali (foi o que aconteceu em dev isolado, onde as
+    # tabelas do CRM nem existem). A sonda extra so roda no caminho de falha.
+    if conv.lead_id and conv.lead_id > 0:
+        removida_no_crm = crm_service.remove_tag_from_lead(conv.lead_id, tag.nome, db)
+        if not removida_no_crm and crm_service.get_lead_tags(conv.lead_id, db) is not None:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Não foi possível remover a tag no CRM. A remoção foi "
+                    "cancelada para evitar que a tag reaparecesse sozinha ao "
+                    "reabrir a conversa."
+                ),
+            )
+        if not removida_no_crm:
+            logger.warning(
+                "Tag %r removida so no Conversas: o CRM esta inacessivel "
+                "(conversa %s, lead %s). O espelho tambem nao roda nesse "
+                "estado, entao a tag nao volta sozinha — mas o CRM segue com "
+                "ela ate a proxima sincronizacao.",
+                tag.nome, conv.id, conv.lead_id,
+            )
     if tag in conv.tags:
         conv.tags.remove(tag)
         db.commit()
-    # CONV-TAGS-SYNC-01: conversa vinculada remove tambem do lead do CRM
-    if conv.lead_id and conv.lead_id > 0:
-        crm_service.remove_tag_from_lead(conv.lead_id, tag.nome, db)
     return conv.tags

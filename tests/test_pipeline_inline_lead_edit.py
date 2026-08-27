@@ -203,7 +203,7 @@ def _roda(corpo, valores=None, respostas=None, extras=""):
     script = _HARNESS % (json.dumps(v), json.dumps(r),
                          "\n".join(_fn(f, PARTIAL) for f in _DO_PARTIAL) + extras,
                          corpo)
-    p = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    p = subprocess.run([node, "-e", script], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert p.returncode == 0, f"node falhou: {p.stderr.strip()[:400]}"
     return json.loads(p.stdout)
 
@@ -421,21 +421,66 @@ def test_pipeline_nao_ganhou_endpoint_novo():
     assert rotas(fonte) == rotas(base.stdout), "pipeline.py ganhou/perdeu rota"
 
 
-def test_nenhum_py_de_aplicacao_alterado():
-    """Este WP e frontend-only: nao pode mexer no backend de pipeline/leads.
+def _campos_do_schema(fonte, classes):
+    """Nomes dos campos anotados de cada classe pedida, via AST."""
+    import ast as _ast
+    arvore = _ast.parse(fonte)
+    achados = {}
+    for no in arvore.body:
+        if isinstance(no, _ast.ClassDef) and no.name in classes:
+            achados[no.name] = {
+                c.target.id for c in no.body
+                if isinstance(c, _ast.AnnAssign) and isinstance(c.target, _ast.Name)
+            }
+    return achados
 
-    O escopo original era `app/` inteiro, o que congelava o backend do projeto
-    todo e reprovava qualquer trabalho nao relacionado (ex.: AUTH-LOOP-01, que
-    altera app/auth.py e os routers de paginas). Passa a guardar exatamente a
-    superficie que este WP toca.
+
+def test_contrato_do_backend_que_o_editor_usa_nao_mudou():
+    """O editor inline depende de um CONTRATO; e ele que este teste protege.
+
+    Historia deste teste, que importa para nao repetir o erro: ele nasceu
+    exigindo que `app/` inteiro fosse identico a origin/main, foi estreitado
+    para quatro arquivos quando reprovou o AUTH-LOOP-01, e na auditoria global
+    de 2026-08 reprovou de novo — desta vez a guarda de NUL em
+    app/schemas/lead.py, que corrige um 500 na listagem de leads inteira.
+
+    "Nenhum byte pode mudar" nao e uma afirmacao sobre comportamento: e um
+    congelamento que, a cada correcao legitima, cobra a escolha entre o verde e
+    o conserto. Por isso a assercao passou a ser sobre o que o editor realmente
+    consome:
+
+      * as ROTAS de leads.py (o editor faz PUT /api/leads/{id});
+      * o conjunto de CAMPOS de LeadBase/LeadUpdate (o editor monta o corpo
+        a partir deles).
+
+    Adicionar validacao passa. Remover/renomear campo ou rota — o que quebra o
+    editor de fato — reprova.
     """
-    alvos = ["app/routers/pipeline.py", "app/routers/leads.py",
-             "app/schemas/lead.py", "app/models/lead.py"]
-    r = subprocess.run(["git", "diff", "--name-only", "origin/main", "--", *alvos],
-                       capture_output=True, text=True, encoding="utf-8")
-    if r.returncode != 0:
-        return
-    assert not r.stdout.strip(), f"backend de pipeline/leads alterado: {r.stdout.strip()}"
+    def _do_git(caminho):
+        r = subprocess.run(["git", "show", f"origin/main:{caminho}"],
+                           capture_output=True, text=True, encoding="utf-8")
+        return r.stdout if r.returncode == 0 else None
+
+    base_leads = _do_git("app/routers/leads.py")
+    base_schema = _do_git("app/schemas/lead.py")
+    if base_leads is None or base_schema is None:
+        return  # sem origin/main (clone raso): nada a comparar
+
+    rotas = lambda t: set(re.findall(r'@router\.(get|post|put|delete)\("([^"]*)"', t))
+    atual_leads = pathlib.Path("app/routers/leads.py").read_text(encoding="utf-8")
+    assert rotas(atual_leads) == rotas(base_leads), (
+        "leads.py ganhou/perdeu rota — o editor inline fala com estas rotas")
+
+    atual_schema = pathlib.Path("app/schemas/lead.py").read_text(encoding="utf-8")
+    alvo = {"LeadBase", "LeadUpdate"}
+    antes = _campos_do_schema(base_schema, alvo)
+    agora = _campos_do_schema(atual_schema, alvo)
+    assert set(antes) == set(alvo), f"origin/main nao tem {alvo - set(antes)}"
+    for classe in sorted(alvo):
+        assert agora.get(classe) == antes[classe], (
+            f"{classe}: conjunto de campos mudou. "
+            f"removidos={sorted(antes[classe] - agora.get(classe, set()))} "
+            f"novos={sorted(agora.get(classe, set()) - antes[classe])}")
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -523,8 +568,22 @@ def test_card_remontado_escapa_dado_do_lead():
     atualiza = _fn("atualizarCardDoLead", _js(PIPE))
     assert "renderLeadCard(card)" in atualiza, (
         "montar HTML do card a mao contornaria o escape existente")
-    assert "lead.nome" not in atualiza.split("Object.assign", 1)[1].split("}", 1)[0] \
-        or "esc(" not in atualiza or True
+    # AUDIT-2026-08-W2H: aqui havia uma assercao terminada em `or True`. Um
+    # `or True` faz a expressao inteira valer True independentemente de tudo que
+    # vem antes — a linha PARECIA verificar XSS e nao verificava nada. E o pior
+    # tipo de teste: o que reporta verde sobre codigo que ninguem checou.
+    #
+    # O que ela tentava dizer e que atualizarCardDoLead nao pode montar markup
+    # por conta propria, porque isso contornaria o esc() de renderLeadCard. Isso
+    # da para afirmar de verdade: toda escrita de HTML na funcao tem que ser o
+    # retorno de renderLeadCard, nunca um template literal com dado do lead.
+    escritas = re.findall(r"[.](?:outerHTML|innerHTML)\s*=\s*([^;\n]+)", atualiza)
+    assert escritas, "a funcao precisa reescrever o card, senao a edicao nao aparece"
+    for expr in escritas:
+        assert "renderLeadCard(" in expr, (
+            f"HTML montado fora de renderLeadCard contorna o escape: {expr.strip()}")
+        assert "`" not in expr, (
+            f"template literal escrevendo HTML direto no card: {expr.strip()}")
 
 
 def test_drawer_escapa_email_e_whatsapp():

@@ -18,6 +18,11 @@ Antes de enviar `pronto_para_humano = "true"`, conferir os 4 obrigatórios:
 nome completo, destino(s), nº de viajantes adultos, email. Faltou → pedir o
 que falta, NÃO enviar.
 
+> **Canal da cotação:** a proposta/roteiro é SEMPRE entregue aqui no
+> WhatsApp, nunca por e-mail. O e-mail coletado serve só de cadastro no CRM
+> (contato de referência da equipe humana) — ver
+> `08_operacao_agente/campos_obrigatorios_crm.md`.
+
 ## Regra do handoff ÚNICO
 
 1. `pronto_para_humano = "true"` é enviado **UMA ÚNICA VEZ por conversa**.

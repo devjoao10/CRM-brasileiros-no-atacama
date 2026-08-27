@@ -18,7 +18,7 @@
             border: none;
             padding: var(--space-3) var(--space-2);
             font-size: var(--font-size-base);
-            font-weight: var(--font-weight-semibold);
+            font-weight: var(--fw-semibold);
             color: var(--color-dark-500);
             cursor: pointer;
             position: relative;
@@ -82,8 +82,8 @@
 
         .data-table th {
             padding: var(--space-4) var(--space-6);
-            background: var(--color-dark-50);
-            font-weight: var(--font-weight-semibold);
+            background: var(--color-dark-100);
+            font-weight: var(--fw-semibold);
             font-size: var(--font-size-xs);
             text-transform: uppercase;
             color: var(--color-dark-500);
@@ -100,7 +100,7 @@
         }
 
         .data-table tr:hover td {
-            background: var(--color-dark-50);
+            background: var(--color-dark-100);
         }
 
         .actions-cell button {
@@ -135,7 +135,7 @@
 
         .status-inactive {
             background: rgba(229, 62, 62, 0.1);
-            color: var(--color-danger);
+            color: var(--color-error);
         }
 
         .email-badge {
@@ -200,7 +200,7 @@
 
         .team-name {
             font-size: var(--font-size-lg);
-            font-weight: var(--font-weight-bold);
+            font-weight: var(--fw-bold);
             color: var(--color-dark);
         }
 
@@ -276,7 +276,7 @@
             border-radius: var(--radius-2xl);
             width: 92%;
             max-width: 500px;
-            box-shadow: var(--shadow-xl);
+            box-shadow: var(--shadow-lg);
             animation: modalSlideIn .3s ease;
         }
 
@@ -302,7 +302,7 @@
 
         .modal-header h3 {
             font-size: var(--font-size-xl);
-            font-weight: var(--font-weight-bold);
+            font-weight: var(--fw-bold);
         }
 
         .modal-close {
@@ -363,7 +363,7 @@
         }
 
         .user-check-item:hover {
-            background: var(--color-dark-50);
+            background: var(--color-dark-100);
         }
 
         .user-check-item input {
@@ -576,30 +576,46 @@
         }
 
         async function loadAllData() {
+            loadError = null;
             await Promise.all([fetchUsers(), fetchTeams()]);
             renderUsers();
             renderTeams();
         }
 
         // ======= API CALLS =======
+        // AUDIT-2026-08-W2A (F11): `if (resp)` deixava passar 403/500 — o corpo do
+        // erro nao tem `.users`/`.teams`, entao a lista virava [] e a tela dizia
+        // "Nenhum usuario cadastrado", indistinguivel de falha do servidor. O flag
+        // registra o que quebrou para render* pintar erro com botao de repetir,
+        // em vez de vazio. Padrao de segmentacao.html:362-365.
+        let loadError = null;
+
         async function fetchUsers() {
             const resp = await Auth.apiRequest('/api/users?limit=200');
-            if (resp) {
-                const data = await resp.json();
-                allUsers = data.users || [];
+            if (!resp || !resp.ok) {
+                if (resp) loadError = resp.status;
+                return;
             }
+            const data = await resp.json();
+            allUsers = data.users || [];
         }
         async function fetchTeams() {
             const resp = await Auth.apiRequest('/api/teams');
-            if (resp) {
-                const data = await resp.json();
-                allTeams = data.teams || [];
+            if (!resp || !resp.ok) {
+                if (resp) loadError = resp.status;
+                return;
             }
+            const data = await resp.json();
+            allTeams = data.teams || [];
         }
 
         // ======= RENDER USUARIOS =======
         function renderUsers() {
             const tbody = document.getElementById('usersTableBody');
+            if (loadError) {
+                tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state">Erro ao carregar os dados (${loadError}). <button class="btn btn-primary" onclick="loadAllData()">Tentar de novo</button></div></td></tr>`;
+                return;
+            }
             if (!allUsers.length) {
                 tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state">Nenhum usuário cadastrado.</div></td></tr>';
                 return;
@@ -674,28 +690,50 @@
             const method = id ? 'PUT' : 'POST';
             const url = id ? `/api/users/${id}` : '/api/users';
 
-            const resp = await Auth.apiRequest(url, { method, body: JSON.stringify(payload) });
-            if (!resp) return;
-            if (resp.ok) {
-                closeUserModal();
-                loadAllData();
-            } else {
-                const err = await resp.json();
-                showAlert('userAlert', err.detail || 'Erro ao salvar o usuário');
+            // AUDIT-2026-08-W2A (F10): sem desabilitar o botao, dois cliques rapidos
+            // disparavam dois POST e criavam usuario duplicado. `finally` reabilita
+            // ate se o fetch estourar — senao o modal ficava travado. Mesmo padrao de
+            // tarefas.html:550-556.
+            const btn = document.querySelector('#userModal .btn-primary');
+            const rotulo = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Salvando...';
+            try {
+                const resp = await Auth.apiRequest(url, { method, body: JSON.stringify(payload) });
+                if (!resp) return;
+                if (resp.ok) {
+                    closeUserModal();
+                    loadAllData();
+                } else {
+                    const err = await resp.json();
+                    showAlert('userAlert', err.detail || 'Erro ao salvar o usuário');
+                }
+            } finally {
+                btn.disabled = false;
+                btn.textContent = rotulo;
             }
         }
 
 
         // ======= RENDER EQUIPES =======
         function buildColorPicker() {
-            document.getElementById('teamColorPicker').innerHTML = COLORS.map(c =>
-                `<div class="color-dot${c === selColor ? ' sel' : ''}" style="background:${c}" onclick="pickColor('${c}')"></div>`
+            const picker = document.getElementById('teamColorPicker');
+            picker.innerHTML = COLORS.map(c =>
+                `<div class="color-dot${c === selColor ? ' sel' : ''}" style="background:${c}" data-color="${c}"></div>`
             ).join('');
+            // AUDIT-2026-08-W2A: nenhum dado volta a ser literal de string JS dentro
+            // de um on* — mesmo constante do proprio arquivo, a regra vale para todos.
+            picker.querySelectorAll('.color-dot').forEach(d =>
+                d.addEventListener('click', () => pickColor(d.dataset.color)));
         }
         function pickColor(c) { selColor = c; buildColorPicker(); }
 
         function renderTeams() {
             const grid = document.getElementById('teamsGrid');
+            if (loadError) {
+                grid.innerHTML = `<div class="empty-state" style="grid-column: 1/-1">Erro ao carregar as equipes (${loadError}). <button class="btn btn-primary" onclick="loadAllData()">Tentar de novo</button></div>`;
+                return;
+            }
             if (!allTeams.length) {
                 grid.innerHTML = '<div class="empty-state" style="grid-column: 1/-1">Nenhuma equipe criada. Mapeie seus departamentos!</div>';
                 return;
@@ -707,7 +745,11 @@
                     ? members.map(m => `<div class="team-member-item"><div class="member-avatar">${m.nome.charAt(0).toUpperCase()}</div> <span>${esc(m.nome)}</span></div>`).join('')
                     : '<span style="color:var(--color-dark-300);font-size:12px;">Nenhum usuário assinalado.</span>';
 
-                return `<div class="team-card" style="border-left-color: ${t.cor}">
+                // AUDIT-2026-08-W2A (F5): `cor` ia crua aqui enquanto a MESMA coluna
+                // passa por esc() no team-pill quatro linhas acima. Capada em 7 chars
+                // no servidor, entao nao da break-out, mas um valor malformado
+                // corrompe o atributo. Coerencia custa uma chamada.
+                return `<div class="team-card" style="border-left-color: ${esc(t.cor)}">
                     <div class="team-header">
                         <div>
                             <div class="team-name">${esc(t.nome)}</div>
@@ -715,7 +757,7 @@
                         </div>
                         <div class="actions-cell">
                             <button onclick="editTeam(${t.id})" title="Editar">Editar</button>
-                            <button onclick="deleteTeam(${t.id}, '${esc(t.nome)}')" title="Excluir">Excluir</button>
+                            <button onclick="deleteTeam(${t.id})" title="Excluir">Excluir</button>
                         </div>
                     </div>
                     <div class="team-body">
@@ -776,36 +818,68 @@
             const method = id ? 'PUT' : 'POST';
             const url = id ? `/api/teams/${id}` : '/api/teams';
 
-            const resp = await Auth.apiRequest(url, { method, body: JSON.stringify(payload) });
-            if (!resp) return;
+            // AUDIT-2026-08-W2A (F10): mesma protecao de duplo clique do saveUser.
+            const btn = document.querySelector('#teamModal .btn-primary');
+            const rotulo = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Salvando...';
+            try {
+                const resp = await Auth.apiRequest(url, { method, body: JSON.stringify(payload) });
+                if (!resp) return;
 
-            if (resp.ok) {
-                const team = await resp.json();
+                if (resp.ok) {
+                    const team = await resp.json();
 
-                // Save Members
-                const selectedUsers = Array.from(document.querySelectorAll('.team-user-cb:checked')).map(cb => parseInt(cb.value));
-                await Auth.apiRequest(`/api/teams/${team.id}/members`, {
-                    method: 'POST', body: JSON.stringify(selectedUsers)
-                });
+                    // Save Members
+                    const selectedUsers = Array.from(document.querySelectorAll('.team-user-cb:checked')).map(cb => parseInt(cb.value));
+                    const respMembros = await Auth.apiRequest(`/api/teams/${team.id}/members`, {
+                        method: 'POST', body: JSON.stringify(selectedUsers)
+                    });
+                    // AUDIT-2026-08-W2A (F10): este POST era disparado sem olhar a
+                    // resposta. Se a gravacao dos membros falhava, o modal fechava
+                    // anunciando sucesso e a equipe ficava sem ninguem dentro — o
+                    // admin so descobria depois. Agora o modal fica aberto com o erro.
+                    if (!respMembros) return;
+                    if (!respMembros.ok) {
+                        const errM = await respMembros.json();
+                        showAlert('teamAlert', errM.detail || 'A equipe foi salva, mas os membros não puderam ser gravados.');
+                        loadAllData();
+                        return;
+                    }
 
-                closeTeamModal();
-                loadAllData();
-            } else {
-                const err = await resp.json();
-                showAlert('teamAlert', err.detail || 'Erro ao salvar a equipe');
+                    closeTeamModal();
+                    loadAllData();
+                } else {
+                    const err = await resp.json();
+                    showAlert('teamAlert', err.detail || 'Erro ao salvar a equipe');
+                }
+            } finally {
+                btn.disabled = false;
+                btn.textContent = rotulo;
             }
         }
 
-        async function deleteTeam(id, nome) {
+        // AUDIT-2026-08-W2A (F3): o nome vinha interpolado no proprio onclick como
+        // literal de string JS. O parser HTML decodifica `&#39;` de volta para
+        // apostrofe ANTES do JS compilar, entao o esc() nao protegia: uma equipe
+        // chamada `x');alert(1);//` executava — e esta pagina e do admin, o alvo de
+        // maior privilegio. So o id (numero) atravessa o atributo; o nome sai de
+        // allTeams, ja carregado.
+        async function deleteTeam(id) {
+            const team = allTeams.find(t => t.id === id);
+            const nome = team ? team.nome : '';
             if (!confirm(`Deseja realmente deletar a equipe "${nome}"?\nOs usuários dentro dela NÃO serão removidos do sistema.`)) return;
             const resp = await Auth.apiRequest(`/api/teams/${id}`, { method: 'DELETE' });
             if (resp && resp.ok) loadAllData();
         }
 
         // Helpers
+        // AUDIT-2026-08-W2A (F6): `msg` e o `detail` que volta do servidor e ia por
+        // innerHTML. Todas as paginas irmas usam textContent para o mesmo campo
+        // (tags.html, tarefas.html, segmentacao.html, gestao/pendencias.html).
         function showAlert(id, msg) {
             const div = document.getElementById(id);
-            div.innerHTML = `<span>Erro:</span> <span>${msg}</span>`;
+            div.textContent = `Erro: ${msg}`;
             div.classList.remove('hidden');
         }
         function esc(str) {

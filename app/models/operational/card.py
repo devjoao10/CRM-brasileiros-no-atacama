@@ -1,4 +1,6 @@
-from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, JSON
+from sqlalchemy import (
+    Column, Integer, String, Text, Boolean, DateTime, ForeignKey, JSON, Index,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -67,6 +69,14 @@ class OperationalCardAssignee(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    # AUDIT-2026-08-W2E (F3) — a duplicidade so era barrada em Python
+    # (operational_card_service.py:120-125). Duplicata gera notificacao dobrada
+    # para sempre e e IRREMOVIVEL pela API: `remove_assignee` apaga uma linha
+    # so, entao a segunda sobrevive a cada tentativa de desatribuir.
+    __table_args__ = (
+        Index("uq_operational_card_assignees_card_user", "card_id", "user_id", unique=True),
+    )
+
     # Relationships
     card = relationship("OperationalCard", back_populates="assignee_links")
     user = relationship("User", foreign_keys=[user_id])
@@ -112,6 +122,15 @@ class OperationalCardFieldValue(Base):
     value_boolean = Column(Boolean, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # AUDIT-2026-08-W2E (F4) — o service faz read-modify-write via `.first()`
+    # (operational_card_service.py:219-224). Sem UNIQUE, duas escritas
+    # concorrentes no mesmo campo criam DUAS linhas de valor e o detalhe do card
+    # passa a alternar entre elas conforme o `.first()` sem ORDER BY resolver.
+    __table_args__ = (
+        Index("uq_operational_card_field_values_card_definition",
+              "card_id", "definition_id", unique=True),
+    )
 
     # Relationships
     card = relationship("OperationalCard", back_populates="field_values")

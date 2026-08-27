@@ -1,0 +1,59 @@
+==============================================================================
+WF-01 Agente Bia
+==============================================================================
+  nodes: antes=7  agora=14
+  REMOVIDOS (0):
+  ADICIONADOS (7):
+     + Code in JavaScript  [code] 
+     + Fallback — erro Bia  [set] 
+     + Ignorar mensagem  [respondToWebhook] 
+     + Precisa responder?  [if] 
+     + Saída segura?  [if] 
+     + Validar saída da Bia  [code] 
+     + consultar_contexto_bna  [toolWorkflow] 
+  ALTERADOS:
+     ~ Agente Bia: onError: None -> 'continueErrorOutput'  systemMessage 20470->28697 chars  
+     ~ Gemini 2.5 Flash: model: None -> 'models/gemini-3.5-flash-lite'  
+
+==============================================================================
+Agente Gerenciador de Leads
+==============================================================================
+  nodes: antes=18  agora=18
+  REMOVIDOS (0):
+  ADICIONADOS (0):
+  ALTERADOS:
+     ~ Agente Gerenciador de Leads: systemMessage 1524->2231 chars  
+     ~ Gemini 2.5 Flash: model: None -> 'models/gemini-3.5-flash-lite'  
+
+==============================================================================
+Formulario do Site
+==============================================================================
+  SEM SNAPSHOT ANTERIOR — workflow nunca foi auditado
+  nodes agora: 16
+     Receber Formulário do Site: GET /webhook/formulario-site
+     Buscar lead pelo WhatsApp: GET ={{ 'http://crm:8000/api/leads/by-whatsapp/' + encodeURIComponent($json.whatsapp) }}
+     Atualizar lead existente: PUT ={{ 'http://crm:8000/api/leads/' + $('Buscar lead pelo WhatsApp').first().json.body.id }}
+     Criar novo lead: POST http://crm:8000/api/leads
+     Adicionar ao funil Vendas Formulário: POST http://crm:8000/api/pipeline/funnels/3/leads
+     Adicionar anotação ao lead: PUT ={{ 'http://crm:8000/api/leads/' + $('Preparar contexto do lead').first().json.lead_id + '/anotacoes' }}
+
+==============================================================================
+RASTREIO DO NOTIFICADOR NOS EXPORTS ATUAIS
+==============================================================================
+  Agente Gerenciador de Leads — BnA
+    node        : Tool Acionar Notificador
+    type        : @n8n/n8n-nodes-langchain.toolHttpRequest
+    method+url  : POST http://n8n:5678/webhook/notificacao
+    auth        : NENHUMA
+    credenciais : NENHUMA
+    ligado como : ['ai_tool']
+                  ai_tool -> Agente Gerenciador de Leads
+  WF-01 Agente Bia
+    node        : Agente Bia
+    type        : @n8n/n8n-nodes-langchain.agent
+    method+url  : GET None
+    auth        : NENHUMA
+    credenciais : NENHUMA
+    ligado como : ['main']
+                  main -> Validar saída da Bia
+                  main -> Fallback — erro Bia

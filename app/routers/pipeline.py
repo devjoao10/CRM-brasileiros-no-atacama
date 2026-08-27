@@ -3,10 +3,11 @@ from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy import func, or_, tuple_, String
+from sqlalchemy import func, or_, tuple_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.database import get_db, IS_SQLITE
+from app.database import get_db
 from app.models.pipeline import Funnel, FunnelEntry, LeadHistory
 from app.models.lead import Lead
 from app.models.tag import lead_tags
@@ -20,6 +21,7 @@ from app.schemas.pipeline import (
 )
 from app.schemas.tag import TagResponse
 from app.auth import get_current_user, require_admin
+from app.query_filters import destino_match
 
 router = APIRouter(prefix="/api/pipeline", tags=["Pipeline"])
 
@@ -182,6 +184,48 @@ def update_funnel(
         stage_ids = [s["id"] if isinstance(s, dict) else s.id for s in update_data["etapas"]]
         if len(stage_ids) != len(set(stage_ids)):
             raise HTTPException(status_code=400, detail="IDs de etapas devem ser únicos")
+
+        # AUDIT-2026-08-WC (F-246) — trocar a lista de etapas ORFANAVA leads.
+        #
+        # `etapas` e uma coluna JSON e era substituida inteira, sem olhar para
+        # `funnel_entries.etapa_id`, que aponta para essas mesmas strings sem
+        # nenhuma FK por tras. Remover ou renomear uma etapa deixava todo lead
+        # que estava nela com um `etapa_id` que nao existe mais — e o board so
+        # renderiza entries cujo `etapa_id` esta em `funnel.etapas`
+        # (`get_kanban`). Os leads nao eram apagados: ficavam INVISIVEIS, sem
+        # erro, sem aviso e sem caminho de volta pela interface.
+        #
+        # Recusar e melhor que migrar em silencio: para onde mover um lead que
+        # estava em "Proposta enviada" quando essa etapa deixa de existir e uma
+        # decisao de negocio, e adivinha-la aqui perderia informacao sem que
+        # ninguem ficasse sabendo. O 409 nomeia as etapas e quantos leads ha em
+        # cada uma, para o admin mover antes.
+        etapas_removidas = {
+            e["id"] for e in (funnel.etapas or [])
+            if isinstance(e, dict) and e.get("id") not in set(stage_ids)
+        }
+        if etapas_removidas:
+            ocupadas = (
+                db.query(FunnelEntry.etapa_id, func.count(FunnelEntry.id))
+                .filter(
+                    FunnelEntry.funnel_id == funnel_id,
+                    FunnelEntry.etapa_id.in_(sorted(etapas_removidas)),
+                )
+                .group_by(FunnelEntry.etapa_id)
+                .all()
+            )
+            if ocupadas:
+                detalhe = ", ".join(f"'{eid}' ({n} lead{'s' if n > 1 else ''})"
+                                    for eid, n in sorted(ocupadas))
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Não é possível remover etapa que ainda tem lead: {detalhe}. "
+                        "Mova os leads para outra etapa antes de alterar o funil — "
+                        "removê-la aqui os deixaria invisíveis no quadro."
+                    ),
+                )
+
         update_data["etapas"] = [s if isinstance(s, dict) else s.model_dump() for s in update_data["etapas"]]
 
     for field, value in update_data.items():
@@ -298,13 +342,9 @@ _PERIODOS = {"hoje": 1, "3d": 3, "7d": 7, "30d": 30}
 
 
 def _json_list_contains(column, value: str):
-    """Mesma expressao de leads.py/segments.py: @> com cast jsonb no PostgreSQL
-    (a coluna e `json`), LIKE no SQLite."""
-    if IS_SQLITE:
-        return column.cast(String).ilike(f'%"{value}"%')
-    import json
-    from sqlalchemy.dialects.postgresql import JSONB
-    return column.cast(JSONB).op("@>")(json.dumps([value]))
+    """Mesma expressao de leads.py/segments.py — agora uma so, em
+    app/query_filters.py (AUDIT-2026-08-WF2)."""
+    return destino_match(column, value)
 
 
 def _cursor_encode(entry: FunnelEntry) -> Optional[str]:
@@ -364,7 +404,19 @@ def _stage_query(db: Session, funnel_id: str, etapa_id: str, f: dict):
     if f.get("tag_ids"):
         sub = db.query(lead_tags.c.lead_id).filter(lead_tags.c.tag_id.in_(f["tag_ids"]))
         query = query.filter(Lead.id.in_(sub.subquery()))
-    if f.get("viajantes_min") is not None:
+    # AUDIT-2026-08-WC5 — "pelo menos X" e "exatamente X" sao perguntas
+    # DIFERENTES, e a operacao precisa das duas.
+    #
+    # O filtro nasceu como minimo (a UI diz "pelo menos X viajantes" e dois
+    # testes existentes afirmam esse contrato), mas a regra operacional que
+    # motivou este ajuste pede quantidade EXATA: separar casal de familia de
+    # viajante solo. Trocar a semantica de `viajantes_min` atenderia um dos
+    # dois e quebraria o outro — inclusive quem ja salvou um filtro.
+    # Por isso e um parametro NOVO, e os dois nunca chegam juntos (a rota
+    # rejeita a combinacao com 422).
+    if f.get("viajantes_exato") is not None:
+        query = query.filter(Lead.num_viajantes == f["viajantes_exato"])
+    elif f.get("viajantes_min") is not None:
         query = query.filter(Lead.num_viajantes >= f["viajantes_min"])
     if f.get("chegada_de"):
         query = query.filter(Lead.data_chegada >= f["chegada_de"])
@@ -425,7 +477,10 @@ def get_stage_cards(
     responsavel_id: Optional[int] = Query(None, description="0 = Agente IA"),
     destino: Optional[str] = Query(None),
     tag_ids: Optional[List[int]] = Query(None),
-    viajantes_min: Optional[int] = Query(None),
+    viajantes_min: Optional[int] = Query(
+        None, ge=1, description="Leads com PELO MENOS este numero de viajantes"),
+    viajantes_exato: Optional[int] = Query(
+        None, ge=1, description="Leads com EXATAMENTE este numero de viajantes"),
     chegada_de: Optional[date] = Query(None),
     chegada_ate: Optional[date] = Query(None),
     include_lead_id: Optional[int] = Query(
@@ -438,8 +493,15 @@ def get_stage_cards(
     filtros = {
         "q": q, "periodo": periodo, "responsavel_id": responsavel_id,
         "destino": destino, "tag_ids": tag_ids, "viajantes_min": viajantes_min,
+        "viajantes_exato": viajantes_exato,
         "chegada_de": chegada_de, "chegada_ate": chegada_ate,
     }
+    if viajantes_min is not None and viajantes_exato is not None:
+        raise HTTPException(
+            status_code=422,
+            detail=("Envie `viajantes_min` OU `viajantes_exato`, nunca os dois — "
+                    "sao perguntas diferentes e a combinacao seria ambigua."),
+        )
     base = _stage_query(db, funnel_id, etapa_id, filtros)
     total = base.count()
 
@@ -596,7 +658,56 @@ def add_lead_to_funnel(
                f"Entrou no funil '{funnel.nome}' na etapa '{stage_name}'",
                funnel_id=funnel_id, etapa_destino=data.etapa_id)
 
-    db.commit()
+    # AUDIT-2026-08-WF2: o SELECT acima ("existing") e o INSERT deste commit
+    # nao sao atomicos — entre os dois cabe outra requisicao concorrente
+    # inserindo a MESMA (lead_id, funnel_id). uq_funnel_entries_lead_funnel
+    # (app/models/pipeline.py) barra a segunda no banco, mas sem este catch o
+    # IntegrityError subia cru e virava 500 — nao o 409 que o workflow n8n do
+    # formulario do site espera (neverError: true, decide pelo corpo). Mesma
+    # corrida de app/services/lead_creation.py:garantir_entrada_no_funil, mas
+    # SEM SAVEPOINT: ali o SAVEPOINT protege o Lead ja adicionado ANTES na
+    # mesma transacao; aqui nao ha nenhuma escrita anterior desta chamada que
+    # precise sobreviver a colisao — um db.rollback() puro so descarta a
+    # entry e o log event desta mesma requisicao, que nao devem mesmo ser
+    # persistidos se a entrada ja existe.
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        # AUDIT-2026-08-WF2 (revisao adversarial): o except acima cobria so a
+        # corrida do indice unico, mas capturava QUALQUER IntegrityError como
+        # se fosse ela. Entre o SELECT de `existing` e este commit, o FUNIL ou
+        # o LEAD tambem podem ter sido apagados por outra requisicao — FK
+        # violation, nao unique. Devolver 409 aqui faria o chamador concluir
+        # que o lead esta no Kanban quando nada foi inserido: o node
+        # "Adicionar ao funil Vendas Formulário" do workflow n8n do
+        # formulario (n8n/workflows/live_exports/20260826_wa/formulario_site.json)
+        # le so `statusCode === 409` para decidir "etapa preservada", sem
+        # olhar o corpo — entao 409 so pode sair daqui quando a corrida for
+        # CONFIRMADA.
+        #
+        # Confirma por re-SELECT, nao por tipo de excecao do driver: psycopg2
+        # tem classes distintas (UniqueViolation/ForeignKeyViolation), sqlite3
+        # devolve o MESMO IntegrityError pros dois — introspeccao por tipo
+        # exigiria ramo IS_SQLITE so pra isto. O re-SELECT responde a pergunta
+        # que importa igual nos dois dialetos. Mesmo padrao de
+        # app/services/lead_creation.py:garantir_entrada_no_funil.
+        ganhador = db.query(FunnelEntry).filter(
+            FunnelEntry.lead_id == data.lead_id,
+            FunnelEntry.funnel_id == funnel_id,
+        ).first()
+        if ganhador is not None:
+            raise HTTPException(status_code=409, detail="Lead já está neste funil")
+        # Nao foi a corrida esperada — mesmo contrato de erro inesperado ja
+        # usado neste arquivo (list_funnels/get_kanban_board): loga a causa
+        # real e devolve 500, nunca 409.
+        logging.exception(
+            "add_lead_to_funnel: IntegrityError que nao e a corrida do indice "
+            "unico (lead_id=%s, funnel_id=%s) — funil ou lead pode ter sido "
+            "apagado por outra requisicao entre a validacao e o commit",
+            data.lead_id, funnel_id,
+        )
+        raise HTTPException(status_code=500, detail="Erro interno do servidor")
     db.refresh(entry)
     return FunnelEntryResponse.model_validate(entry)
 

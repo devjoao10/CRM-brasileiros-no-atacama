@@ -1,11 +1,12 @@
 import base64
 import io
+import logging
 import csv
 import os
 from typing import Optional, List
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Response, status, Query, UploadFile, File
 from app.config import MAX_UPLOAD_SIZE_BYTES
 from app.database import IS_SQLITE
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -24,11 +25,16 @@ from app.schemas.lead import (
     LeadFunnelInfo,
     ImportResponse,
     DESTINOS_PRINCIPAIS,
+    destinos_publicos,
 )
 from app.auth import get_current_user, require_admin
-from app.query_filters import campo_personalizado_match
+from app.query_filters import campo_personalizado_match, destino_match
+from app.config import LEAD_TAG_ORIGEM_API
+from app.services.lead_creation import criar_lead, resolver_funil_por_nome
 
 router = APIRouter(prefix="/api/leads", tags=["Leads"])
+
+logger = logging.getLogger(__name__)
 
 
 # ─── Paginacao keyset ────────────────────────────────────────────────
@@ -76,17 +82,55 @@ def _tem_telefone():
     return and_(Lead.whatsapp.isnot(None), func.trim(Lead.whatsapp) != "")
 
 
-def _json_list_contains(column, value: str):
-    """Filtra coluna JSON list que contenha um valor. Compatível com SQLite e PostgreSQL."""
+def _only_digits(value: Optional[str]) -> str:
+    """
+    Normalizacao unica de telefone: so digitos (+, espacos, (), - e . somem).
+
+    AUDIT-2026-08-WC (C6): mesmo helper de
+    conversas/app/services/crm.py::_only_digits, definido de novo aqui em vez
+    de importado — os dois pacotes se chamam `app` e nao podem coexistir no
+    mesmo processo.
+    """
+    return "".join(ch for ch in (value or "") if ch.isdigit())
+
+
+def _digitos_no_banco(coluna):
+    """
+    AUDIT-2026-08-WF2: o mesmo `_only_digits`, so que do LADO DO BANCO.
+
+    Sem isto, qualquer filtro sobre `leads.whatsapp` compara um numero ja
+    normalizado contra a coluna CRUA — e a coluna guarda o que o formulario do
+    site grava (`+55 11 98765-4322`, com `+`, espaco e hifen). Comparar os dois
+    lados normalizados e o unico jeito de o pre-filtro devolver TODOS os leads
+    com aquele numero, em qualquer formato.
+
+    PostgreSQL: `regexp_replace(whatsapp, '[^0-9]', '', 'g')` — DE PROPOSITO a
+    mesma expressao de conversas/app/services/crm.py::lookup_lead_by_whatsapp,
+    para que um unico indice de expressao (migration, fora deste arquivo) sirva
+    as duas rotas.
+
+    SQLite (dev e a suite): `regexp_replace` nao existe e nao da para registrar
+    funcao aqui, entao a normalizacao e uma cadeia de `replace()` sobre os
+    simbolos que o `_only_digits` remove. E menos abrangente que o regex de
+    proposito: quem DECIDE identidade continua sendo o `_only_digits` em
+    Python, sobre os candidatos; este SQL e so pre-filtro.
+    """
     if IS_SQLITE:
-        # SQLite armazena JSON como texto — LIKE funciona
-        return column.cast(String).ilike(f'%"{value}"%')
-    else:
-        # PostgreSQL: @> so existe para jsonb e a coluna e json — cast na
-        # EXPRESSAO da query (nao altera o schema nem os dados).
-        import json
-        from sqlalchemy.dialects.postgresql import JSONB
-        return column.cast(JSONB).op("@>")(json.dumps([value]))
+        expr = coluna
+        for simbolo in ("+", " ", "(", ")", "-", "."):
+            expr = func.replace(expr, simbolo, "", type_=String)
+        return expr
+    return func.regexp_replace(coluna, "[^0-9]", "", "g", type_=String)
+
+
+def _json_list_contains(column, value: str):
+    """Filtra coluna JSON list que contenha um valor. Compatível com SQLite e PostgreSQL.
+
+    AUDIT-2026-08-WF2 — a expressao mora em app/query_filters.py: eram TRES
+    copias do mesmo `cast(coluna, JSONB) @> ...`, e o cast na coluna `json`
+    crua derrubava a listagem inteira com 500 (mesmo defeito do F-043).
+    """
+    return destino_match(column, value)
 
 
 def _build_lead_response(lead: Lead) -> LeadResponse:
@@ -257,15 +301,26 @@ def list_destinos(
     db: Session = Depends(get_db),
 ):
     """Retorna os destinos principais + todos os destinos já cadastrados."""
+    # AUDIT-2026-08-WF2 — mesma linha legada do finding de serializacao, outro
+    # mecanismo: aqui nada passa por `LeadResponse`, os elementos crus vao
+    # direto para um `set` e para o `sorted()`. Dois pontos de morte medidos:
+    #
+    #   `[123]` / `[true]` / `[1e1000000]` / `["Atacama", 123]`
+    #       -> sorted() sobre {str, int|bool|float}
+    #          TypeError: '<' not supported between instances of 'str' and 'int'
+    #   `[["x"]]`
+    #       -> set.add(["x"])  TypeError: unhashable type: 'list'
+    #
+    # E o DROPDOWN do filtro de destino: uma unica linha legada e o filtro
+    # inteiro parava de carregar para todo mundo. `destinos_publicos` (ver
+    # app/schemas/lead.py) e a MESMA reducao que a serializacao usa — duplicar
+    # a regra aqui garantiria divergencia entre o dropdown e a lista.
     all_destinos = set(DESTINOS_PRINCIPAIS)
     leads = db.query(Lead.destinos).filter(Lead.destinos.isnot(None)).all()
     for (dest_list,) in leads:
-        if isinstance(dest_list, list):
-            for d in dest_list:
-                if d:
-                    all_destinos.add(d)
-        elif isinstance(dest_list, str) and dest_list:
-            all_destinos.add(dest_list)
+        for d in destinos_publicos(dest_list) or []:
+            if d:
+                all_destinos.add(d)
     return {"destinos": sorted(all_destinos)}
 
 
@@ -453,39 +508,96 @@ def get_lead(
 @router.post("", response_model=LeadResponse, status_code=201, summary="Criar lead")
 def create_lead(
     data: LeadCreate,
+    funnel_id: Optional[int] = Query(
+        None, description="Funil onde o lead entra, por id. Vence tudo. "
+                          "Default: DEFAULT_FUNNEL_ID ou o funil ativo chamado "
+                          "DEFAULT_FUNNEL_NOME ('Vendas: Principal')."
+    ),
+    funnel_nome: Optional[str] = Query(
+        None, description="Funil onde o lead entra, por NOME exato (alternativa "
+                          "estavel ao id, que nao e versionado). Ignorado se "
+                          "funnel_id vier junto."
+    ),
+    etapa_id: Optional[str] = Query(
+        None, description="Etapa inicial dentro do funil. Default: a etapa "
+                          "DEFAULT_ETAPA_NOME ('Sem Contato') do funil resolvido."
+    ),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    Cria um novo lead.
-    
+    Cria um novo lead e o coloca no Kanban (AUDIT-2026-08-WB, F-341).
+
     **N8N**: Ideal para criar leads a partir de formulários, WhatsApp, etc.
-    
+
     Os `campos_personalizados` aceitam qualquer JSON:
     ```json
     {"origem": "Instagram", "idioma": "pt-BR", "budget": 5000}
     ```
+
+    Alem da linha em `leads`, esta rota cria (na mesma transação) a entrada no
+    funil default, o evento 'created' no histórico e, se `LEAD_TAG_ORIGEM_API`
+    estiver configurada, aplica essa tag — ver `app/services/lead_creation.py`.
+    Este endpoint recebe leads tanto do formulário do site quanto do agente
+    n8n e não tem como distinguir a origem real; por isso a tag de origem é
+    uma única config compartilhada, não uma por chamador.
+
+    `funnel_id`/`funnel_nome`/`etapa_id` são opcionais. Sem eles, o lead entra
+    no funil comercial padrão — resolvido por NOME (`DEFAULT_FUNNEL_NOME`,
+    "Vendas: Principal"), não por ordem de id — na etapa `DEFAULT_ETAPA_NOME`
+    ("Sem Contato"). É o contrato que o próprio system message do Gerenciador
+    declara.
+
+    AUDIT-2026-08-WF2 — `funnel_nome` existe para o **formulário do site**. O
+    workflow dele chama esta rota e, logo depois, `POST /api/pipeline/funnels/
+    {id}/leads` com o funil próprio de Formulário. Sem dizer aqui para onde o
+    lead vai, ele ganha DUAS entradas: a padrão (Principal) e a do formulário.
+    Passando `funnel_nome=Vendas: Formulário` (ou `funnel_id`), a entrada já
+    nasce no lugar certo e a chamada seguinte devolve 409 — que o workflow já
+    trata como sucesso. Ver M11 em `docs/audit/N8N_MANUAL_CHANGES.md`.
+
+    Prefira `funnel_nome` a `funnel_id`: `funnels.nome` é UNIQUE e estável; o
+    id não está versionado em lugar nenhum e muda entre ambientes.
     """
-    lead = Lead(
-        nome=data.nome,
-        email=data.email,
-        whatsapp=data.whatsapp,
-        destinos=data.destinos or [],
-        data_chegada=data.data_chegada,
-        data_partida=data.data_partida,
-        total_dias=data.total_dias,
-        datas_destinos=data.datas_destinos or {},
-        dias_por_destino=data.dias_por_destino or {},
-        num_viajantes=data.num_viajantes,
-        num_criancas=data.num_criancas or 0,
-        idades_criancas=data.idades_criancas,
-        campos_personalizados=data.campos_personalizados or {},
-        status_venda=data.status_venda,
-        responsavel_id=data.responsavel_id,
+    # AUDIT-2026-08-WF2 (revisao) — os dois parametros recusam IGUAL.
+    #
+    # Antes, `funnel_nome` inexistente devolvia 404 e nao criava o lead, mas
+    # `funnel_id` inexistente devolvia 201 e criava o lead SEM funil nenhum:
+    # fora do Kanban, `GET /api/pipeline/locate/{id}` em 404, "Ver no Funil"
+    # morto. Mesma intencao do chamador, dois contratos opostos — e o pior dos
+    # dois era justamente o do parametro que a docstring acima desaconselha.
+    if funnel_id is not None:
+        alvo = db.query(Funnel).filter(
+            Funnel.id == funnel_id, Funnel.is_active == True,  # noqa: E712
+        ).first()
+        if alvo is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Nenhum funil ativo com id {funnel_id}. O lead NÃO foi "
+                    "criado — criar fora de funil seria pior que recusar."
+                ),
+            )
+    elif funnel_nome:
+        alvo = resolver_funil_por_nome(db, funnel_nome)
+        if alvo is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Nenhum funil ativo chamado '{funnel_nome}'. O lead NÃO foi "
+                    "criado — criar no funil errado seria pior que recusar."
+                ),
+            )
+        funnel_id = alvo.id
+
+    lead = criar_lead(
+        db,
+        dados=data.model_dump(),
+        funnel_id=funnel_id,
+        etapa_id=etapa_id,
+        tag_nome=LEAD_TAG_ORIGEM_API or None,
+        origem="api",
     )
-    db.add(lead)
-    db.commit()
-    db.refresh(lead)
     return _build_lead_response(lead)
 
 
@@ -507,6 +619,55 @@ def update_lead(
         raise HTTPException(status_code=404, detail="Lead não encontrado")
 
     update_data = data.model_dump(exclude_unset=True)
+
+    # AUDIT-2026-08-WF2 (W2-21) — trocar responsavel NAO passa por aqui.
+    #
+    # Esta rota escrevia `responsavel_id` como qualquer outro campo, via
+    # `setattr`. Duas coisas se perdiam em silencio, e as duas sao invariantes
+    # que `PUT /{lead_id}/responsavel` mantem:
+    #
+    # 1. o evento `responsavel_changed` em LeadHistory — a propria rota
+    #    dedicada grava esse evento na MESMA transacao "para nunca haver
+    #    responsavel sem rastro";
+    # 2. a ponte para o inbox (`conversas_bridge.notificar_handoff`) — sem ela,
+    #    o lead muda de dono mas a conversa continua com a Bia ligada e fora da
+    #    fila, que e exatamente o defeito principal desta rodada.
+    #
+    # Nenhum chamador conhecido manda `responsavel_id` neste corpo: a
+    # `Tool Atualizar Lead` do n8n manda doze chaves e nenhuma e essa, e a
+    # interface usa a rota dedicada (`templates/pipeline.html`). Por isso
+    # recusar e mais seguro que aceitar em silencio: quem mandar recebe 422
+    # dizendo qual e a rota certa, em vez de uma troca de dono sem historico e
+    # sem handoff.
+    if "responsavel_id" in update_data:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Use PUT /api/leads/{lead_id}/responsavel para trocar o "
+                "responsável. Por esta rota a troca ficaria sem evento no "
+                "histórico e sem mover a conversa do WhatsApp para a fila."
+            ),
+        )
+
+    # AUDIT-2026-08-F2 — `None` NUNCA pode virar UPDATE de coluna NOT NULL.
+    #
+    # `exclude_unset` remove o que NAO foi enviado; nao remove o que foi enviado
+    # COMO null. E a `Tool Atualizar Lead` do n8n manda as doze chaves em toda
+    # chamada, com string vazia no que nao foi coletado — que os validadores do
+    # schema convertem para None. Sem este filtro, `setattr(lead, "nome", None)`
+    # bate no `nullable=False` e devolve 500 com a transacao abortada, que e
+    # PIOR que o 422 anterior.
+    #
+    # O filtro e derivado do MODELO, nao de uma lista escrita a mao: se alguem
+    # tornar uma coluna NOT NULL amanha, a protecao passa a valer sozinha. E
+    # continua sendo possivel LIMPAR campo que aceita null (email, datas,
+    # responsavel_id), que e comportamento legitimo da interface.
+    _nao_anulaveis = {c.name for c in Lead.__table__.columns if not c.nullable}
+    update_data = {
+        campo: valor for campo, valor in update_data.items()
+        if not (valor is None and campo in _nao_anulaveis)
+    }
+
     for field, value in update_data.items():
         setattr(lead, field, value)
 
@@ -545,6 +706,28 @@ def delete_lead(
 
 # ─── ANOTAÇÕES ────────────────────────────────────────────────────────
 
+def _lock_lead(db: Session, lead_id: int) -> Optional[Lead]:
+    """
+    Carrega o lead com a linha TRAVADA até o fim da transação.
+
+    AUDIT-2026-08-WC (C3): append_anotacao fazia read-modify-write sem lock —
+    duas anotações concorrentes (a `Tool Adicionar Nota` do n8n roda ao fim de
+    TODO processamento do Gerenciador, e colide de verdade com uma nota
+    humana no mesmo lead) liam o mesmo `campos_personalizados`, e o commit que
+    terminava por último apagava silenciosamente a nota do outro.
+
+    Mesmo padrão de `conversas/app/routers/conversations.py::_lock_conversation`:
+    no PostgreSQL o FOR UPDATE serializa a segunda transação até a primeira
+    commitar, então ela lê o estado já atualizado. No SQLite `with_for_update()`
+    não é suportado e não é necessário — o banco inteiro já é serializado por
+    lock de arquivo.
+    """
+    query = db.query(Lead).filter(Lead.id == lead_id)
+    if not IS_SQLITE:
+        query = query.with_for_update()
+    return query.first()
+
+
 @router.put("/{lead_id}/anotacoes", summary="Adicionar anotação ao lead")
 async def append_anotacao(
     lead_id: int,
@@ -558,12 +741,13 @@ async def append_anotacao(
 
     **N8N**: Use para registrar resumos de conversa e ações do Gerenciador.
     """
-    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    lead = _lock_lead(db, lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead não encontrado")
 
-    from datetime import datetime as dt
-    timestamp = dt.now().strftime("%d/%m/%Y %H:%M")
+    # AUDIT-2026-08-WC (C3): era datetime.now() naive/local — todo o resto do
+    # sistema usa UTC-aware. O formato exibido (dd/mm/aaaa hh:mm) não muda.
+    timestamp = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M")
 
     campos = lead.campos_personalizados or {}
     existing = campos.get("anotacoes", "")
@@ -760,28 +944,31 @@ def import_leads(
     for i, row in enumerate(rows, start=2):  # Line 2 = first data row
         try:
             lead_data = _process_row(row, header_map)
-            
+
             if not lead_data.get("nome"):
                 errors.append(f"Linha {i}: campo 'nome' é obrigatório")
                 continue
 
-            lead = Lead(
-                nome=lead_data.get("nome", ""),
-                email=lead_data.get("email"),
-                whatsapp=lead_data.get("whatsapp"),
-                destinos=lead_data.get("destinos", []),
-                data_chegada=lead_data.get("data_chegada"),
-                data_partida=lead_data.get("data_partida"),
-                campos_personalizados=lead_data.get("campos_personalizados", {}),
+            # AUDIT-2026-08-WB (F-341): mesmo caminho de POST /api/leads —
+            # lead importado tambem entra no funil default, nao so na tabela
+            # `leads`. criar_lead commita por linha (ver docstring do
+            # service); o `db.commit()` unico do fim do lote deixou de existir.
+            criar_lead(
+                db,
+                dados=lead_data,
+                tag_nome=LEAD_TAG_ORIGEM_API or None,
+                origem="import",
             )
-            db.add(lead)
             imported += 1
 
         except Exception as e:
+            # Sem isto, uma linha ruim deixa a sessão com a transação
+            # ABORTADA (PostgreSQL) e TODAS as linhas seguintes do mesmo
+            # import falhariam em cascata — criar_lead comita por linha, mas
+            # uma exceção no meio do seu próprio commit deixa a sessão nesse
+            # estado até um rollback explícito.
+            db.rollback()
             errors.append(f"Linha {i}: {str(e)}")
-
-    if imported > 0:
-        db.commit()
 
     return ImportResponse(
         total_linhas=len(rows),
@@ -803,38 +990,110 @@ def get_lead_by_whatsapp(
     """
     Busca um lead pelo número de WhatsApp.
     Usado pela plataforma Conversas para vincular conversas a leads automaticamente.
+
+    Contrato (inalterado): casamento por IDENTIDADE de dígitos, tolerante a
+    DDI presente de um lado só (sufixo compatível), e AMBIGUIDADE É RECUSADA
+    com 409 — nunca resolvida escolhendo um lead arbitrário.
     """
-    # Normalize: remove +, spaces, dashes
-    normalized = whatsapp.replace("+", "").replace(" ", "").replace("-", "").strip()
-
-    # 1. Exact match (normalized vs normalized stored)
-    lead = db.query(Lead).filter(
-        Lead.whatsapp == normalized
-    ).first()
-
-    # 2. Exact match with + prefix
-    if not lead:
-        lead = db.query(Lead).filter(
-            Lead.whatsapp == f"+{normalized}"
-        ).first()
-
-    # 3. Stored number ends with last 11 digits of searched number (handles country code variations)
-    if not lead and len(normalized) >= 11:
-        suffix = normalized[-11:]
-        lead = db.query(Lead).filter(
-            Lead.whatsapp.ilike(f"%{suffix}")
-        ).first()
-
-    if not lead:
+    # AUDIT-2026-08-WF2 — os dois lados normalizados, no banco.
+    #
+    # Os tres passos antigos consultavam a coluna CRUA: igualdade com o numero
+    # sem "+", igualdade com "+" na frente, e `ilike('%' || 11 ultimos
+    # digitos)`. Um lead gravado como `+55 11 98765-4322` nao casava em NENHUM
+    # dos tres — a string crua nao termina em `11987654322` (tem espaco e hifen
+    # no meio) e tampouco e igual ao numero so-digitos. Resultado: 404.
+    #
+    # Isto se alimenta: esta e a rota do no `Buscar lead pelo WhatsApp` do
+    # formulario do site e da Tool Buscar Lead WhatsApp do Gerenciador, e e o
+    # PROPRIO formulario que grava o numero formatado. O 404 fazia o fluxo
+    # criar um lead NOVO em vez de atualizar o existente, e o proximo lookup do
+    # mesmo cliente voltava a nao achar nenhum dos dois. Medido em PostgreSQL
+    # 16 com 19.001 leads: os 6 formatos do corpus davam 404, inclusive a busca
+    # pela string EXATA que estava gravada.
+    #
+    # `_digitos_no_banco` aplica a mesma normalizacao do `_only_digits` na
+    # coluna, entao os dois passos abaixo enxergam o lead em qualquer formato.
+    normalized = _only_digits(whatsapp)
+    if not normalized:
+        # Sem digitos nao ha numero para identificar: buscar por `''` casaria
+        # com qualquer lead cujo whatsapp so tenha simbolos.
         raise HTTPException(status_code=404, detail="Nenhum lead encontrado com este WhatsApp")
 
-    return _build_lead_response(lead)
+    digitos_col = _digitos_no_banco(Lead.whatsapp)
+
+    # 1. Igualdade EXATA de digitos — cobre os passos 1 e 2 antigos (com e sem
+    # "+") e, agora, tambem qualquer formatacao guardada na coluna.
+    #
+    # O `.first()` antigo virou dicionario porque a normalizacao FAZ APARECER
+    # ambiguidade onde a coluna crua escondia: o par duplicado
+    # `+55 11 98765-4322` / `5511987654322` — exatamente o que o 404 vinha
+    # fabricando — passa a casar nos DOIS leads. A resposta para isso e o 409
+    # que ja existia no passo de sufixo, nao um `.first()` arbitrario: aqui
+    # tambem um casamento errado atualiza o LEAD DO OUTRO CLIENTE.
+    #
+    # O `_only_digits` em Python decide de novo, sobre os <= 50 candidatos:
+    # `[^0-9]` do PostgreSQL e ASCII e `str.isdigit()` nao e, entao quem afirma
+    # identidade e sempre o Python (mesma regra do modulo do Conversas).
+    compativeis = {
+        c.id: c
+        for c in db.query(Lead).filter(digitos_col == normalized).limit(50).all()
+        if _only_digits(c.whatsapp) == normalized
+    }
+
+    # 2. AUDIT-2026-08-WC (C6/W2-12): o ilike de sufixo era resolvido por
+    # .first() SEM order_by — com mais de um lead terminando nos mesmos
+    # digitos, quem vencia era indefinido pelo banco e podia mudar entre
+    # execucoes ("localizar lead esta intermitente"). Esta rota e o primeiro
+    # no do fluxo do Formulario e a Tool Buscar Lead WhatsApp do Gerenciador:
+    # um casamento errado atualiza o LEAD DO OUTRO CLIENTE.
+    #
+    # Mesma regra de conversas/app/services/crm.py::lookup_lead_by_whatsapp
+    # (AUDIT-2026-08-W2F/F10): o LIKE serve so de PRE-FILTRO barato. A
+    # decisao e por compatibilidade EXATA de digitos, feita em Python — um
+    # numero e "compativel" com o outro quando um e sufixo do outro (cobre o
+    # caso de DDI presente de um lado e ausente do outro, que e o motivo deste
+    # passo existir: "handles country code variations"). Se mais de UM lead
+    # DISTINTO for compativel, a ambiguidade e RECUSADA (409), nunca resolvida
+    # por ORDER BY/LIMIT 1 arbitrario.
+    #
+    # So roda quando o passo 1 nao achou nada: casamento exato continua tendo
+    # precedencia sobre sufixo, senao buscar `5511987654321` com um lead
+    # `11987654321` e outro `5511987654321` no banco viraria 409 onde antes
+    # havia resposta.
+    if not compativeis and len(normalized) >= 11:
+        suffix = normalized[-11:]
+        candidatos = (
+            db.query(Lead)
+            .filter(digitos_col.like(f"%{suffix}"))
+            .limit(50)
+            .all()
+        )
+        for c in candidatos:
+            digitos = _only_digits(c.whatsapp)
+            if digitos and (digitos.endswith(normalized) or normalized.endswith(digitos)):
+                compativeis[c.id] = c
+
+    if len(compativeis) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Mais de um lead tem um WhatsApp compatível com este número "
+                f"(ids: {sorted(compativeis)}). Desambigue manualmente — "
+                "nenhum foi escolhido automaticamente."
+            ),
+        )
+
+    if not compativeis:
+        raise HTTPException(status_code=404, detail="Nenhum lead encontrado com este WhatsApp")
+
+    return _build_lead_response(next(iter(compativeis.values())))
 
 
 @router.put("/{lead_id}/responsavel", response_model=LeadResponse,
             summary="Alterar responsável do lead")
-def update_lead_responsavel(
+async def update_lead_responsavel(
     lead_id: int,
+    response: Response,
     responsavel_id: Optional[int] = Query(None, description="ID do novo responsável (null = Agente IA)"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -874,5 +1133,85 @@ def update_lead_responsavel(
     db.commit()
     db.refresh(lead)
 
-    return _build_lead_response(lead)
+    # AUDIT-2026-08-WA — propaga o handoff para o inbox.
+    #
+    # Esta rota e o UNICO sinal deterministico que o repositorio recebe quando o
+    # Gerenciador decide encaminhar para humano (`Tool Alterar Responsavel`).
+    # Ate aqui ela mexia so em `leads.responsavel_id`: a conversa do WhatsApp
+    # continuava com a Bia ligada e fora da fila, e o cliente ouvia que estava
+    # na fila sem estar. `POST /api/conversations/{id}/handoff` existia e nao
+    # tinha chamador — este e o chamador.
+    #
+    # So propaga quando o novo responsavel e uma PESSOA. `responsavel_id=null`
+    # significa devolver o lead ao Agente IA; mover a conversa para a fila
+    # humana nesse caso seria o oposto da intencao.
+    #
+    # Best-effort: o resultado vai na resposta, mas uma falha aqui nao desfaz a
+    # troca de responsavel nem devolve erro ao n8n.
+    # AUDIT-2026-08-WA (revisao) — NAO condicionar a `old_responsavel !=
+    # responsavel_id`. Era assim, e desligava a ponte em quase todo handoff.
+    #
+    # O n8n manda `?responsavel_id=5` FIXO, e nada no CRM devolve
+    # `lead.responsavel_id` para NULL quando a conversa encerra. Mas o Conversas
+    # reseta a conversa para a Bia toda vez que um cliente encerrado volta a
+    # escrever (webhook.py, ramo de reabertura). Entao, no SEGUNDO handoff do
+    # mesmo lead, o CRM via `5 == 5`, pulava a ponte, e a conversa ficava presa
+    # em ATENDIMENTOS BIA — o defeito original de volta, e em silencio, porque
+    # `conversa_notificada` continuava None e nem log saia. Cliente que volta
+    # nao e caso raro: e o caso comum.
+    #
+    # Reenviar quando nada mudou custa UMA chamada best-effort. O handoff do
+    # lado do Conversas e idempotente por construcao (`keep_queue_position`),
+    # entao reaplicar sobre uma conversa ja atendida nao mexe em nada.
+    conversa_notificada = None
+    if responsavel_id is not None:
+        from app.services import conversas_bridge
+
+        conversa_notificada = await conversas_bridge.notificar_handoff(lead_id)
+
+    resposta = _build_lead_response(lead)
+
+    # AUDIT-2026-08-WF2 (revisao) — o resultado da ponte vai num CABECALHO, nao
+    # so no log.
+    #
+    # `conversas_bridge` promete na docstring que "o chamador expoe isso ao
+    # cliente para que uma falha silenciosa nao se disfarce de sucesso", e ate
+    # aqui a promessa nao era cumprida: com o Conversas reiniciando, a ponte
+    # estourava o timeout de 5s, devolvia None, e o n8n recebia um 200
+    # identico ao do caso bem-sucedido. A Bia dizia ao cliente que ele estava
+    # na fila, a conversa continuava em ATENDIMENTOS BIA, e o unico rastro era
+    # um warning do lado do CRM — exatamente a invisibilidade que fez o handoff
+    # quebrado passar despercebido em primeiro lugar.
+    #
+    # Cabecalho, e nao campo do corpo, por dois motivos: `response_model=
+    # LeadResponse` descartaria um campo extra, e mudar o schema do lead por
+    # causa de um detalhe de transporte contaminaria todos os outros
+    # consumidores da rota.
+    #
+    # Continua sem virar 5xx de proposito: derrubar o PUT perderia a troca de
+    # responsavel, que ja foi commitada e esta correta. Quem le o cabecalho
+    # decide o que fazer — `pendente` e acionavel, o 200 sozinho nao era.
+    if responsavel_id is None:
+        estado_ponte = "nao_aplicavel"   # devolver ao Agente IA nao move fila
+    elif conversa_notificada is True:
+        estado_ponte = "movida"
+    elif conversa_notificada is False:
+        estado_ponte = "sem_conversa"    # nao ha conversa aberta para este lead
+    else:
+        estado_ponte = "pendente"        # ponte desligada, fora do ar ou timeout
+    response.headers["X-Conversa-Handoff"] = estado_ponte
+
+    if conversa_notificada is not None:
+        logger.info(
+            "Lead %s: responsavel alterado; conversa %s movida para a fila humana.",
+            lead_id, "" if conversa_notificada else "NAO",
+        )
+    elif responsavel_id is not None:
+        logger.warning(
+            "Lead %s: responsavel alterado, mas a ponte para o Conversas NAO "
+            "respondeu (desligada, fora do ar ou timeout). A conversa pode ter "
+            "ficado com a Bia. Cabecalho X-Conversa-Handoff: pendente.",
+            lead_id,
+        )
+    return resposta
 

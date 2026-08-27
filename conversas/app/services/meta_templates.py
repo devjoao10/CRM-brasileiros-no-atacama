@@ -9,6 +9,7 @@ API Reference:
 - Delete: DELETE /{WABA_ID}/message_templates?name={name}
 """
 
+import hashlib
 import logging
 import re
 import time
@@ -37,6 +38,26 @@ _PARAM_RE = re.compile(r"\{\{(\d+)\}\}")
 _CATALOG_TTL_SECONDS = 300
 _catalog_cache: Optional[dict] = None
 _catalog_cached_at: float = 0.0
+# AUDIT-2026-08-WD (D5): identidade da credencial que preencheu o
+# `_catalog_cache` atual. `invalidate_catalog_cache()` ja existia "para
+# qualquer mudanca de credencial", mas nenhum caller de producao a chamava —
+# trocar token/WABA_ID no painel deixava o seletor de templates servindo o
+# catalogo da conta ANTERIOR por ate 5 minutos. A escrita da credencial mora
+# em `routers/api_config.py`, fora do escopo de arquivos deste pacote; em vez
+# de depender de alguem lembrar de invalidar no lugar certo, o cache passa a
+# carregar a propria identidade da credencial e se invalida SOZINHO quando ela
+# muda — estrutural, nao depende de nenhum caller externo (e sobrevive a
+# proximo caller que tambem esquecer de invalidar).
+_catalog_cache_key: Optional[str] = None
+
+
+def _credential_fingerprint(token: str, waba_id: str) -> str:
+    """
+    Hash da credencial usada para preencher o cache — nao o token cru: o
+    cache ja vive em memoria do processo, mas nao ha razao para tambem reter
+    o segredo como CHAVE de comparacao quando um hash ja distingue credenciais.
+    """
+    return hashlib.sha256(f"{waba_id}:{token}".encode("utf-8")).hexdigest()
 
 
 def _get_api_config(db: Session) -> Optional[ApiConfig]:
@@ -270,10 +291,15 @@ def _describe_template(raw: dict) -> dict:
 
 
 def invalidate_catalog_cache() -> None:
-    """Usado pelos testes e por qualquer mudanca de credencial."""
-    global _catalog_cache, _catalog_cached_at
+    """
+    Usado pelos testes. D5: nao e mais o UNICO mecanismo de invalidacao por
+    troca de credencial (ver `_catalog_cache_key`/`_credential_fingerprint`
+    acima) — continua existindo para reset explicito e determinismo em teste.
+    """
+    global _catalog_cache, _catalog_cached_at, _catalog_cache_key
     _catalog_cache = None
     _catalog_cached_at = 0.0
+    _catalog_cache_key = None
 
 
 async def list_approved_templates(db: Session, *, force: bool = False) -> dict:
@@ -286,12 +312,13 @@ async def list_approved_templates(db: Session, *, force: bool = False) -> dict:
 
     Retorna {"ok": True, "templates": [...]} ou {"ok": False, "error": <seguro>}.
     O erro NUNCA vaza token, header ou URL com credencial.
-    """
-    global _catalog_cache, _catalog_cached_at
 
-    if not force and _catalog_cache is not None:
-        if time.monotonic() - _catalog_cached_at < _CATALOG_TTL_SECONDS:
-            return _catalog_cache
+    D5: a credencial e lida ANTES do cache (nao depois) porque a chave do
+    cache agora e a propria credencial — sem ler primeiro nao ha com o que
+    comparar. E uma query de singleton local (ApiConfig), nao um round-trip
+    a Meta, entao nao reintroduz o custo que o cache existe para evitar.
+    """
+    global _catalog_cache, _catalog_cached_at, _catalog_cache_key
 
     creds = whatsapp.get_waba_credentials(db)
     if creds is None:
@@ -300,6 +327,11 @@ async def list_approved_templates(db: Session, *, force: bool = False) -> dict:
             "error": "Meta API nao configurada. Configure Access Token e WABA ID em Configuracoes > API WhatsApp.",
         }
     token, waba_id, base_url = creds
+    fingerprint = _credential_fingerprint(token, waba_id)
+
+    if not force and _catalog_cache is not None and _catalog_cache_key == fingerprint:
+        if time.monotonic() - _catalog_cached_at < _CATALOG_TTL_SECONDS:
+            return _catalog_cache
 
     try:
         raw = await _fetch_meta_templates(base_url, waba_id, {"Authorization": f"Bearer {token}"})
@@ -327,6 +359,7 @@ async def list_approved_templates(db: Session, *, force: bool = False) -> dict:
     result = {"ok": True, "templates": templates}
     _catalog_cache = result
     _catalog_cached_at = time.monotonic()
+    _catalog_cache_key = fingerprint
     logger.info(f"Catalogo de templates atualizado: {len(templates)} APPROVED de {len(raw)} totais.")
     return result
 

@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import secrets
+from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -32,8 +33,20 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """Create a JWT access token."""
+    """Create a JWT access token.
+
+    AUDIT-2026-08-W1A: carimba `typ: "access"`. Só um token com esse claim vale
+    como sessão (ver `_get_user_from_jwt`). Antes, QUALQUER token assinado por
+    esta função era uma sessão completa de 8h do CRM — inclusive o token de
+    verificação de e-mail que `app/routers/users.py` entrega na QUERY STRING de
+    um link (e que portanto vaza para histórico, Referer e log de acesso).
+    O carimbo é pulado quando o caller já declarou o propósito do token — `typ`
+    novo ou `type` legado (`type: "verify_email"`) —, para que esses tokens
+    continuem SEM `typ` e sigam recusados como sessão.
+    """
     to_encode = data.copy()
+    if "typ" not in to_encode and "type" not in to_encode:
+        to_encode["typ"] = "access"
     expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
@@ -65,6 +78,13 @@ def _get_user_from_jwt(token: str, db: Session) -> Optional[User]:
     """Extract user from JWT token."""
     payload = decode_token(token)
     if payload is None:
+        return None
+    # AUDIT-2026-08-W1A: só token de sessão abre sessão. `typ` ausente ou
+    # diferente de "access" é recusado — cobre o token `type: "verify_email"`
+    # (que não tem `typ`) e qualquer outro propósito criado no futuro.
+    # Sessões emitidas ANTES deste deploy também não têm `typ`: exigem um novo
+    # login, uma única vez.
+    if payload.get("typ") != "access":
         return None
     email: str = payload.get("sub")
     if email is None:
@@ -176,14 +196,19 @@ async def get_current_user(
             return user
         raise credentials_exception
 
-    # 2. Try JWT from Authorization header
+    # 2/3. JWT do header Authorization e JWT do cookie — nesta ordem, mas SEM
+    #      curto-circuito entre eles (AUDIT-2026-08-W1A). O `auth.js` anexa o
+    #      token do localStorage a TODA request; antes, um único valor obsoleto
+    #      ali levantava 401 em toda a API mesmo com o cookie `access_token`
+    #      perfeitamente válido, e o front derrubava a sessão no meio do uso.
+    #      Diferente da API Key e das headers da IA interna (credenciais
+    #      explícitas e sem ambiguidade), o header Bearer aqui é "melhor
+    #      esforço": só levantamos 401 depois de tentar TODOS os mecanismos.
     if token:
         user = _get_user_from_jwt(token, db)
         if user:
             return user
-        raise credentials_exception
 
-    # 3. Try JWT from cookie (frontend)
     cookie_token = request.cookies.get("access_token")
     if cookie_token:
         # Remove "Bearer " prefix if present
@@ -192,7 +217,6 @@ async def get_current_user(
         user = _get_user_from_jwt(cookie_token, db)
         if user:
             return user
-        raise credentials_exception
 
     raise credentials_exception
 
@@ -235,8 +259,24 @@ def page_login_redirect(request: Request, next_url: Optional[str] = None) -> Red
     Sem isso um cookie expirado/corrompido ficava no navegador para sempre e o
     estado inconsistente nunca se resolvia sozinho.
     """
+    # AUDIT-2026-08-WG (F-495) — o `next` passa a sair do PROPRIO request.
+    #
+    # Das onze paginas protegidas, so `/gestao/pendencias` passava `next_url` a
+    # mao. As outras dez chamavam `page_login_redirect(request)` sem argumento,
+    # entao uma sessao expirada em /pipeline (ou num deep link como
+    # /leads?open=123) devolvia o operador ao /hub, e ele tinha de navegar de
+    # novo ate onde estava. Corrigir nos dez call sites seria o mesmo defeito
+    # esperando para voltar no decimo primeiro: o default certo mora AQUI.
+    #
+    # So o PATH entra — nunca a query string, que pode carregar filtro ou id
+    # de cliente e acabaria em log de acesso e em historico de navegador. E o
+    # `safeNext()` de static/js/login.js ja bloqueia destino externo
+    # (`//evil.com`, `javascript:`), entao o valor e sempre interno.
+    destino = next_url or request.url.path
+    if destino in ("/", "/login"):
+        destino = None
     response = RedirectResponse(
-        url=f"/login?next={next_url}" if next_url else "/login",
+        url=f"/login?next={quote(destino, safe='/')}" if destino else "/login",
         status_code=302,
     )
     # ponytail: `decode_token` engole ExpiredSignatureError junto com as demais

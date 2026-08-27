@@ -1,0 +1,605 @@
+{
+  "name": "Formulário do Site → CRM BnA",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "formulario-site",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "d6977573-9102-4284-84cf-2667fdb30a09",
+      "name": "Receber Formulário do Site",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        912,
+        352
+      ],
+      "webhookId": "formulario-site-bna"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body ?? $json;\n\nconst cleanText = (value) => String(value ?? '').trim();\nconst onlyDigits = (value) => cleanText(value).replace(/\\D/g, '');\n\nconst nome = cleanText(body.nome);\nconst email = cleanText(body.email).toLowerCase();\n\nconst ddi = onlyDigits(body.ddi || body.codigo_pais || '55');\nlet telefone = onlyDigits(body.telefone || body.celular || body.whatsapp);\n\nif (telefone.startsWith('00')) telefone = telefone.slice(2);\nif (telefone.startsWith(ddi)) {\n  // Já veio com DDI.\n} else if (telefone) {\n  telefone = `${ddi}${telefone}`;\n}\n\nconst dataChegada = cleanText(body.data_chegada);\nconst dataPartida = cleanText(body.data_partida);\n\nconst adultos = Number.parseInt(body.num_adultos ?? body.numero_adultos ?? body.num_viajantes, 10);\nconst criancas = Number.parseInt(body.num_criancas ?? body.numero_criancas ?? 0, 10);\n\nlet destinosEntrada = body.destinos ?? body.destino ?? [];\nif (typeof destinosEntrada === 'string') {\n  destinosEntrada = destinosEntrada\n    .split(/,|;|\\+|\\be\\b/gi)\n    .map(v => v.trim())\n    .filter(Boolean);\n}\nif (!Array.isArray(destinosEntrada)) destinosEntrada = [destinosEntrada];\n\nconst mapaDestinos = {\n  'atacama': 'Atacama',\n  'deserto do atacama': 'Atacama',\n  'santiago': 'Santiago',\n  'uyuni': 'Uyuni',\n  'salar de uyuni': 'Uyuni',\n};\n\nconst destinos = [...new Set(\n  destinosEntrada\n    .map(v => mapaDestinos[cleanText(v).toLowerCase()])\n    .filter(Boolean)\n)];\n\nconst honeypot = cleanText(body.empresa || body.website || body.site_empresa);\nconst erros = [];\n\nif (honeypot) erros.push('Envio bloqueado pela proteção antispam.');\nif (nome.length < 3) erros.push('Informe o nome completo.');\nif (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) erros.push('Informe um e-mail válido.');\nif (telefone.length < 12 || telefone.length > 15) erros.push('Informe um WhatsApp válido com DDD.');\nif (!/^\\d{4}-\\d{2}-\\d{2}$/.test(dataChegada)) erros.push('Informe a data de chegada.');\nif (!/^\\d{4}-\\d{2}-\\d{2}$/.test(dataPartida)) erros.push('Informe a data de partida.');\nif (dataChegada && dataPartida && dataPartida < dataChegada) {\n  erros.push('A data de partida não pode ser anterior à data de chegada.');\n}\nif (!Number.isInteger(adultos) || adultos < 1 || adultos > 99) {\n  erros.push('O número de adultos deve ser entre 1 e 99.');\n}\nif (!Number.isInteger(criancas) || criancas < 0 || criancas > 99) {\n  erros.push('O número de crianças deve ser entre 0 e 99.');\n}\nif (destinos.length === 0) erros.push('Selecione pelo menos um destino.');\n\nconst utm = {\n  utm_source: cleanText(body.utm_source),\n  utm_medium: cleanText(body.utm_medium),\n  utm_campaign: cleanText(body.utm_campaign),\n  utm_content: cleanText(body.utm_content),\n  utm_term: cleanText(body.utm_term),\n  pagina_origem: cleanText(body.pagina_origem || body.page_url),\n  referrer: cleanText(body.referrer),\n};\n\nreturn [{\n  json: {\n    valid: erros.length === 0,\n    status_code: erros.length === 0 ? 200 : 400,\n    message: erros.length === 0 ? 'Dados válidos.' : erros[0],\n    errors: erros,\n    nome,\n    email,\n    whatsapp: telefone,\n    data_chegada: dataChegada,\n    data_partida: dataPartida,\n    num_viajantes: adultos,\n    num_criancas: criancas,\n    destinos_array: destinos,\n    destinos: destinos.join(', '),\n    origem: 'Formulário do site',\n    ...utm,\n    recebido_em: new Date().toISOString(),\n  }\n}];"
+      },
+      "id": "c17bd97e-0ecb-4ca5-878a-ac29f4171717",
+      "name": "Validar e normalizar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1152,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "2b46e42a-4822-4b43-8c10-3d6d9bfa1f19",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1d01e4f0-6ffc-4b54-99be-be2714266670",
+      "name": "Dados válidos?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1392,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { sucesso: false, mensagem: $json.message, erros: $json.errors } }}",
+        "options": {
+          "responseCode": 400,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "https://brasileirosnoatacama.com.br"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      },
+      "id": "ed7de6d5-c875-40f3-9993-5f203c4a9521",
+      "name": "Responder erro de validação",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1664,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'http://crm:8000/api/leads/by-whatsapp/' + encodeURIComponent($json.whatsapp) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "5ea74db4-80a9-4d07-bff4-d4398eb4281a",
+      "name": "Buscar lead pelo WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1664,
+        256
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QulESeRfj4JdhZUI",
+          "name": "CRM Brasileiros API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9aa8c8bd-9644-45d5-8c54-709579f0b259",
+              "leftValue": "={{ $json.statusCode === 200 && !!$json.body?.id }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3908c1ac-3425-4179-9df5-5f5eb7afacca",
+      "name": "Lead existe?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1904,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ 'http://crm:8000/api/leads/' + $('Buscar lead pelo WhatsApp').first().json.body.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "=={{\n(() => {\n  const novo = $('Validar e normalizar').first().json;\n  const atual = $('Buscar lead pelo WhatsApp').first().json.body ?? {};\n\n  const estaVazio = (valor) => {\n    if (valor === null || valor === undefined) return true;\n\n    if (typeof valor === 'string' && valor.trim() === '') {\n      return true;\n    }\n\n    if (Array.isArray(valor) && valor.length === 0) {\n      return true;\n    }\n\n    if (\n      typeof valor === 'object' &&\n      !Array.isArray(valor) &&\n      Object.keys(valor).length === 0\n    ) {\n      return true;\n    }\n\n    return false;\n  };\n\n  const preservarOuPreencher = (campo, valorNovo) => {\n    return estaVazio(atual[campo])\n      ? valorNovo\n      : atual[campo];\n  };\n\n  return {\n    nome: preservarOuPreencher('nome', novo.nome),\n\n    whatsapp: preservarOuPreencher(\n      'whatsapp',\n      novo.whatsapp\n    ),\n\n    destinos: preservarOuPreencher(\n      'destinos',\n      novo.destinos\n    ),\n\n    email: preservarOuPreencher(\n      'email',\n      novo.email\n    ),\n\n    num_viajantes: preservarOuPreencher(\n      'num_viajantes',\n      novo.num_viajantes\n    ),\n\n    num_criancas: preservarOuPreencher(\n      'num_criancas',\n      novo.num_criancas\n    ),\n\n    data_chegada: preservarOuPreencher(\n      'data_chegada',\n      novo.data_chegada\n    ),\n\n    data_partida: preservarOuPreencher(\n      'data_partida',\n      novo.data_partida\n    ),\n\n    datas_destinos: preservarOuPreencher(\n      'datas_destinos',\n      {}\n    ),\n\n    dias_por_destino: preservarOuPreencher(\n      'dias_por_destino',\n      {}\n    )\n  };\n})()\n}}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "89e15f13-59a8-4fe2-b53b-fac809656034",
+      "name": "Atualizar lead existente",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        128
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QulESeRfj4JdhZUI",
+          "name": "CRM Brasileiros API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://crm:8000/api/leads",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n{\n  nome: $('Validar e normalizar').first().json.nome,\n  whatsapp: $('Validar e normalizar').first().json.whatsapp,\n  destinos: $('Validar e normalizar').first().json.destinos,\n  email: $('Validar e normalizar').first().json.email,\n  num_viajantes: $('Validar e normalizar').first().json.num_viajantes,\n  num_criancas: $('Validar e normalizar').first().json.num_criancas,\n  data_chegada: $('Validar e normalizar').first().json.data_chegada,\n  data_partida: $('Validar e normalizar').first().json.data_partida,\n  datas_destinos: {},\n  dias_por_destino: {}\n}\n}}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "56ecfb2c-6b2a-4e38-a201-bb715db82e8c",
+      "name": "Criar novo lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        368
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QulESeRfj4JdhZUI",
+          "name": "CRM Brasileiros API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const normalizado = $('Validar e normalizar').first().json;\nconst busca = $('Buscar lead pelo WhatsApp').first().json;\n\n// Resposta recebida do nó \"Criar novo lead\"\n// ou do nó \"Atualizar lead existente\"\nconst response = $json;\nconst statusCode = Number(response.statusCode ?? 200);\nconst body = response.body ?? response;\n\n// Verifica se o lead já existia antes do processamento\nconst buscaStatusCode = Number(busca.statusCode ?? 0);\n\nconst leadExistia =\n  buscaStatusCode === 200 &&\n  Boolean(busca.body?.id);\n\n// Obtém o ID retornado pela criação, atualização ou busca\nconst leadId =\n  body?.id ??\n  body?.lead_id ??\n  busca.body?.id ??\n  null;\n\n// Considera sucesso apenas se o CRM respondeu com 2xx\n// e foi possível identificar o lead\nconst ok =\n  statusCode >= 200 &&\n  statusCode < 300 &&\n  Boolean(leadId);\n\n// Monta as informações de campanha\nconst utmPartes = [\n  normalizado.utm_source &&\n    `utm_source=${normalizado.utm_source}`,\n\n  normalizado.utm_medium &&\n    `utm_medium=${normalizado.utm_medium}`,\n\n  normalizado.utm_campaign &&\n    `utm_campaign=${normalizado.utm_campaign}`,\n\n  normalizado.utm_content &&\n    `utm_content=${normalizado.utm_content}`,\n\n  normalizado.utm_term &&\n    `utm_term=${normalizado.utm_term}`,\n].filter(Boolean);\n\n// Monta a anotação que será adicionada ao lead\nconst anotacao = [\n  'Novo envio recebido pelo formulário do site.',\n\n  `Destinos: ${normalizado.destinos}.`,\n\n  `Adultos: ${normalizado.num_viajantes}.`,\n\n  `Crianças: ${normalizado.num_criancas}.`,\n\n  `Chegada: ${normalizado.data_chegada}.`,\n\n  `Partida: ${normalizado.data_partida}.`,\n\n  normalizado.pagina_origem &&\n    `Página: ${normalizado.pagina_origem}.`,\n\n  utmPartes.length > 0 &&\n    `Campanha: ${utmPartes.join(' | ')}.`,\n]\n  .filter(Boolean)\n  .join(' ');\n\nreturn [\n  {\n    json: {\n      ok,\n      status_code_crm: statusCode,\n      lead_id: leadId,\n      acao: leadExistia ? 'atualizado' : 'criado',\n      anotacao,\n\n      ...normalizado,\n\n      crm_body: body,\n    },\n  },\n];"
+      },
+      "id": "1af1bf43-eb13-4ca6-a393-7b579e332fe4",
+      "name": "Preparar contexto do lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2416,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "87e2435b-af42-437b-a6e2-2a5220634533",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "8272a782-fc93-4323-b75d-df8e3ab5bcd2",
+      "name": "Lead processado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2656,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { sucesso: false, mensagem: 'Não foi possível registrar a solicitação. Tente novamente.', codigo_crm: $json.status_code_crm } }}",
+        "options": {
+          "responseCode": 502,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "https://brasileirosnoatacama.com.br"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      },
+      "id": "dd94e493-dc40-46b4-8f75-8cbb5164bca9",
+      "name": "Responder erro do CRM",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2912,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://crm:8000/api/pipeline/funnels/3/leads",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { lead_id: $('Preparar contexto do lead').first().json.lead_id, etapa_id: 'nova_oportunidade' } }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "6601163b-dccb-43f5-92c5-e6e323d0524f",
+      "name": "Adicionar ao funil Vendas Formulário",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2912,
+        128
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QulESeRfj4JdhZUI",
+          "name": "CRM Brasileiros API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ 'http://crm:8000/api/leads/' + $('Preparar contexto do lead').first().json.lead_id + '/anotacoes' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "texto",
+              "value": "={{ $('Preparar contexto do lead').first().json.anotacao }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "83a41050-267f-4c82-ba0a-eacb43cbd8ac",
+      "name": "Adicionar anotação ao lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3184,
+        128
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QulESeRfj4JdhZUI",
+          "name": "CRM Brasileiros API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const contexto = $('Preparar contexto do lead').first().json;\nconst funil = $('Adicionar ao funil Vendas Formulário').first().json;\nconst nota = $json;\n\nconst funilStatus = Number(funil.statusCode ?? 200);\nconst notaStatus = Number(nota.statusCode ?? 200);\n\n// 409 significa que o lead já estava nesse funil; nesse caso, preservamos a etapa atual.\nconst funilOk = (funilStatus >= 200 && funilStatus < 300) || funilStatus === 409;\nconst notaOk = notaStatus >= 200 && notaStatus < 300;\n\nreturn [{\n  json: {\n    sucesso: true,\n    mensagem: 'Solicitação enviada com sucesso! Em breve entraremos em contato.',\n    lead_id: contexto.lead_id,\n    acao: contexto.acao,\n    funil: 'Vendas: Formulário',\n    etapa_inicial: funilStatus === 409 ? 'Etapa atual preservada' : 'Nova Oportunidade',\n    funil_ok: funilOk,\n    anotacao_ok: notaOk,\n  }\n}];"
+      },
+      "id": "3c4700cd-ac57-4fa5-a3f4-1020cad6d52d",
+      "name": "Montar resposta de sucesso",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3440,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "https://brasileirosnoatacama.com.br"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      },
+      "id": "e89b4d9c-fa57-4db7-9318-4b8d40e462c9",
+      "name": "Responder sucesso",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3680,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Formulário do site → CRM BnA\n\n- Webhook de produção: `/webhook/formulario-site`\n- Funil configurado: **Vendas: Formulário** (ID 3)\n- Etapa inicial: **Nova Oportunidade** (`nova_oportunidade`)\n- Credencial reutilizada: **CRM Brasileiros API**\n- Durante os testes, CORS está como `*`. Antes da produção, troque pelo domínio exato do site.\n- O formulário deve enviar `FormData` para evitar preflight CORS.\n- Lead existente no mesmo funil não volta para a primeira etapa; resposta 409 é tratada como sucesso.",
+        "height": 300,
+        "width": 600,
+        "color": 5
+      },
+      "id": "ec62e228-282b-417b-9aa9-f9c4e62bf0d1",
+      "name": "INSTRUÇÕES",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        912,
+        -16
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Receber Formulário do Site": {
+      "main": [
+        [
+          {
+            "node": "Validar e normalizar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar e normalizar": {
+      "main": [
+        [
+          {
+            "node": "Dados válidos?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dados válidos?": {
+      "main": [
+        [
+          {
+            "node": "Buscar lead pelo WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder erro de validação",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar lead pelo WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Lead existe?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lead existe?": {
+      "main": [
+        [
+          {
+            "node": "Atualizar lead existente",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Criar novo lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Atualizar lead existente": {
+      "main": [
+        [
+          {
+            "node": "Preparar contexto do lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar novo lead": {
+      "main": [
+        [
+          {
+            "node": "Preparar contexto do lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar contexto do lead": {
+      "main": [
+        [
+          {
+            "node": "Lead processado?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lead processado?": {
+      "main": [
+        [
+          {
+            "node": "Adicionar ao funil Vendas Formulário",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder erro do CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Adicionar ao funil Vendas Formulário": {
+      "main": [
+        [
+          {
+            "node": "Adicionar anotação ao lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Adicionar anotação ao lead": {
+      "main": [
+        [
+          {
+            "node": "Montar resposta de sucesso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar resposta de sucesso": {
+      "main": [
+        [
+          {
+            "node": "Responder sucesso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "0e969b38-0b0c-46f8-b47f-a0c7f9ba118a",
+  "meta": {
+    "instanceId": "083aac8fdc212de887e980aca64dcecc5afaa37badada0c3ad26e1ea83120112"
+  },
+  "id": "b8R0yXpUcIlNhXIH",
+  "tags": []
+}

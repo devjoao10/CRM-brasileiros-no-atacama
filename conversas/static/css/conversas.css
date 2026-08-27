@@ -249,6 +249,33 @@ body {
 
 .conv-inbox-badge[data-zero="1"] { visibility: hidden; }
 
+/* AUDIT-2026-08-WA — a FILA DE ESPERA precisa gritar.
+   O badge dela conta uma coisa diferente de "nao lidas": a Bia concluiu a
+   triagem e NENHUM humano respondeu. Abrir a conversa zera `unread_count`,
+   mas nao encerra a espera — por isso este numero nao some ao abrir. */
+.conv-inbox-badge[data-count="fila"]:not([data-zero="1"]) {
+    background: var(--error);
+    color: #fff;
+}
+
+/* Linha da conversa que espera por um humano. */
+.conv-item.aguardando-humano {
+    box-shadow: inset 3px 0 0 var(--error);
+}
+
+.conv-aguardando {
+    display: inline-block;
+    margin-left: 4px;
+    padding: 0 5px;
+    border-radius: var(--radius-full);
+    background: rgba(181, 69, 69, 0.12);
+    color: var(--error);
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .02em;
+}
+
 /* Estado de ERRO da lista — nunca deve parecer "vazio" (resultado valido). */
 .conv-list-error {
     padding: 24px 20px;
@@ -534,6 +561,27 @@ body {
 
 .message-content {
     margin-bottom: 4px;
+    /* AUDIT-2026-08-WF — o conteudo e injetado via innerHTML, onde o `
+` do
+       texto original nao vira quebra: o CSS `white-space: normal` (o default)
+       colapsa qualquer sequencia de espaco em branco. Uma mensagem escrita em
+       varios paragrafos — um orcamento, por exemplo — chegava ao operador como
+       um bloco unico, e a mesma mensagem no WhatsApp do cliente aparecia
+       formatada. `pre-wrap` preserva as quebras e ainda quebra linha longa. */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/* AUDIT-2026-08-WF — marcacao do WhatsApp renderizada na bolha. */
+.message-content b { font-weight: 700; }
+.message-content i { font-style: italic; }
+.message-content s { text-decoration: line-through; }
+.message-content code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .92em;
+    background: rgba(0, 0, 0, 0.06);
+    padding: 0 3px;
+    border-radius: 3px;
 }
 
 .message-meta {
@@ -2011,3 +2059,18 @@ button:disabled {
 
 .svc-toggle input { cursor: pointer; }
 .svc-toggle.busy { opacity: .5; pointer-events: none; }
+
+/* AUDIT-2026-08-WF — reaproveitar mensagem enviada. */
+.msg-reuse-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: inherit;
+    opacity: .45;
+    font-size: 13px;
+    padding: 0 2px;
+    vertical-align: middle;
+    min-height: 24px;
+}
+.msg-reuse-btn:hover,
+.msg-reuse-btn:focus-visible { opacity: 1; }

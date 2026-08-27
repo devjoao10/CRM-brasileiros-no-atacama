@@ -10,9 +10,9 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Caveat+Brush&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
-    <link rel="stylesheet" href="/static/css/variables.css">
-    <link rel="stylesheet" href="/static/css/login.css?v=3">
-    <link rel="icon" href="/static/img/logo.png" type="image/png">
+    <link rel="stylesheet" href="/static/css/variables.css?v={{ asset_version }}">
+    <link rel="stylesheet" href="/static/css/login.css?v={{ asset_version }}">
+    <link rel="icon" href="/static/img/logo.png?v={{ asset_version }}" type="image/png">
 </head>
 <body>
     <div class="login-container">
@@ -21,7 +21,7 @@
         <div class="login-brand">
             <div class="brand-content">
                 <div class="brand-logo">
-                    <img src="/static/img/logo.png" alt="Brasileiros no Atacama">
+                    <img src="/static/img/logo.png?v={{ asset_version }}" alt="Brasileiros no Atacama">
                 </div>
                 <h1 class="brand-title">
                     Brasileiros<br>
@@ -48,7 +48,7 @@
 
                 <!-- Mobile Logo -->
                 <div class="mobile-logo">
-                    <img src="/static/img/logo.png" alt="Brasileiros no Atacama">
+                    <img src="/static/img/logo.png?v={{ asset_version }}" alt="Brasileiros no Atacama">
                     <div class="mobile-brand-name">Brasileiros no Atacama</div>
                 </div>
 
@@ -65,7 +65,16 @@
                 </div>
 
                 <!-- Form -->
-                <form id="loginForm" novalidate>
+                <!-- AUDIT-2026-08-W1A: o submit padrao do navegador nunca pode
+                     vazar a senha. Sem `action`/`method`, apertar Enter com o
+                     JS fora do ar fazia `GET /login?email=...&password=...` —
+                     senha em claro na URL, no historico e no log de acesso.
+                     Tres camadas agora: `method="post"` (nunca query string),
+                     `onsubmit="return false"` (o submit nativo nao acontece; o
+                     envio real e o listener de login.js, que faz preventDefault
+                     e chama /api/auth/login por fetch) e o input de senha SEM
+                     `name`, logo nao serializavel em nenhum submit. -->
+                <form id="loginForm" method="post" onsubmit="return false;" novalidate>
                     <div class="field-group">
                         <label for="email">E-mail</label>
                         <input
@@ -84,7 +93,6 @@
                             <input
                                 type="password"
                                 id="password"
-                                name="password"
                                 placeholder="••••••••"
                                 autocomplete="current-password"
                                 required
@@ -108,7 +116,7 @@
         </div>
     </div>
 
-    <script src="/static/js/auth.js"></script>
-    <script src="/static/js/login.js"></script>
+    <script src="/static/js/auth.js?v={{ asset_version }}"></script>
+    <script src="/static/js/login.js?v={{ asset_version }}"></script>
 </body>
 </html>

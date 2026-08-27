@@ -3,12 +3,10 @@ from datetime import datetime, date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import or_, extract, String
-from sqlalchemy.dialects.postgresql import JSONB
-from app.database import IS_SQLITE
+from sqlalchemy import or_, extract
 # o predicado mora em app/query_filters.py porque leads.py precisa do MESMO;
 # duas copias divergiriam
-from app.query_filters import campo_personalizado_match
+from app.query_filters import campo_personalizado_match, destino_match
 
 from app.database import get_db
 from app.models.segment import Segment
@@ -28,14 +26,11 @@ router = APIRouter(prefix="/api/segments", tags=["Segmentação"])
 
 
 def _json_list_contains(column, value: str):
-    """Filtra coluna JSON list que contenha um valor. Compatível com SQLite e PostgreSQL."""
-    if IS_SQLITE:
-        return column.cast(String).ilike(f'%"{value}"%')
-    else:
-        # PostgreSQL: @> so existe para jsonb e a coluna e json — cast na
-        # EXPRESSAO da query (nao altera o schema nem os dados).
-        import json
-        return column.cast(JSONB).op("@>")(json.dumps([value]))
+    """Filtra coluna JSON list que contenha um valor. Compatível com SQLite e PostgreSQL.
+
+    AUDIT-2026-08-WF2 — expressao unica em app/query_filters.py.
+    """
+    return destino_match(column, value)
 
 
 # ─── Helpers ─────────────────────────────────────

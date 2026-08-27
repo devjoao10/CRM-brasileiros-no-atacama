@@ -120,7 +120,11 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
+# AUDIT-2026-08-W1E (F8): a regra cobria so o nome exato `.env`. Um
+# `cp .env .env.bak` (ou .env.production, .env.local) escapava e comitava
+# SECRET_KEY, senha do Postgres e tokens da Meta. Glob + negacao do exemplo.
+.env*
+!.env.example
 .venv
 env/
 venv/
@@ -173,3 +177,22 @@ scratch/
 
 # graphify (grafo de auditoria, artefato local)
 graphify-out/
+
+# AUDIT-2026-08-W1E (F8): dumps e backups do banco NUNCA entram no repo.
+# scripts/backup_postgres.sh aceita BACKUP_DIR sobrescrivivel — um
+# `BACKUP_DIR=./backups` comitaria a base de clientes inteira em texto claro.
+*.sql
+*.sql.gz
+*.dump
+backups/
+# Excecao: schema versionado do container do Postgres (nao e dump de dados).
+!docker/postgres/*.sql
+
+.env
+
+# aia-harness
+.claude/settings.local.json
+.claude/*.local.*
+.claude/.aia-harness-pending/
+graphify-out/cost.json
+graphify-out/cache/

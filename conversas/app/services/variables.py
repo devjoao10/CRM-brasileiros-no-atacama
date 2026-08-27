@@ -457,6 +457,45 @@ def _problem(token: str, code: str) -> VariableProblem:
     )
 
 
+
+# AUDIT-2026-08-WD (F-348) — a Meta RECUSA parametro de template com quebra de
+# linha, tabulacao ou sequencia de 4+ espacos, e trunca acima de 1024 chars.
+#
+# Ate aqui o valor resolvido so levava `.strip()`. Um nome de lead colado do
+# Excel com tabulacao, uma anotacao com quebra de linha ou um destino com
+# espaco duplo faziam a Meta devolver 132000 — e o operador via "falha no
+# envio" sem nenhuma pista de que o problema era um caractere invisivel no
+# meio de um valor que ELE nao digitou.
+#
+# Colapsar e a correcao certa aqui, nao recusar: o parametro e UMA celula de um
+# template de linha unica; a quebra nunca teria efeito visual no WhatsApp
+# mesmo. Recusar transformaria um dado cosmeticamente sujo numa mensagem nao
+# entregue.
+_ESPACOS_PROIBIDOS = re.compile("[\r\n\t\v\f]+")
+_ESPACOS_REPETIDOS = re.compile(r" {2,}")
+# Teto da Meta para parametro de BODY. Truncamos com reticencia para o
+# atendente perceber que algo foi cortado, em vez de a mensagem sair mutilada
+# no meio de uma palavra sem sinal nenhum.
+_LIMITE_PARAMETRO = 1024
+
+
+def sanitizar_parametro(valor: str) -> str:
+    """
+    Deixa o valor no formato que a Meta aceita como parametro de template.
+
+    Quebra de linha, tabulacao e espacos repetidos viram UM espaco; as bordas
+    saem; o excesso e truncado. Nao mexe em acento, emoji nem pontuacao — o
+    problema da Meta e com espaco em branco estrutural, nao com conteudo.
+    """
+    if not valor:
+        return ""
+    limpo = _ESPACOS_PROIBIDOS.sub(" ", valor)
+    limpo = _ESPACOS_REPETIDOS.sub(" ", limpo).strip()
+    if len(limpo) > _LIMITE_PARAMETRO:
+        limpo = limpo[: _LIMITE_PARAMETRO - 1].rstrip() + chr(8230)
+    return limpo
+
+
 def render(db: Session, text: Optional[str], ctx: VariableContext):
     """
     Aplica o escape `@@` e substitui os tokens CADASTRADOS pelo valor do
@@ -499,7 +538,7 @@ def render(db: Session, text: Optional[str], ctx: VariableContext):
             continue
 
         if variable.kind == "fixed":
-            value = (variable.fixed_value or "").strip()
+            value = sanitizar_parametro(variable.fixed_value or "")
             if not value:
                 problems.append(_problem(token, "empty_fixed"))
                 values[token] = ""
@@ -525,7 +564,7 @@ def render(db: Session, text: Optional[str], ctx: VariableContext):
             )
             resolved = None
 
-        resolved = "" if resolved is None else str(resolved).strip()
+        resolved = "" if resolved is None else sanitizar_parametro(str(resolved))
         if not resolved:
             problems.append(_problem(token, "empty_dynamic"))
             values[token] = ""

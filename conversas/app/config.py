@@ -1,4 +1,5 @@
 import os
+import secrets
 
 # ─── App ─────────────────────────────────────────
 PROJECT_NAME = "Conversas — Brasileiros no Atacama"
@@ -14,7 +15,26 @@ DATABASE_URL = os.getenv(
 )
 
 # ─── Auth ────────────────────────────────────────
-SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-change-me")
+# AUDIT-2026-08-W1B — F1: o fallback anterior era uma CONSTANTE literal de dev,
+# versionada neste repositorio (logo, publica). Como o Conversas
+# compartilha SECRET_KEY *e* a tabela `users` com o CRM (app/), qualquer pessoa
+# com acesso ao repo podia assinar {"sub": "<email de um admin>"} e ser admin nos
+# DOIS servicos — o token e aceito por ambos. Espelha exatamente app/config.py:16-23:
+#   • dev  -> chave aleatoria POR PROCESSO (tokens morrem no restart, mas nao existe
+#             segredo previsivel em lugar nenhum);
+#   • prod -> RuntimeError. Subir sem segredo e pior do que nao subir, entao a
+#             falha e ruidosa no boot em vez de silenciosa em runtime.
+# `os.getenv` devolve "" quando a var existe vazia; o `if not SECRET_KEY` cobre isso.
+_default_key = secrets.token_urlsafe(64) if ENVIRONMENT == "development" else None
+SECRET_KEY = os.getenv("SECRET_KEY", _default_key)
+if not SECRET_KEY:
+    raise RuntimeError(
+        "\n\n🔒 ERRO CRÍTICO: SECRET_KEY não está definida!\n"
+        "O Conversas compartilha a chave de assinatura com o CRM — sem ela\n"
+        "qualquer token seria forjável em AMBOS os serviços.\n"
+        "Defina SECRET_KEY (a MESMA do CRM) antes de rodar fora de development.\n"
+        "Gere uma com: python -c \"import secrets; print(secrets.token_urlsafe(64))\"\n"
+    )
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))
 
@@ -33,6 +53,24 @@ META_APP_SECRET = os.getenv("META_APP_SECRET", "")  # App Secret — valida X-Hu
 # ─── N8N Integration ─────────────────────────────
 N8N_BASE_URL = os.getenv("N8N_BASE_URL", "http://127.0.0.1:5678")
 N8N_AGENT_ENABLED = os.getenv("N8N_AGENT_ENABLED", "false").lower() == "true"
+
+# AUDIT-2026-08-WF2 (D2) — cabecalho de autenticacao do webhook da Bia.
+#
+# `/webhook/agent-bia` esta aberto na internet, publicado pelo Traefik. O
+# webhook irmao (`/webhook/gerenciador-leads`) ja recebeu Header Auth (D1), mas
+# este NAO podia receber: o Conversas nao mandava cabecalho nenhum, entao ligar
+# a autenticacao no n8n derrubaria a Bia no mesmo instante.
+#
+# Com estas duas variaveis o Conversas passa a enviar o cabecalho. Ambas vazias
+# (default) = nenhum cabecalho, exatamente o comportamento de hoje — nenhum
+# ambiente regride por nao configurar. O nome e configuravel porque a credencial
+# "Header Auth" do n8n deixa quem cria escolher o nome do cabecalho; tem de
+# bater com o que estiver la.
+#
+# ORDEM OBRIGATORIA no deploy: configurar aqui e subir o Conversas PRIMEIRO;
+# so depois ligar a autenticacao no n8n. O inverso corta a Bia.
+N8N_WEBHOOK_AUTH_HEADER = os.getenv("N8N_WEBHOOK_AUTH_HEADER", "").strip()
+N8N_WEBHOOK_AUTH_VALUE = os.getenv("N8N_WEBHOOK_AUTH_VALUE", "").strip()
 
 # ─── Media storage (CONV-02) ─────────────────────
 # Espelho local dos binarios de midia (media_assets.local_path e RELATIVO a este dir).

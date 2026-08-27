@@ -116,7 +116,31 @@ check(": notificationState.originalTitle" in section,
 check("ackConvNotifications" in js and "window.addEventListener('focus', ackConvNotifications)" in js,
       "reset do contador ao focar a aba")
 check("visibilitychange" in section, "reset tambem ao voltar a aba visivel")
-check("ackConvNotifications();" in js.split("async function loadChat")[1][:600],
+def _corpo_da_funcao(fonte, assinatura):
+    """Corpo da funcao, do primeiro { ate a chave que o fecha.
+
+    AUDIT-2026-08-orq: aqui havia `[:600]` — os 600 primeiros caracteres depois
+    da assinatura. Esse numero nao descreve o produto: descreve o tamanho que
+    loadChat tinha no dia em que o teste foi escrito. Um comentario acrescentado
+    acima da chamada empurrou `ackConvNotifications()` para fora da janela e o
+    teste ficou vermelho sem que nada de comportamento mudasse. O mesmo aconteceu
+    em test_conversas_mobile_pwa.py, com outra janela arbitraria, na mesma funcao.
+    Contar chaves custa oito linhas e nao envelhece.
+    """
+    i = fonte.index(assinatura)
+    i = fonte.index("{", i)
+    prof = 0
+    for j in range(i, len(fonte)):
+        if fonte[j] == "{":
+            prof += 1
+        elif fonte[j] == "}":
+            prof -= 1
+            if prof == 0:
+                return fonte[i:j + 1]
+    raise AssertionError("chave nao fechada em " + assinatura)
+
+
+check("ackConvNotifications();" in _corpo_da_funcao(js, "async function loadChat"),
       "abrir a conversa da o visto (reset) no contador")
 
 # ============ 4. PERMISSAO SO NO CLIQUE ============

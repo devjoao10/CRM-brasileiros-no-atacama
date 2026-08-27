@@ -4,8 +4,6 @@ import os
 import uuid
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 from fastapi.responses import Response
 from pydantic import BaseModel
 import google.generativeai as genai
@@ -14,6 +12,7 @@ from google.protobuf.struct_pb2 import Struct
 from sqlalchemy.orm import Session
 
 from app.config import GEMINI_API_KEY, MAX_UPLOAD_SIZE_BYTES
+from app.limiter import limiter
 from app.auth import get_current_user
 from app.models.user import User
 from app.models.chat import ChatSession, ChatMessage
@@ -21,7 +20,14 @@ from app.database import get_db
 from app.services.ai_tools import AVAILABLE_TOOLS, TOOL_FUNCTIONS, set_ai_user_context, clear_ai_user_context
 
 router = APIRouter(prefix="/api/ai", tags=["Assistente IA"])
-_ai_limiter = Limiter(key_func=get_remote_address)
+
+# AUDIT-2026-08-W1C (F8): havia aqui uma SEGUNDA instância de Limiter — o mesmo
+# defeito que app/limiter.py documenta como já corrigido (WP-SEC-03). Uma
+# instância própria não vê `app.state.limiter` nem o SlowAPIMiddleware, então o
+# teto global por IP não valia para o chat. Agora usamos a instância única de
+# app/limiter.py (importada acima) — nada é criado aqui.
+
+logger = logging.getLogger(__name__)
 
 # Diretório para uploads e documentos gerados
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads")
@@ -330,7 +336,7 @@ async def download_file(
 # ─── Chat ────────────────────────────────────────────────────────────
 
 @router.post("/chat", summary="Conversar com a IA do sistema")
-@_ai_limiter.limit("20/minute")
+@limiter.limit("20/minute")
 def ai_chat(
     request: Request,
     chat_request: ChatRequest,
@@ -425,7 +431,14 @@ def ai_chat(
         # Envia a mensagem principal
         response = chat.send_message(last_message)
         
-        # Loop de function calling com tratamento robusto de erros
+        # Loop de function calling com tratamento robusto de erros.
+        # AUDIT-2026-08-W1C (F9): antes havia cinco `except:` nus (pass/break) e,
+        # no fim, um pedido de desculpas devolvido com HTTP 200. Consequência: uma
+        # ferramenta podia ter EXECUTADO UMA ESCRITA e o usuário ser informado de
+        # que nada aconteceu. Agora rastreamos falha real e ferramentas já
+        # executadas, e uma falha total vira erro HTTP de verdade.
+        loop_failed = False
+        executed_tools = []
         max_iterations = 10
         iteration = 0
         while iteration < max_iterations:
@@ -441,8 +454,10 @@ def ai_chat(
             finish_reason = None
             try:
                 finish_reason = candidate.finish_reason
-            except:
-                pass
+            except AttributeError:
+                # Candidato sem finish_reason (formato inesperado do SDK): não é
+                # falha de execução, segue o fluxo normal — mas fica no log.
+                logger.warning("[AI CHAT] candidato sem finish_reason")
             
             # MALFORMED_FUNCTION_CALL ou outros erros — retentar sem tools
             if finish_reason and str(finish_reason) not in ('0', '1', 'STOP', 'FinishReason.STOP', 'MAX_TOKENS', 'FinishReason.MAX_TOKENS'):
@@ -454,8 +469,10 @@ def ai_chat(
                     )
                     chat_retry = model_no_tools.start_chat(history=history)
                     response = chat_retry.send_message(last_message)
-                except:
-                    pass
+                except Exception:
+                    # Retry sem tools também falhou: não há resposta utilizável.
+                    logger.exception("[AI CHAT] retry sem tools falhou")
+                    loop_failed = True
                 break
             
             # Verificar se há function_call
@@ -466,7 +483,9 @@ def ai_chat(
                         if part.function_call and part.function_call.name:
                             function_call = part.function_call
                             break
-            except:
+            except (AttributeError, TypeError, ValueError):
+                logger.exception("[AI CHAT] falha ao inspecionar parts da resposta")
+                loop_failed = True
                 break
             
             if not function_call:
@@ -483,10 +502,18 @@ def ai_chat(
             # Execute local function
             if func_name in TOOL_FUNCTIONS:
                 func = TOOL_FUNCTIONS[func_name]
+                executed_tools.append(func_name)
                 try:
                     result = func(**args)
-                except Exception as e:
-                    result = json.dumps({"error": str(e)})
+                except Exception:
+                    # AUDIT-2026-08-W1C (F9): `str(e)` era serializado de volta ao
+                    # contexto do modelo — string de conexão, host, caminho de
+                    # arquivo, tudo virava texto que a IA pode repetir no chat.
+                    # Detalhe só no log (mesmo padrão de ai_tools.run_select_query).
+                    logger.exception(f"[AI CHAT] ferramenta {func_name} falhou")
+                    result = json.dumps({
+                        "error": f"A ferramenta {func_name} falhou. Detalhes registrados no log do servidor."
+                    })
             else:
                 result = json.dumps({"error": f"Função {func_name} não encontrada."})
             
@@ -502,8 +529,13 @@ def ai_chat(
                     )
                 )
                 response = chat.send_message(function_response)
-            except Exception as e:
-                # Se falhar ao enviar resposta da função, quebrar o loop
+            except Exception:
+                # Falha ao devolver o resultado ao modelo. A ferramenta JÁ RODOU
+                # (pode ter escrito no banco) — isto é falha real, não silêncio.
+                logger.exception(
+                    f"[AI CHAT] falha ao devolver resultado de {func_name} ao modelo"
+                )
+                loop_failed = True
                 break
             
         # Obter texto final com segurança
@@ -513,11 +545,25 @@ def ai_chat(
                 for part in response.candidates[0].content.parts:
                     if hasattr(part, 'text') and part.text:
                         final_text += part.text
-        except:
-            pass
-        
+        except (AttributeError, IndexError, TypeError, ValueError):
+            logger.exception("[AI CHAT] falha ao extrair texto final da resposta")
+            loop_failed = True
+
         if not final_text:
-            final_text = "Desculpe, não consegui processar sua solicitação no momento. Tente reformular a pergunta ou tente novamente."
+            # AUDIT-2026-08-W1C (F9): sem texto = nenhuma resposta produzida.
+            # Devolver 200 com um pedido de desculpas fazia o frontend (e o
+            # usuário) tratarem uma falha como sucesso, inclusive quando uma
+            # ferramenta de ESCRITA já havia rodado. Agora é erro HTTP explícito.
+            detalhe = "Erro interno da IA: não foi possível gerar uma resposta."
+            if executed_tools:
+                detalhe += (
+                    " Atenção: ações já podem ter sido executadas no sistema"
+                    f" ({', '.join(sorted(set(executed_tools)))}) — confira antes de repetir."
+                )
+            logger.error(
+                f"[AI CHAT] resposta vazia (loop_failed={loop_failed}, tools={executed_tools})"
+            )
+            raise HTTPException(status_code=502, detail=detalhe)
         
         # Salvar resposta da IA no banco
         ai_msg = ChatMessage(session_id=session.id, role="model", content=final_text)
@@ -540,8 +586,12 @@ def ai_chat(
             "session_id": session.id
         }
         
-    except Exception as e:
-        logging.exception("Erro interno da IA")
+    except HTTPException:
+        # HTTPException é subclasse de Exception: sem este re-raise o 502 acima
+        # (F9) seria reescrito como um 500 genérico e perderia o detalhe.
+        raise
+    except Exception:
+        logger.exception("Erro interno da IA")
         raise HTTPException(status_code=500, detail="Erro interno da IA. Tente novamente.")
     finally:
         clear_ai_user_context()

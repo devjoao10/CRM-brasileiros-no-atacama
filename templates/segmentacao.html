@@ -159,8 +159,8 @@
                         <div class="fb-tag-chips" id="fbDestinos">Carregando...</div>
                     </div>
                     <div class="fb-row" style="margin-top:var(--space-3)">
-                        <div><label class="fb-label">Ativo?</label><select id="fbStatus" class="fb-input" onchange="previewCount()"><option value="">Todos</option><option value="true">Ativos</option><option value="false">Inativos</option></select></div>
-                        <div><label class="fb-label">Status da Venda</label><select id="fbStatusVenda" class="fb-input" onchange="previewCount()">
+                        <div><label class="fb-label">Ativo?</label><select id="fbStatus" class="fb-input" onchange="debouncePreview()"><option value="">Todos</option><option value="true">Ativos</option><option value="false">Inativos</option></select></div>
+                        <div><label class="fb-label">Status da Venda</label><select id="fbStatusVenda" class="fb-input" onchange="debouncePreview()">
                             <option value="">Todos</option>
                             <option value="em_negociacao">Em Negociação</option>
                             <option value="venda">Ganho (Venda)</option>
@@ -172,20 +172,20 @@
                 <div class="fb-section">
                     <div class="fb-section-title">Período de Viagem</div>
                     <div class="fb-row">
-                        <div><label class="fb-label">Ano chegada</label><select id="fbAnoCheg" class="fb-input" onchange="previewCount()"><option value="">Qualquer</option></select></div>
-                        <div><label class="fb-label">Mês chegada</label><select id="fbMesCheg" class="fb-input" onchange="previewCount()"><option value="">Qualquer</option><option value="1">Jan</option><option value="2">Fev</option><option value="3">Mar</option><option value="4">Abr</option><option value="5">Mai</option><option value="6">Jun</option><option value="7">Jul</option><option value="8">Ago</option><option value="9">Set</option><option value="10">Out</option><option value="11">Nov</option><option value="12">Dez</option></select></div>
+                        <div><label class="fb-label">Ano chegada</label><select id="fbAnoCheg" class="fb-input" onchange="debouncePreview()"><option value="">Qualquer</option></select></div>
+                        <div><label class="fb-label">Mês chegada</label><select id="fbMesCheg" class="fb-input" onchange="debouncePreview()"><option value="">Qualquer</option><option value="1">Jan</option><option value="2">Fev</option><option value="3">Mar</option><option value="4">Abr</option><option value="5">Mai</option><option value="6">Jun</option><option value="7">Jul</option><option value="8">Ago</option><option value="9">Set</option><option value="10">Out</option><option value="11">Nov</option><option value="12">Dez</option></select></div>
                     </div>
                     <div class="fb-row">
-                        <div><label class="fb-label">Chegada de</label><input type="date" id="fbChegDe" class="fb-input" onchange="previewCount()"></div>
-                        <div><label class="fb-label">Chegada até</label><input type="date" id="fbChegAte" class="fb-input" onchange="previewCount()"></div>
+                        <div><label class="fb-label">Chegada de</label><input type="date" id="fbChegDe" class="fb-input" onchange="debouncePreview()"></div>
+                        <div><label class="fb-label">Chegada até</label><input type="date" id="fbChegAte" class="fb-input" onchange="debouncePreview()"></div>
                     </div>
                     <div class="fb-row">
-                        <div><label class="fb-label">Ano partida</label><select id="fbAnoPartida" class="fb-input" onchange="previewCount()"><option value="">Qualquer</option></select></div>
-                        <div><label class="fb-label">Mês partida</label><select id="fbMesPartida" class="fb-input" onchange="previewCount()"><option value="">Qualquer</option><option value="1">Jan</option><option value="2">Fev</option><option value="3">Mar</option><option value="4">Abr</option><option value="5">Mai</option><option value="6">Jun</option><option value="7">Jul</option><option value="8">Ago</option><option value="9">Set</option><option value="10">Out</option><option value="11">Nov</option><option value="12">Dez</option></select></div>
+                        <div><label class="fb-label">Ano partida</label><select id="fbAnoPartida" class="fb-input" onchange="debouncePreview()"><option value="">Qualquer</option></select></div>
+                        <div><label class="fb-label">Mês partida</label><select id="fbMesPartida" class="fb-input" onchange="debouncePreview()"><option value="">Qualquer</option><option value="1">Jan</option><option value="2">Fev</option><option value="3">Mar</option><option value="4">Abr</option><option value="5">Mai</option><option value="6">Jun</option><option value="7">Jul</option><option value="8">Ago</option><option value="9">Set</option><option value="10">Out</option><option value="11">Nov</option><option value="12">Dez</option></select></div>
                     </div>
                     <div class="fb-row">
-                        <div><label class="fb-label">Partida de</label><input type="date" id="fbPartidaDe" class="fb-input" onchange="previewCount()"></div>
-                        <div><label class="fb-label">Partida até</label><input type="date" id="fbPartidaAte" class="fb-input" onchange="previewCount()"></div>
+                        <div><label class="fb-label">Partida de</label><input type="date" id="fbPartidaDe" class="fb-input" onchange="debouncePreview()"></div>
+                        <div><label class="fb-label">Partida até</label><input type="date" id="fbPartidaAte" class="fb-input" onchange="debouncePreview()"></div>
                     </div>
                 </div>
 
@@ -202,7 +202,7 @@
                     <div class="fb-section-title">Funil &amp; Etapa</div>
                     <div class="fb-row">
                         <div><label class="fb-label">Funil</label><select id="fbFunnel" class="fb-input" onchange="onFunnelChange()"><option value="">Todos</option></select></div>
-                        <div id="fbEtapaWrap" style="display:none"><label class="fb-label">Etapa</label><select id="fbEtapa" class="fb-input" onchange="previewCount()"><option value="">Todas</option></select></div>
+                        <div id="fbEtapaWrap" style="display:none"><label class="fb-label">Etapa</label><select id="fbEtapa" class="fb-input" onchange="debouncePreview()"><option value="">Todas</option></select></div>
                     </div>
                 </div>
 
@@ -217,8 +217,8 @@
                 <div class="fb-section">
                     <div class="fb-section-title">Data de Cadastro</div>
                     <div class="fb-row">
-                        <div><label class="fb-label">De</label><input type="date" id="fbCriadoDe" class="fb-input" onchange="previewCount()"></div>
-                        <div><label class="fb-label">Até</label><input type="date" id="fbCriadoAte" class="fb-input" onchange="previewCount()"></div>
+                        <div><label class="fb-label">De</label><input type="date" id="fbCriadoDe" class="fb-input" onchange="debouncePreview()"></div>
+                        <div><label class="fb-label">Até</label><input type="date" id="fbCriadoAte" class="fb-input" onchange="debouncePreview()"></div>
                     </div>
                 </div>
 
@@ -226,7 +226,7 @@
                     <div class="fb-section-title">Responsável</div>
                     <div>
                         <label class="fb-label">Agente responsável pelo lead</label>
-                        <select id="fbResponsavel" class="fb-input" onchange="previewCount()">
+                        <select id="fbResponsavel" class="fb-input" onchange="debouncePreview()">
                             <option value="">Todos</option>
                         </select>
                     </div>
@@ -272,7 +272,7 @@
 let allTags=[], allFunnels=[], allDestinos=[], customKeys=[], allUsersMap={};
 let selTagIds=[], tagMode='any', selColor='#2B6CB0';
 let selDestinos=[];
-let previewTimer=null, currentDetailSegId=null;
+let previewTimer=null, currentDetailSegId=null, previewRequestSeq=0;
 const COLORS=['#2B6CB0','#3182CE','#C05621','#DD6B20','#38A169','#48BB78','#D69E2E','#E53E3E','#805AD5','#D53F8C','#4A5568','#718096'];
 
 // ─── Init ─────────────────────────────────────
@@ -306,7 +306,11 @@ function renderDestinoChips() {
     if (!allDestinos.length) { container.textContent = 'Nenhum destino encontrado'; return; }
     container.innerHTML = allDestinos.map(d => {
         const sel = selDestinos.includes(d);
-        return `<span class="fb-tag-chip${sel?' sel':''}" onclick="toggleDestino('${d}')">${esc(d)}</span>`;
+        // AUDIT-2026-08-W2B-orq: allDestinos vem de GET /api/leads/destinos, que
+        // agrega o campo `destinos` de TODO lead — JSON livre escrito pelo webhook
+        // do WhatsApp e pelo n8n. O texto do chip ja passava por esc(); o valor
+        // dentro do literal do onclick, no mesmo elemento, nao passava por nada.
+        return `<span class="fb-tag-chip${sel?' sel':''}" data-destino="${esc(d)}" onclick="toggleDestino(this.dataset.destino)">${esc(d)}</span>`;
     }).join('');
 }
 
@@ -389,7 +393,7 @@ async function loadSegments() {
                     <button title="Editar" onclick="editSegment(${s.id})" style="color:var(--color-text-3)">
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                     </button>
-                    <button title="Excluir" onclick="deleteSegment(${s.id},'${esc(s.nome)}')" style="color:var(--color-error)">
+                    <button title="Excluir" data-segment-id="${s.id}" data-nome="${esc(s.nome)}" onclick="deleteSegment(this)" style="color:var(--color-error)">
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
                     </button>
                 </div>
@@ -515,7 +519,12 @@ async function saveSegment() {
     loadSegments();
 }
 
-async function deleteSegment(id, nome) {
+// AUDIT-2026-08-W2B-orq: o nome da lista vinha dentro de um literal JS no
+// onclick, onde esc() nao protege (o parser decodifica &#39; antes do JS
+// compilar). Agora vem por data-nome, que e contexto de atributo de verdade.
+async function deleteSegment(btn) {
+    const id = Number(btn.dataset.segmentId);
+    const nome = btn.dataset.nome || '';
     if (!confirm(`Excluir a lista "${nome}"?`)) return;
     const r = await Auth.apiRequest(`/api/segments/${id}`, { method: 'DELETE' });
     if (r && r.ok) loadSegments();
@@ -560,15 +569,22 @@ function onCampoChaveChange() { document.getElementById('fbCampoValor').disabled
 
 // ─── Preview ──────────────────────────────────
 function debouncePreview() { clearTimeout(previewTimer); previewTimer=setTimeout(previewCount, 300); }
+// AUDIT-2026-08-WG: sequencia de requisicao — mesmo idioma do listRequestSeq
+// em conversas/static/js/conversas.js. Sem isto, uma resposta lenta de um
+// filtro antigo podia chegar DEPOIS de uma resposta mais nova e sobrescrever
+// a contagem exibida, que passava a nao bater com os filtros selecionados.
 async function previewCount() {
+    const seq = ++previewRequestSeq;
     const spinner = document.getElementById('previewSpinner');
     const text = document.getElementById('previewText');
     spinner.style.display='inline-block'; text.textContent='Contando...';
     const filtros = collectFilters();
     const r = await Auth.apiRequest('/api/segments/preview', { method: 'POST', body: JSON.stringify(filtros) });
+    if (seq !== previewRequestSeq) return; // resposta obsoleta: descarta
     spinner.style.display='none';
     if (!r || !r.ok) { text.textContent='Erro'; return; }
     const d = await r.json();
+    if (seq !== previewRequestSeq) return; // resposta obsoleta: descarta
     text.textContent = `${d.total} lead${d.total!==1?'s':''} ${d.total !== 1 ? 'correspondem' : 'corresponde'} a estes filtros`;
 }
 
@@ -591,11 +607,16 @@ async function viewSegment(id) {
     renderDetailTable(d.leads || []);
 }
 
+// AUDIT-2026-08-WG: qualquer falha (401 -> r nulo, ou resposta !ok) deixava
+// o overlay borrado (.show/.open) aberto e travado — so o botao X fechava.
+// Agora a falha fecha o painel pelo mesmo caminho do X (closeDetail) antes
+// de avisar o erro, em vez de so reescrever um #detailBody que ficou atras
+// do backdrop.
 // r nulo = 401 e redirecionamento para /login: nao pinta erro por cima disso.
 function erroNoDetalhe(r) {
+    closeDetail();
     if (!r) return;
-    document.getElementById('detailBody').innerHTML =
-        `<tr><td colspan="6"><div class="empty-state"><p>Erro ao carregar (${r.status})</p></div></td></tr>`;
+    alert(`Erro ao carregar os leads da lista (${r.status})`);
 }
 
 function renderDetailTable(leads) {

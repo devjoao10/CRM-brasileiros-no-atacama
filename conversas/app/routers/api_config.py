@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.auth import get_current_user, require_admin, User
+from app.auth import require_admin, User
 from app.models.api_config import ApiConfig
 from app.schemas.api_config import (
     ApiConfigUpdate,
@@ -35,9 +35,16 @@ def _get_or_create_config(db: Session) -> ApiConfig:
 @router.get("", response_model=ApiConfigResponse)
 async def get_api_config(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
-    """Obter configuração atual da API WhatsApp."""
+    """Obter configuração atual da API WhatsApp.
+
+    AUDIT-2026-08-W1B — F7: a leitura era a UNICA rota deste objeto gateada por
+    `get_current_user` — todas as mutacoes ja exigiam `require_admin`. Ou seja,
+    qualquer atendente autenticado lia as credenciais que so um admin pode
+    escrever. Alinhado ao resto do router; o mascaramento do verify token
+    (schemas/api_config.py) e a segunda metade da correcao.
+    """
     config = _get_or_create_config(db)
     return ApiConfigResponse.from_model(config)
 

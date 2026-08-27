@@ -1,4 +1,6 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, JSON, Text, ForeignKey
+from sqlalchemy import (
+    Column, Integer, String, Boolean, DateTime, JSON, Text, ForeignKey, Index,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -35,6 +37,18 @@ class FunnelEntry(Base):
     posicao = Column(Integer, default=0)  # Order within the stage column
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # AUDIT-2026-08-W2E (F2) — "um lead aparece UMA vez por funil" era regra
+    # apenas em Python (SELECT + 409 em routers/pipeline.py:574-592), e o
+    # proprio docstring do locate_lead admitia que nao havia constraint. Entre
+    # o SELECT e o INSERT cabe outra requisicao: duas entries do mesmo lead no
+    # mesmo funil, `locate_lead` escolhe uma arbitrariamente e as duas passam a
+    # andar em etapas diferentes — estado que a aplicacao nao sabe reconciliar.
+    # Index(unique=True) e nao UniqueConstraint: mesmo DDL vindo do create_all
+    # e da migration m011, nos dois dialetos (ver comentario em m011).
+    __table_args__ = (
+        Index("uq_funnel_entries_lead_funnel", "lead_id", "funnel_id", unique=True),
+    )
 
     # Relationships
     funnel = relationship("Funnel", back_populates="entries")

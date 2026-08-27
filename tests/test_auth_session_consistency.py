@@ -215,6 +215,62 @@ def test_no_unbounded_redirect_chain():
     assert len(r.history) == 1, f"mais de um salto para estabilizar: {len(r.history)}"
 
 
+# ─── AUDIT-2026-08-WG (F-495). O `?next=` vale para TODA pagina ──────
+
+def test_todas_as_paginas_protegidas_preservam_o_next():
+    """
+    Das onze paginas protegidas, so `/gestao/pendencias` passava `next_url` a
+    mao; as outras dez devolviam o operador ao /hub. Sessao expirada em
+    /pipeline significava navegar de novo ate onde ele estava.
+
+    O default certo mora em `page_login_redirect`, nao nos call sites — corrigir
+    dez chamadas seria o mesmo defeito esperando para voltar na decima primeira.
+    Este teste percorre as rotas de pagina REGISTRADAS no app: uma pagina nova
+    que esqueca o `next` cai aqui sozinha.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    from app.main import app as _app
+
+    ignoradas = {"/", "/login"}
+    rotas = sorted({
+        r.path for r in _app.routes
+        if getattr(r, "path", "").startswith("/")
+        and "{" not in getattr(r, "path", "")
+        and "GET" in getattr(r, "methods", set())
+        and not r.path.startswith(("/api", "/static", "/docs", "/redoc", "/openapi"))
+        and r.path not in ignoradas
+    })
+    assert len(rotas) >= 8, f"esperava a maioria das paginas protegidas, achei {rotas}"
+
+    client.cookies.clear()
+    sem_next = []
+    for path in rotas:
+        r = client.get(path, follow_redirects=False)
+        if r.status_code != 302:
+            continue                      # pagina publica: nao e assunto deste teste
+        destino = r.headers.get("location", "")
+        alvo = parse_qs(urlparse(destino).query).get("next", [None])[0]
+        if alvo != path:
+            sem_next.append(f"{path} -> {destino}")
+    assert not sem_next, ("paginas que perdem o destino no redirect de login: "
+                          + ", ".join(sem_next))
+
+
+def test_next_nunca_carrega_query_string():
+    """
+    So o PATH entra no `next`. A query pode ter filtro ou id de cliente, e o
+    `next` vai para a barra de enderecos, para o historico e para o log de
+    acesso do proxy.
+    """
+    client.cookies.clear()
+    r = client.get("/leads?open=123&termo=fulano", follow_redirects=False)
+    assert r.status_code == 302, f"esperava redirect, veio {r.status_code}"
+    destino = r.headers.get("location", "")
+    assert "open=123" not in destino and "fulano" not in destino,         f"a query vazou para o next: {destino}"
+    assert "next=/leads" in destino, f"o path deveria estar preservado: {destino}"
+
+
 # ─── 14. Autorizacao nao afrouxou ────────────────────────────────────
 
 def test_inactive_user_gets_no_page_access():
@@ -333,7 +389,7 @@ def _run_login_js(**scen):
     if node is None:
         return None
     p = subprocess.run([node, "-e", _HARNESS, "--", json.dumps(scen)],
-                       capture_output=True, text=True, cwd=str(ROOT))
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(ROOT))
     assert p.returncode == 0, f"node falhou: {p.stderr.strip()[:400]}"
     return json.loads(p.stdout)
 

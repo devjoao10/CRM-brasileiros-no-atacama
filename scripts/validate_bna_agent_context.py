@@ -75,6 +75,187 @@ SECRET_PATTERNS = [
 
 MAX_FUTURE_PROMPT_CHARS = 8000
 
+# --- checks semanticos cross-file (auditoria 2026-08 — pegam contradicoes
+# que o check estrutural acima nao ve: campo divergente, precedencia
+# ausente, promessa de e-mail, produto Uyuni inexistente). ---
+
+HANDOFF_FIELD_KEYWORDS = ["nome completo", "destino", "viajante", "email"]
+ESCALATION_DISTINCTION_MARKERS = ["handoff comercial", "escalação de limite"]
+
+EMAIL_DELIVERY_RE = re.compile(
+    r"e-?mail\s+que\b(?:\s+\w+){0,4}\s+(envio|mando|manda|envia|retorno|retorna|retornamos)\b",
+    re.I,
+)
+
+UYUNI_BAD_DURATION_RE = re.compile(r"\b1\s*dia\b|\b7\s*dias\b", re.I)
+UYUNI_FILES = ["03_tours/uyuni_expedicoes.md", "04_precos/precos_2026_uyuni.md"]
+
+# --- checks semanticos cross-file (AUDIT-2026-08-WH2 — W3-19/W3-21: promessa
+# de disponibilidade e nomes de destino proibidos vazando pro conteudo). ---
+
+# "garante/garantia/garantir/prometer" perto de "vaga/disponibilidade/reserva"
+# = promessa de disponibilidade, proibida pelo guardrail
+# 09_guardrails/nao_prometer_disponibilidade.md. So esses dois verbos (nao
+# "confirmar"): "confirmar" tambem aparece em frases legitimas do vault
+# ("Reserva confirmada -> voucher...", passo pos-pagamento, nao promessa da
+# BIA) e usar como gatilho geraria falso positivo em conteudo ja validado.
+# Sufixo so de letras (nao \w) e gap sem "_"/"." — o proprio nome do arquivo
+# guardrail ("nao_prometer_disponibilidade.md", citado em varios lugares
+# como referencia cruzada) e "promete" + "r_" + "disponibilidade" grudados
+# por underscore; \w* atravessaria o "_" e casaria o filename com ele mesmo.
+_PROMISE_VERB = r"(?:promet|garant)[a-zà-ÿ]*"
+_AVAILABILITY_NOUN = r"(?:vaga|disponibilidade|reserva(?:\s+antecipad[a-zà-ÿ]*)?)"
+AVAILABILITY_PROMISE_RE = re.compile(
+    rf"{_PROMISE_VERB}[^._\n]{{0,50}}{_AVAILABILITY_NOUN}"
+    rf"|{_AVAILABILITY_NOUN}[^._\n]{{0,50}}{_PROMISE_VERB}",
+    re.I,
+)
+# tolerancia a negacao explicita (ex.: "nunca prometa") perto do trecho
+NEGATION_NEARBY_RE = re.compile(r"\bnunca\b|\bn[aã]o\b", re.I)
+NEGATION_WINDOW = 40
+
+TOM_DE_VOZ_FILE = "00_persona/tom_de_voz.md"
+# linhas do tipo: - "Atacama" (nunca "Deserto do Atacama", "San Pedro de Atacama")
+FORBIDDEN_NAME_LINE_RE = re.compile(r'"[^"]+"\s*\(nunca\s+(?P<alts>.+)\)')
+
+
+def check_no_availability_promise(root: Path) -> list[str]:
+    """Nenhum arquivo pode prometer/garantir vaga, disponibilidade ou reserva
+    antecipada — guardrail critico, a BIA nao tem acesso a agenda de operacao
+    (09_guardrails/nao_prometer_disponibilidade.md). Tolerante a negacao
+    explicita ('nunca'/'nao') perto do trecho, igual a propria linguagem do
+    guardrail ('NUNCA confirmar vaga/disponibilidade')."""
+    problems = []
+    for p in sorted(root.rglob("*.md")):
+        text = p.read_text(encoding="utf-8")
+        for m in AVAILABILITY_PROMISE_RE.finditer(text):
+            window_start = max(0, m.start() - NEGATION_WINDOW)
+            if NEGATION_NEARBY_RE.search(text[window_start:m.end()]):
+                continue
+            rel = str(p.relative_to(root)).replace("\\", "/")
+            snippet = " ".join(m.group(0).split())
+            problems.append(
+                f"{rel}: possivel promessa de vaga/disponibilidade/reserva garantida ('{snippet}')"
+            )
+    return problems
+
+
+def _forbidden_destination_names(root: Path) -> list[str]:
+    """Deriva a lista de nomes de destino proibidos a partir do proprio
+    00_persona/tom_de_voz.md (secao 'Nomes padronizados de destino') em vez
+    de hardcodar aqui — uma lista hardcoded seria uma 4a fonte pra divergir
+    da regra real."""
+    f = root / TOM_DE_VOZ_FILE
+    if not f.is_file():
+        return []
+    names = []
+    for line in f.read_text(encoding="utf-8").splitlines():
+        m = FORBIDDEN_NAME_LINE_RE.search(line)
+        if m:
+            names.extend(re.findall(r'"([^"]+)"', m.group("alts")))
+    return names
+
+
+def check_no_forbidden_destination_names(root: Path) -> list[str]:
+    """AVISO (nao falha o build): nomes que tom_de_voz.md proibe a BIA de
+    falar (ex.: 'Salar de Uyuni', 'Bolivia', 'Deserto do Atacama', 'San
+    Pedro de Atacama') tambem aparecem legitimamente fora de tom_de_voz.md
+    como fatos geograficos/operacionais (a cidade San Pedro de Atacama de
+    onde saem os passeios, exigencia de visto pra entrar na Bolivia, titulo
+    de arquivo de destino) — nao sao o MESMO erro do W3-21c (usar o nome
+    proibido para NOMEAR o destino). Virar FALHA quebraria conteudo
+    legitimo ja validado; fica AVISO pra revisao humana."""
+    forbidden = _forbidden_destination_names(root)
+    if not forbidden:
+        return []
+    problems = []
+    for p in sorted(root.rglob("*.md")):
+        rel = str(p.relative_to(root)).replace("\\", "/")
+        is_readme = rel == "00_README.md" or rel.endswith("/README.md")
+        if is_readme or rel.startswith("_meta/") or rel == TOM_DE_VOZ_FILE:
+            continue  # navegacao/indice ou o proprio arquivo-fonte da regra
+        text = p.read_text(encoding="utf-8")
+        for name in forbidden:
+            if name.lower() in text.lower():
+                problems.append(
+                    f"{rel}: usa nome de destino que tom_de_voz.md proibe ('{name}')"
+                )
+    return problems
+
+
+def check_handoff_fields_match(root: Path) -> str | None:
+    """campos_obrigatorios_crm.md e handoff_humano.md tem que citar os
+    MESMOS 4 campos bloqueantes — se um arquivo desalinhar, a IA que le so
+    um dos dois fica com uma lista diferente (causa raiz da H3)."""
+    f1 = root / "08_operacao_agente/campos_obrigatorios_crm.md"
+    f2 = root / "08_operacao_agente/handoff_humano.md"
+    if not f1.is_file() or not f2.is_file():
+        return None  # arquivo ausente ja e outra falha (REQUIRED_FILES)
+    t1 = f1.read_text(encoding="utf-8").lower()
+    t2 = f2.read_text(encoding="utf-8").lower()
+    missing1 = [k for k in HANDOFF_FIELD_KEYWORDS if k not in t1]
+    missing2 = [k for k in HANDOFF_FIELD_KEYWORDS if k not in t2]
+    if missing1 or missing2:
+        return (
+            "campos obrigatorios de handoff divergem: "
+            f"campos_obrigatorios_crm.md sem {missing1}, "
+            f"handoff_humano.md sem {missing2}"
+        )
+    return None
+
+
+def check_escalation_precedence(root: Path) -> str | None:
+    """Se quando_escalar.md manda escalar 'mesmo sem os 4 campos', o
+    arquivo precisa deixar explicita a distincao handoff comercial (4
+    campos bloqueantes) vs escalacao de limite (bloqueio nao vale) — senao
+    o modelo tem duas regras batendo na mesma alavanca (causa raiz da H3)."""
+    f = root / "07_faq_objecoes/quando_escalar.md"
+    if not f.is_file():
+        return None
+    text = f.read_text(encoding="utf-8").lower()
+    if "mesmo sem os 4 campos" not in text:
+        return None
+    missing = [m for m in ESCALATION_DISTINCTION_MARKERS if m not in text]
+    if missing:
+        return (
+            "quando_escalar.md cita 'mesmo sem os 4 campos' sem a "
+            f"distincao handoff comercial vs escalacao de limite (falta: {missing})"
+        )
+    return None
+
+
+def check_no_email_delivery_claim(root: Path) -> list[str]:
+    """Nenhum arquivo pode prometer que a cotacao vai 'por e-mail' — ela e
+    sempre entregue no WhatsApp; o e-mail e so cadastro no CRM (H6)."""
+    problems = []
+    for p in sorted(root.rglob("*.md")):
+        text = p.read_text(encoding="utf-8")
+        if EMAIL_DELIVERY_RE.search(text):
+            rel = str(p.relative_to(root)).replace("\\", "/")
+            problems.append(f"{rel}: frase sugere envio da cotacao por e-mail (proibido, ver H6)")
+    return problems
+
+
+def check_no_uyuni_1_or_7_day(root: Path) -> list[str]:
+    """uyuni_expedicoes.md/precos_2026_uyuni.md nao podem ofertar Uyuni de
+    1 dia nem de 7 dias — esses produtos nao existem (H7). Mencao e ok SE
+    for para negar (janela de contexto com 'nao existe' por perto)."""
+    problems = []
+    for relpath in UYUNI_FILES:
+        p = root / relpath
+        if not p.is_file():
+            continue
+        text = p.read_text(encoding="utf-8")
+        for m in UYUNI_BAD_DURATION_RE.finditer(text):
+            start = max(0, m.start() - 80)
+            end = min(len(text), m.end() + 80)
+            window = text[start:end].lower()
+            if "não existe" not in window and "nao existe" not in window:
+                problems.append(
+                    f"{relpath}: possivel oferta de Uyuni '{m.group(0)}' sem negacao proxima"
+                )
+    return problems
+
 
 def has_frontmatter(text: str) -> tuple[bool, list[str]]:
     if not text.startswith("---"):
@@ -154,6 +335,20 @@ def main() -> int:
 
     if (ROOT / "_meta/pendencias_validacao.md").is_file() and pendencias_total == 0:
         warnings.append("nenhum [PENDENTE_VALIDACAO] encontrado — inesperado nesta fase")
+
+    # checks semanticos cross-file (auditoria 2026-08)
+    handoff_mismatch = check_handoff_fields_match(ROOT)
+    if handoff_mismatch:
+        failures.append(handoff_mismatch)
+
+    escalation_problem = check_escalation_precedence(ROOT)
+    if escalation_problem:
+        failures.append(escalation_problem)
+
+    failures.extend(check_no_email_delivery_claim(ROOT))
+    failures.extend(check_no_uyuni_1_or_7_day(ROOT))
+    failures.extend(check_no_availability_promise(ROOT))
+    warnings.extend(check_no_forbidden_destination_names(ROOT))
 
     print(f"Arquivos .md: {len(list(ROOT.rglob('*.md')))}")
     print(f"Marcadores [PENDENTE_VALIDACAO]: {pendencias_total}")

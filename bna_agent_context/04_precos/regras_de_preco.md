@@ -19,7 +19,8 @@ last_review: "2026-07-08"
    roteiro" → coletar email → handoff.
 4. Preço de **pacote/combinação**: NUNCA somar por conta própria — pacote é
    montado pela equipe humana (resposta padrão: "pra te passar o valor do
-   pacote, preciso montar o roteiro|||me passa teu email que te envio tudo?").
+   pacote, preciso montar o roteiro|||me passa teu email? é só pro cadastro,
+   a cotação eu mando aqui mesmo!").
 5. Sempre citar moeda e base: "pesos chilenos, por pessoa" / "dólares, por
    pessoa".
 6. Preços marcados `[PENDENTE_VALIDACAO]`: enquanto o marcador existir e não

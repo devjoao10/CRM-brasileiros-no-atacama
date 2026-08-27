@@ -4,10 +4,16 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.auth import page_login_redirect, require_page_session
+from app.config import VERSION
 from app.database import get_db
 
 router = APIRouter(tags=["Páginas"])
 templates = Jinja2Templates(directory="templates")
+# AUDIT-2026-08-WG: cache-busting de /static/** (BUG 3). `asset_version` vira
+# global do Environment em vez de entrar em cada dict de contexto — um unico
+# valor (app/config.py::VERSION) alimenta todo `?v=` em base.html/login.html;
+# trocar a versao la invalida o cache de TODOS os assets de uma vez.
+templates.env.globals["asset_version"] = VERSION
 
 
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)

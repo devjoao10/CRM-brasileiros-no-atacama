@@ -193,7 +193,7 @@
                 t.category === 'UTILITY' ? 'Utilidade' : 'Autenticacao';
 
             const metaInfo = t.meta_template_id
-                ? `<span class="template-meta-id" title="Meta ID: ${t.meta_template_id}">Meta: ${t.meta_template_id.substring(0, 12)}...</span>`
+                ? `<span class="template-meta-id" title="Meta ID: ${escapeHtml(t.meta_template_id)}">Meta: ${escapeHtml(String(t.meta_template_id).substring(0, 12))}...</span>`
                 : '<span class="template-meta-id not-synced">Nao submetido ao Meta</span>';
 
             const rejectionInfo = t.rejection_reason
@@ -206,7 +206,7 @@
                         <span class="template-name">${escapeHtml(t.name)}</span>
                         <span class="status-badge ${statusClass}">${statusLabel}</span>
                     </div>
-                    <div class="template-category">${categoryLabel} &middot; ${t.language}</div>
+                    <div class="template-category">${categoryLabel} &middot; ${escapeHtml(t.language)}</div>
                     ${metaInfo}
                     <div class="template-body">${escapeHtml(t.body_text)}</div>
                     ${t.footer_text ? `<div class="template-footer">${escapeHtml(t.footer_text)}</div>` : ''}
@@ -489,19 +489,33 @@
         if (!confirm(`Excluir o template "${t.name}" permanentemente?${metaWarning}`)) return;
 
         const resp = await Auth.apiRequest(`/api/templates/${id}`, { method: 'DELETE' });
-        if (resp && resp.ok) {
-            const result = await resp.json();
-            const metaInfo = result.meta_deleted ? ' (removido do Meta)' : '';
-            showToast(`Template excluído${metaInfo}`);
-            loadTemplates();
+        // AUDIT-2026-08-W2D-orq: so havia o ramo de sucesso. Um 403/409/500 deixava
+        // o card na tela sem mensagem nenhuma — indistinguivel de "apagou e a lista
+        // ainda nao atualizou". O operador tenta de novo, ou pior, acha que apagou.
+        if (!resp) return;                       // 401 ja tratado por Auth.apiRequest
+        if (!resp.ok) {
+            let detalhe = '';
+            try {
+                const err = await resp.json();
+                detalhe = err && err.detail ? `: ${err.detail}` : '';
+            } catch (e) { /* corpo nao-JSON: fica so o status */ }
+            showToast(`Nao foi possivel excluir o template (erro ${resp.status})${detalhe}`);
+            return;
         }
+        const result = await resp.json();
+        const metaInfo = result.meta_deleted ? ' (removido do Meta)' : '';
+        showToast(`Template excluído${metaInfo}`);
+        loadTemplates();
     };
 
     function escapeHtml(text) {
+        // AUDIT-2026-08-W2D-orq: esta copia NAO escapava aspas, ao contrario das
+        // outras do repositorio. textContent->innerHTML cobre & < >, mas deixa " e '
+        // passarem: um valor "escapado" por ela ainda fechava atributo aspeado.
         if (!text) return '';
         const div = document.createElement('div');
         div.textContent = text;
-        return div.innerHTML;
+        return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     function showToast(message) {

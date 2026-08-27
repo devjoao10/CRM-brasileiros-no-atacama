@@ -87,9 +87,24 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # Limites por rota (ex.: login 5/minute) continuam via @limiter.limit no router.
 app.add_middleware(SlowAPIMiddleware)
 
-# CORS — Restrito em produção, aberto em dev
-_allowed_origins = ["*"] if ENVIRONMENT == "development" else [
+# CORS
+# AUDIT-2026-08-W1B (F8) tirou o curinga do Conversas e explicou por que:
+# `["*"]` com `allow_credentials=True` faz o Starlette ECOAR o Origin do
+# chamador em Access-Control-Allow-Origin, entao qualquer site aberto no
+# navegador do usuario le respostas autenticadas usando o cookie dele. E nao
+# era opt-in: `ENVIRONMENT` nao definido ja vale "development".
+#
+# AUDIT-2026-08-WF2 (revisao): o CRM tinha ficado de fora daquela correcao — o
+# mesmo curinga, com o mesmo default, no servico que guarda os leads e as
+# chaves de API. Assimetria entre dois servicos irmaos e onde defeito se
+# esconde. Em dev, lista explicita, igual ao Conversas.
+_allowed_origins = [
     "https://crm.crmbrasileirosnoatacama.cloud",
+] if ENVIRONMENT != "development" else [
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://localhost:8001",
+    "http://127.0.0.1:8001",
 ]
 app.add_middleware(
     CORSMiddleware,
@@ -103,7 +118,37 @@ app.add_middleware(
 # ─── Security Headers Middleware ─────────────────────────────────────
 # Rotas cujo corpo depende do estado de sessão: nenhuma resposta pode ser
 # reaproveitada de cache (AUTH-LOOP-01). Assets em /static continuam cacheáveis.
-_NO_STORE_PATHS = {"/login", "/hub"}
+# AUDIT-2026-08-W1A: a regra foi INVERTIDA. A lista fechada ({"/login","/hub"})
+# deixava todo o resto do CRM — /leads, /pipeline, as respostas da API — livre
+# para ser cacheado, e o shell HTML dessas páginas é autenticado. Agora só
+# /static (assets sem estado de sessão) escapa do no-store.
+_CACHEABLE_PREFIX = "/static"
+
+# Content-Security-Policy (AUDIT-2026-08-W1A). Não havia CSP alguma no repo e o
+# JWT de sessão também vive no localStorage: qualquer sink de injeção de HTML
+# vira roubo de sessão direto. Esta política é o primeiro passo PRAGMÁTICO —
+# ela tranca o que não custa nada (frame-ancestors/object-src/base-uri) e
+# permite o que o app realmente usa hoje:
+#   • https://cdn.jsdelivr.net → marked+dompurify (ai.html), chart.js
+#     (dashboard.html, relatorios.html), fullcalendar (tarefas.html);
+#   • fonts.googleapis.com / fonts.gstatic.com → Inter e Caveat Brush
+#     (base.html, login.html, base.css, login.css);
+#   • 'unsafe-inline' em script/style porque os templates usam <script> inline e
+#     atributos style= em massa. Remover 'unsafe-inline' exige de-inline dos
+#     templates (ou nonce por request) e está FORA DO ESCOPO desta wave — sem
+#     ele a CSP quebraria todas as páginas, o que é pior que não ter CSP.
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
+    "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; "
+    "img-src 'self' data: blob:; "
+    "media-src 'self' data: blob:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "
+    "object-src 'none'; "
+    "base-uri 'self'"
+)
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -113,13 +158,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-        path = request.url.path
-        if (
-            path in _NO_STORE_PATHS
-            or path.startswith("/api/auth/")
-            # cobre o 302 de QUALQUER página protegida para /login
-            or response.headers.get("location", "").startswith("/login")
-        ):
+        response.headers["Content-Security-Policy"] = _CSP
+        if not request.url.path.startswith(_CACHEABLE_PREFIX):
             response.headers["Cache-Control"] = "no-store"
         if ENVIRONMENT == "production":
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"

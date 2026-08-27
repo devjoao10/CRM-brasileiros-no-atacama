@@ -177,8 +177,14 @@ Retorna `404` se não encontrar. O agente deve interpretar 404 como "lead não e
 Tipo: HTTP Header Auth
 Nome: CRM Brasileiros API
 Header Name: X-API-Key
-Header Value: bna_pTe_Jz6MYulKkbftE8fuQX391_D8Oi75_4lj4EQLepu7HMwbq6fR1-Jvdrq4LHnY
+Header Value: <COLE_AQUI_A_API_KEY_DO_CRM>
 ```
+
+> **AUDIT-2026-08-W1E — NAO escreva a chave real neste arquivo.**
+> O valor vive SOMENTE no credential store do n8n (credencial "CRM Brasileiros API").
+> Motivo: qualquer `bna_...` valido autentica em TODAS as rotas `/api/*` do CRM e do
+> Conversas (mesma tabela `users`), sem expiracao por padrao (`API_KEY_EXPIRY_DAYS=0`).
+> Um doc versionado nao e cofre: o que entra aqui fica no historico do Git para sempre.
 
 ---
 

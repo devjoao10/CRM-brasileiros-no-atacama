@@ -1,0 +1,69 @@
+RELATORIO W1-A — sessao do CRM (auth)
+Arquivos: app/auth.py, app/routers/auth.py, app/main.py, static/js/auth.js,
+          static/js/login.js, templates/login.html, tests/test_auth_hardening.py (NOVO)
+
+CHANGES
+- app/auth.py  F1: get_current_user nao levanta mais no Bearer invalido; cai para o
+  cookie e so levanta depois de esgotar todos os mecanismos. As ramificacoes de
+  API key e de IA interna continuam levantando de imediato (comportamento correto:
+  credencial explicita e errada e erro, nao ausencia de credencial).
+  F2: create_access_token carimba typ="access", exceto quando o chamador ja declarou
+  typ OU o legado type (preserva o token type="verify_email" de users.py);
+  _get_user_from_jwt rejeita typ != "access".
+- app/routers/auth.py  F3: sai `import os`; entra ENVIRONMENT/ACCESS_TOKEN_EXPIRE_MINUTES
+  de app.config; cookie secure = ENVIRONMENT != "development" (falha SEGURO, nao
+  inseguro); max_age derivado do TTL real do token.
+  F4: POST /logout passa a exigir Depends(get_current_user).
+- app/main.py  F6: Content-Security-Policy ('self' + cdn.jsdelivr.net + Google Fonts,
+  'unsafe-inline' em script/style, frame-ancestors 'none', object-src 'none',
+  base-uri 'self'); regra de cache invertida — tudo fora de /static recebe
+  Cache-Control: no-store.
+- static/js/auth.js  F4: logout() confere response.ok (fetch NAO rejeita em 4xx/5xx)
+  e para de reportar sucesso em cima de falha; erro de rede e logado, nao engolido.
+- static/js/login.js  F5a: fiacao do form extraida para wireLoginForm(), chamada nos
+  4 caminhos que deixam o usuario em /login. safeNext() e o guard AUTH-LOOP-01 intactos.
+- templates/login.html  F5b: form com method="post" onsubmit="return false;" e o input
+  de senha perdeu o atributo name — o submit default do navegador nao pode mais
+  carregar a senha, muito menos em query string.
+
+TESTS (todos exit 0)
+  tests/test_auth_hardening.py .............. 23/23
+  tests/test_auth_session_consistency.py .... 22/22
+  tests/test_hub.py ......................... OK
+  tests/test_rate_limit.py .................. OK (login 200; 429 apos 5/minute)
+  tests/test_render_templates.py ............ OK
+  tests/test_security_greps.py .............. OK
+
+FAILING-BEFORE-FIX (demonstrado, nao afirmado)
+  git worktree destacado no HEAD pre-correcao + o teste novo copiado: 10 falhas,
+  uma por finding. Destaques:
+    - /api/auth/me devolveu 200 para um token verify_email;
+    - ENVIRONMENT=Production emitia o cookie com HttpOnly; Max-Age=28800 e SEM Secure;
+    - POST /logout sem credencial devolvia 200;
+    - /leads sem Cache-Control; CSP vazia.
+  Worktree temporario removido.
+
+NOT_DONE (com razao tecnica)
+- Revogacao de token no logout. Apagar o cookie NAO invalida o JWT: uma copia vale
+  ate exp. Exige coluna nova (ex. users.tokens_valid_after) + checagem em
+  _get_user_from_jwt = migration, fora do escopo desta missao.
+- Remover 'unsafe-inline' da CSP. Os templates usam script e style inline em
+  dezenas de pontos; de-inlinar e uma mudanca de front inteira. Divida explicita.
+- Nenhum commit e nenhuma troca de branch: a worktree e compartilhada com outros
+  agentes editando concorrentemente.
+
+NOTES / repasses
+- app/routers/users.py:124 ainda entrega o token de verificacao de e-mail em query
+  string. A correcao F2 o torna inutil como sessao, mas ele continua vazando para
+  log de acesso, historico e Referer. Dono do arquivo: outra tarefa.
+- CONSEQUENCIA OPERACIONAL: sessoes ja emitidas nao tem typ e passam a ser
+  rejeitadas — todo usuario logado faz UM re-login. Deliberado: aceitar typ ausente
+  manteria o bypass do verify_email aberto.
+- Correcao ao brief: test_auth_session_consistency.py tem 22 checks, nao 26. O
+  numero no brief estava errado; nao houve regressao. Registrado porque o brief
+  era meu.
+
+ADJUDICACAO DO ORQUESTRADOR
+- F5b precisa de verificacao independente: remover o atributo `name` do input de
+  senha so e seguro se o JS de login ler o campo por id/querySelector. Verificado
+  na fase de regressao (ver VERIFICACAO.md).

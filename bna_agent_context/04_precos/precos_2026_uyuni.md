@@ -20,10 +20,18 @@ incluídas em nenhum formato.
 
 | Expedição | USD/pessoa |
 |---|---|
-| 3 dias / 2 noites (fica na Bolívia) | 360 `[PENDENTE_VALIDACAO]` |
+| 3 dias / 2 noites (fica na Bolívia) `[PENDENTE_VALIDACAO]` (ver nota) | 360 `[PENDENTE_VALIDACAO]` |
 | 4 dias / 3 noites (retorna a San Pedro) | 420 `[PENDENTE_VALIDACAO]` |
 | Upgrade quarto privado — 3d/2n (mín. 2 pax) | 460 `[PENDENTE_VALIDACAO]` |
 | Upgrade quarto privado — 4d/3n (mín. 2 pax) | 498 `[PENDENTE_VALIDACAO]` |
+
+> **Nota de conflito (não resolvida — decisão do João):** a regra de
+> negócio diz que o Regular 3 dias/2 noites é privativo e exige mínimo de 2
+> passageiros — viajante solo não deve recebê-lo (ver
+> `03_tours/uyuni_expedicoes.md`) — mas esta linha está tabelada com preço
+> avulso por pessoa e sem mínimo declarado. Tabela e regra precisam ser
+> reconciliadas pelo João; ver `_meta/pendencias_validacao.md` e
+> `_meta/pendencias_index.md`.
 
 ## Privado (todos retornam a San Pedro)
 

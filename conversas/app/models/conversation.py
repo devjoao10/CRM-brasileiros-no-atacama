@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean
+from sqlalchemy import (
+    Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Index, text,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -42,7 +44,16 @@ class Conversation(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     lead_id = Column(Integer, nullable=False, index=True)
-    whatsapp = Column(String(30), nullable=False, index=True)
+    # AUDIT-2026-08-W2E (F1) — o numero e a CHAVE de negocio da conversa, nao um
+    # campo pesquisavel qualquer. `webhook.py` e `conversations.py` fazem
+    # find-or-create sobre ele; sem UNIQUE, duas primeiras mensagens do mesmo
+    # numero chegando juntas criam DUAS conversas e todo leitor usa `.first()`,
+    # entao metade das mensagens do cliente some numa thread invisivel.
+    # O UNIQUE aqui e o mesmo mecanismo que ja torna o inbound idempotente via
+    # `Message.whatsapp_msg_id` — e a unica trava que sobrevive a concorrencia.
+    # `index=True` foi REMOVIDO de proposito: o indice unico ja atende as buscas
+    # por numero; manter os dois seria indice duplicado na mesma coluna.
+    whatsapp = Column(String(30), nullable=False)
     nome = Column(String(200), nullable=True)
     status = Column(String(20), default="aberta", nullable=False, index=True)
     ultimo_msg = Column(Text, nullable=True)
@@ -56,15 +67,44 @@ class Conversation(Base):
     last_customer_msg_at = Column(DateTime(timezone=True), nullable=True)  # Janela 24h Meta
     # PACOTE-A: momento em que a conversa ENTROU na fila de atendimento humano.
     # NAO e atividade do cliente (last_customer_msg_at), nem updated_at/created_at.
-    # Preenchido no handoff BIA->humano e no release; zerado quando alguem assume.
+    # Preenchido no handoff BIA->humano e no release; zerado na PRIMEIRA RESPOSTA
+    # HUMANA (nao mais ao atribuir — ver a coluna abaixo).
     queued_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    # AUDIT-2026-08-WA — ATRIBUIDO != ATENDIDO.
+    # Ate aqui o inbox classificava por `atendente_id IS NULL`, o que fazia de
+    # "atribuir" sinonimo de "atender": assim que o handoff (ou um assign)
+    # definia um dono, a conversa saia da FILA DE ESPERA — mesmo sem nenhum
+    # humano ter falado com o cliente. A regra operacional real e o contrario:
+    # a conversa fica na fila enquanto NINGUEM tiver respondido.
+    #
+    # Abrir, visualizar, outro atendente abrir: nada disso e atendimento. O
+    # unico evento que encerra a espera e a PRIMEIRA MENSAGEM OUTBOUND HUMANA.
+    # `messages` nao guarda autoria (Bia, auto-resposta e humano passam pelo
+    # mesmo record_outbound_message), entao o instante e gravado aqui, pela
+    # rota que sabe quem e o `current_user`.
+    primeira_resposta_humana_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+    # AUDIT-2026-08-W2E (F1) — declarado como Index(unique=True) e nao como
+    # UniqueConstraint de proposito: assim `create_all()` e a migration m011
+    # emitem EXATAMENTE o mesmo objeto (`CREATE UNIQUE INDEX uq_...`) nos dois
+    # dialetos. Este sistema tem dois donos de schema competindo (create_all no
+    # startup + scripts manuais); DDL divergente entre eles ja produziu drift
+    # (ver m003 vs create_all em `send_attempts`) e nao vamos criar mais um.
+    __table_args__ = (
+        Index("uq_conversations_whatsapp", "whatsapp", unique=True),
+    )
 
     # Relationships
     messages = relationship(
         "Message",
         back_populates="conversation",
         cascade="all, delete-orphan",
-        order_by="Message.created_at"
+        # AUDIT-2026-08-WF2 — desempate por `id`: os dois leitores de mensagem
+        # que fazem query direto (routers/conversations.py e o `historico` de
+        # routers/webhook.py) ja ordenam com `Message.id`; so este ficou sem.
+        # Timestamps iguais existem (partes da mesma resposta da Bia flushadas
+        # juntas) e sem desempate a ordem delas e arbitraria.
+        order_by="Message.created_at, Message.id"
     )
     # CONV-05: tags N:N (link table com PK composta)
     tags = relationship(
@@ -79,6 +119,13 @@ class Conversation(Base):
         cascade="all, delete-orphan",
         order_by="ConversationNote.created_at",
     )
+
+    # AUDIT-2026-08-WA — NAO e coluna: e um atributo de apresentacao que o
+    # router preenche em lote antes de serializar (uma query por pagina, nunca
+    # uma por linha). Declarado aqui com default None para que
+    # `ConversationResponse.model_validate(conversation)` sempre encontre o
+    # atributo, mesmo nos caminhos que nao o preenchem.
+    atendente_nome = None
 
     @property
     def service_window_open(self) -> bool:
@@ -106,12 +153,46 @@ class Message(Base):
     media_url = Column(Text, nullable=True)
     whatsapp_msg_id = Column(String(100), nullable=True, unique=True)
     status = Column(String(20), default="sent", nullable=False)  # sent, delivered, read, failed
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    # AUDIT-2026-08-WF2 — o INSTANTE do INSERT, nao o inicio da TRANSACAO.
+    #
+    # No PostgreSQL `now()` e `transaction_timestamp()`: toda linha inserida na
+    # mesma transacao recebe o MESMO valor, o do inicio dela. No SQLite
+    # `CURRENT_TIMESTAMP` e avaliado por statement — por isso a suite passa em
+    # dev e o defeito so existe em producao.
+    #
+    # `_debounce_then_forward` (routers/webhook.py) abre a transacao numa
+    # leitura, chama a Bia no n8n (AGENT_TIMEOUT=240s; 1m30-2m40 reais),
+    # persiste cada parte da resposta com `commit=False` e so commita no fim.
+    # Com `now()` as respostas ficavam com o timestamp em que o debounce
+    # ACORDOU — ANTERIOR ao das mensagens que o cliente mandou durante a espera,
+    # cada uma commitada na sua propria transacao curta. Em PostgreSQL real
+    # (16.14) isso ordena a RESPOSTA ANTES DA PERGUNTA no inbox e no `historico`
+    # que volta para a Bia.
+    #
+    # A correcao e o default do lado do PYTHON: a ORM avalia o callable ao
+    # emitir o INSERT, entao o valor nao depende do dialeto nem de quando a
+    # transacao comecou. `clock_timestamp()` corrigiria so o PostgreSQL, criaria
+    # mais uma divergencia de dialeto e — por ser DDL — exigiria ALTER TABLE
+    # para valer no banco que ja existe.
+    #
+    # `server_default` FICA: e o default do DDL para INSERT fora da ORM (psql,
+    # COPY, restore). Nesses caminhos a transacao e curta e `now()` basta. O DDL
+    # emitido pelo create_all nao muda, entao nao ha migration nem drift.
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
 
     # CONV-08b — integridade de outbound (base para retry).
     # Bancos existentes: aplicar migrations/m003_conversas_message_error_fields.py.
     last_error = Column(Text, nullable=True)          # resumo SEGURO da ultima falha (sem token/payload)
-    send_attempts = Column(Integer, default=0, nullable=False)  # tentativas de envio (outbound)
+    # AUDIT-2026-08-W2E (F5) — `default=0` e CLIENT-side: so a ORM o aplica.
+    # A coluna e NOT NULL sem DEFAULT no DDL, entao qualquer INSERT fora da ORM
+    # (psql, n8n, COPY, o SQL cru de services/crm.py) era REJEITADO. Pior: o
+    # m003 ja cria a coluna com `DEFAULT 0`, logo banco migrado e banco nascido
+    # do create_all tinham DDL diferente. `server_default` alinha os dois.
+    send_attempts = Column(Integer, default=0, server_default=text("0"), nullable=False)
     last_attempt_at = Column(DateTime(timezone=True), nullable=True)  # ultima tentativa de envio
 
     # Relationships

@@ -472,13 +472,18 @@
             }
         });
 
-        loadAllTags();
+        const tagsProntas = loadAllTags();
         loadUsersForFilter();
         reloadLeads();
         // Deep-link ?open=ID: busca DIRETA por id (GET /api/leads/{id}), sem
         // depender de o lead estar na primeira pagina nem varrer a lista.
         const openId = new URLSearchParams(window.location.search).get('open');
-        if (openId) editLead(parseInt(openId)).then(lead => { if (lead) fixarLead(lead); });
+        if (openId) {
+            // AUDIT-2026-08-WC (F-419): loadAllTags() e assincrono; abrir o
+            // editor sem esperar por ele fazia renderTagCheckboxes desenhar
+            // zero checkboxes quando o fetch ainda nao tinha resolvido.
+            tagsProntas.then(() => editLead(parseInt(openId)).then(lead => { if (lead) fixarLead(lead); }));
+        }
     });
 
     // Load users for responsavel filter
@@ -630,7 +635,11 @@
             const cls = d.toLowerCase() === 'atacama' ? 'atacama'
                 : d.toLowerCase() === 'uyuni' ? 'uyuni'
                 : d.toLowerCase() === 'santiago' ? 'santiago' : 'outro';
-            return `<span class="destino-tag ${cls}">${d}</span>`;
+            // AUDIT-2026-08-WF2: `d` e texto livre de leads.destinos, gravado
+            // pelo webhook do WhatsApp/n8n sem passar por operador. Esta string
+            // vai para tbody.innerHTML / insertAdjacentHTML via linhaDoLead.
+            // `cls` sai do ternario acima (vocabulario fechado): so `d` escapa.
+            return `<span class="destino-tag ${cls}">${esc(d)}</span>`;
         }).join(' ');
     }
 
@@ -677,13 +686,13 @@
                 <td>${formatDate(l.data_chegada)}</td>
                 <td>${formatDate(l.data_partida)}</td>
                 <td class="actions-cell">
-                    <button title="Abrir no Conversas" onclick="openConversas(${l.id}, '${esc(l.whatsapp || '')}', '${esc(l.nome)}')" style="background:none;border:none;cursor:pointer;padding:2px 6px;color:var(--color-primary);">
+                    <button title="Abrir no Conversas" data-lead-id="${l.id}" data-wpp="${esc(l.whatsapp || '')}" data-nome="${esc(l.nome)}" onclick="openConversas(this)" style="background:none;border:none;cursor:pointer;padding:2px 6px;color:var(--color-primary);">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
                     </button>
                     <button title="Editar" onclick="editLead(${l.id})" style="background:none;border:none;cursor:pointer;padding:2px 6px;color:var(--color-text-3);">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                     </button>
-                    <button title="Excluir" onclick="deleteLead(${l.id}, '${esc(l.nome)}')" style="background:none;border:none;cursor:pointer;padding:2px 6px;color:var(--color-error);">
+                    <button title="Excluir" data-lead-id="${l.id}" data-nome="${esc(l.nome)}" onclick="deleteLead(this)" style="background:none;border:none;cursor:pointer;padding:2px 6px;color:var(--color-error);">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
                     </button>
                 </td>
@@ -801,40 +810,23 @@
     }
 
 
-    async function deleteLead(id, nome) {
+    // AUDIT-2026-08-W2B-orq: recebe o BOTAO, nao o nome. O nome chegava
+    // interpolado dentro de um literal JS no proprio onclick, onde esc() nao
+    // protege — o parser decodifica &#39; antes do JS compilar. Via dataset o
+    // valor volta ja decodificado, sem nunca ter sido codigo.
+    async function deleteLead(btn) {
+        const id = btn.dataset.leadId;
+        const nome = btn.dataset.nome || '';
         if (!confirm(`Desativar o lead "${nome}"?`)) return;
         const resp = await Auth.apiRequest(`/api/leads/${id}`, { method: 'DELETE' });
         if (resp && resp.ok) reloadLeads();
     }
 
     // ─── WhatsApp Helpers ────────────────────────────
-
-    /**
-     * Normaliza qualquer formato de número para 55XXXXXXXXXXX (padrão Meta/WhatsApp).
-     * Aceita: (48) 98871-1776 | 48 98871-1776 | 5548988711776 | +55 48 98871-1776
-     * Retorna null se inválido (menos de 10 dígitos após remover +55).
-     */
-
-    /**
-     * Aplica máscara visual no input: (XX) XXXXX-XXXX
-     */
-    function formatWhatsappInput(input) {
-        let v = input.value.replace(/\D/g, '');
-        // Limita a 11 dígitos (DDD + 9 dígitos)
-        v = v.slice(0, 11);
-        if (v.length > 6) {
-            v = v.replace(/(\d{2})(\d{5})(\d{0,4})/, '($1) $2-$3');
-        } else if (v.length > 2) {
-            v = v.replace(/(\d{2})(\d{0,5})/, '($1) $2');
-        } else {
-            v = v.replace(/(\d{0,2})/, '($1');
-        }
-        input.value = v;
-    }
-
-    /**
-     * Formata número armazenado (55XXXXXXXXXXX) para exibição no modal.
-     */
+    // AUDIT-2026-08-W2B (F10): normalizeWhatsapp, displayWhatsapp e
+    // formatWhatsappInput vivem agora em partials/_lead_edit_modal.html, ao lado
+    // do input que os chama. Esta pagina inclui o partial, entao continua tendo
+    // as tres — sem a copia duplicada que so existia aqui e faltava no Pipeline.
 
     // ─── Conversas Integration ──────────────────────
 
@@ -843,7 +835,12 @@
      * Redireciona com parâmetros na URL — o Conversas resolve
      * a busca/criação da conversa no próprio domínio (sem CORS).
      */
-    function openConversas(leadId, whatsapp, nome) {
+    function openConversas(btn) {
+        // ver o comentario em deleteLead: os tres valores vinham interpolados
+        // dentro de literais JS no onclick.
+        const leadId = btn.dataset.leadId;
+        const whatsapp = btn.dataset.wpp || '';
+        const nome = btn.dataset.nome || '';
         const base = window._conversasBase;
 
         if (!whatsapp) {
@@ -907,7 +904,10 @@
 
             if (!resp.ok) {
                 resultsDiv.className = 'import-results show alert alert-error';
-                resultsDiv.innerHTML = `Erro: ${data.detail || 'Erro na importação'}`;
+                // AUDIT-2026-08-WF2: data.detail carrega a mensagem da excecao do
+                // parser de planilha (app/routers/leads.py: "Erro ao ler CSV: ..."),
+                // que embute trecho do arquivo enviado. Vai para innerHTML: escapar.
+                resultsDiv.innerHTML = `Erro: ${esc(data.detail || 'Erro na importação')}`;
             } else {
                 const hasErrors = data.erros > 0;
                 resultsDiv.className = `import-results show alert ${hasErrors ? 'alert-warning' : 'alert-success'}`;

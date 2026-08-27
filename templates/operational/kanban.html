@@ -407,16 +407,37 @@
 
 {% block scripts %}
     <script>
+        /* AUDIT-2026-08-W2C — F1: esta era a UNICA pagina do front que falava com
+           a API por `fetch` cru, com o JWT lido do localStorage UMA vez no load.
+           Consequencia: 401 nao era tratado em lugar nenhum. Token obsoleto no
+           localStorage (mesmo com cookie `access_token` valido) deixava o quadro
+           preso em "Carregando quadro..." para sempre, e uma sessao que expirava
+           no meio do uso transformava toda acao em no-op silencioso.
+           Agora TUDO passa por `Auth.apiRequest`, que (a) le o token a cada
+           request em vez de usar um snapshot e (b) no 401 limpa o estado e manda
+           para /login devolvendo null. Todo `response.ok` ganhou seu `else`. */
+        if (!Auth.requireAuth()) throw new Error("redirect");
+
         const boardId = {{ board_id }};
-        let token = Auth.getToken();
         let lists = [];
         let cards = [];
         let activeCardId = null;
+        /* F8: sequencia monotonica de abertura. Dois cliques rapidos em cards
+           diferentes faziam o modal abrir com o titulo de um e os checklists do
+           outro, porque tudo pendurava no `activeCardId` compartilhado. */
+        let cardDetailSeq = 0;
         let usersList = [];
         let fieldDefinitions = [];
+        /* F4: ultimo valor CONFIRMADO pelo servidor por campo personalizado. Sem
+           isto nao ha como desfazer a edicao quando o POST falha. */
+        let fieldSavedValues = {};
+        let fieldDefsError = "";
         let isAdmin = false;
 
-        // Check admin from user object stored in localStorage
+        /* AUDIT-2026-08-W2C — F10: este check e COSMETICO. `Auth.getUser()` le o
+           localStorage, que o proprio usuario edita; trocar "role" ali revela o
+           botao e nada mais. A fronteira de verdade e o servidor (`require_admin`
+           nas rotas de /api/operational). Mantido apenas como afordancia de UX. */
         const _user = Auth.getUser();
         if (_user && _user.role === "admin") {
             isAdmin = true;
@@ -428,6 +449,48 @@
             const d = document.createElement('div');
             d.textContent = str;
             return d.innerHTML.replace(/\"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        /* ── Erros visiveis (AUDIT-2026-08-W2C) ──────────────────────────────
+           `Auth.apiRequest` devolve null quando JA tratou o 401 (limpou a sessao
+           e redirecionou). Nesse caso nao ha o que avisar: a pagina esta saindo,
+           e um alert() so atrapalharia o redirect. Por isso failMsg devolve null. */
+        async function failMsg(response, contexto) {
+            if (!response) return null;
+            let detail = "";
+            try {
+                const body = await response.json();
+                detail = body && body.detail ? body.detail : "";
+            } catch (err) {
+                // corpo de erro sem JSON (proxy, 502, HTML): o status ja basta.
+                console.warn("resposta de erro sem JSON:", err);
+            }
+            return contexto + ": " + (detail || "HTTP " + response.status);
+        }
+
+        function showError(msg) {
+            if (msg) alert(msg);
+        }
+
+        /* Falha no CARREGAMENTO do quadro. Sem isto a pagina ficava eternamente
+           em "Carregando quadro..." sem nenhum sinal de erro (F1). */
+        function boardFatal(msg) {
+            if (!msg) return;
+            document.getElementById("kanbanContainer").innerHTML = `
+                <div class="board-empty">
+                    <div class="board-empty-icon">&#9888;</div>
+                    <p><strong>${esc(msg)}</strong></p>
+                    <p class="board-empty-hint">Recarregue a página. Se o erro persistir, avise o suporte.</p>
+                </div>
+            `;
+        }
+
+        /* F6: guarda anti-duplo-clique. Nao ha chave de idempotencia no servidor,
+           entao dois cliques no submit criam DOIS cards/colunas/comentarios.
+           Mesmo padrao de `templates/partials/_lead_edit_modal.html:setLeadSaving`. */
+        function setSubmitting(form, busy) {
+            const btn = form.querySelector('button[type="submit"]');
+            if (btn) btn.disabled = busy;
         }
 
         // Modal triggers
@@ -477,54 +540,72 @@
         }
 
         async function fetchBoardInfo() {
-            let response = await fetch(`/api/operational/boards/${boardId}`, {
-                headers: { "Authorization": `Bearer ${token}` }
-            });
-            if (response.ok) {
-                let b = await response.json();
+            const response = await Auth.apiRequest(`/api/operational/boards/${boardId}`);
+            if (response && response.ok) {
+                const b = await response.json();
                 document.getElementById("boardTitle").innerText = b.name;
+            } else {
+                document.getElementById("boardTitle").innerText = "Erro ao carregar o quadro";
+                boardFatal(await failMsg(response, "Não foi possível carregar este quadro"));
             }
         }
 
         async function fetchLists() {
-            let response = await fetch(`/api/operational/boards/${boardId}/lists`, {
-                headers: { "Authorization": `Bearer ${token}` }
-            });
-            if (response.ok) {
+            const response = await Auth.apiRequest(`/api/operational/boards/${boardId}/lists`);
+            if (response && response.ok) {
                 lists = await response.json();
                 updateCreateCardState();
+            } else {
+                boardFatal(await failMsg(response, "Não foi possível carregar as colunas"));
             }
         }
 
         async function fetchCards() {
-            let response = await fetch(`/api/operational/boards/${boardId}/cards`, {
-                headers: { "Authorization": `Bearer ${token}` }
-            });
-            if (response.ok) {
+            const response = await Auth.apiRequest(`/api/operational/boards/${boardId}/cards`);
+            if (response && response.ok) {
                 cards = await response.json();
                 renderKanban();
+            } else {
+                boardFatal(await failMsg(response, "Não foi possível carregar os cards"));
             }
         }
 
+        /* F2: era `GET /api/users`, que (a) responde `UserListResponse`
+           ({total, skip, limit, users}) e nao um array — `usersList.forEach`
+           estourava TypeError e abortava o init() antes de
+           `fetchFieldDefinitions()`, matando tambem os campos personalizados —
+           e (b) e protegido por `require_admin`, entao para nao-admin voltava
+           403 e a lista ficava vazia. `/api/users/for-select` existe exatamente
+           para isto e e aberto a qualquer autenticado (ver tarefas.html). */
         async function fetchUsers() {
-            let response = await fetch("/api/users", {
-                headers: { "Authorization": `Bearer ${token}` }
-            });
-            if (response.ok) {
-                usersList = await response.json();
-                let select = document.getElementById("addAssigneeSelect");
+            const select = document.getElementById("addAssigneeSelect");
+            const response = await Auth.apiRequest("/api/users/for-select");
+            if (response && response.ok) {
+                const data = await response.json();
+                usersList = (data && data.users) ? data.users : [];
                 usersList.forEach(u => {
-                    select.innerHTML += `<option value="${u.id}">${u.nome}</option>`;
+                    // F3: `u.nome` vinha cru dentro de um atributo/texto de <option>.
+                    select.innerHTML += `<option value="${u.id}">${esc(u.nome)}</option>`;
                 });
+            } else {
+                /* Degrada em vez de travar: os nomes viram "User #id". Aviso no
+                   proprio select — um alert() aqui interromperia o load do quadro. */
+                usersList = [];
+                if (select.options.length) select.options[0].textContent = "Erro ao carregar usuários";
+                console.error(await failMsg(response, "Falha ao carregar usuários"));
             }
         }
 
         async function fetchFieldDefinitions() {
-            let response = await fetch(`/api/operational/boards/${boardId}/field-definitions`, {
-                headers: { "Authorization": `Bearer ${token}` }
-            });
-            if (response.ok) {
+            const response = await Auth.apiRequest(`/api/operational/boards/${boardId}/field-definitions`);
+            if (response && response.ok) {
                 fieldDefinitions = await response.json();
+                fieldDefsError = "";
+            } else {
+                // Mensagem mostrada no painel do card (fetchCustomFields), onde o
+                // usuario realmente sentiria a falta dos campos.
+                fieldDefinitions = [];
+                fieldDefsError = await failMsg(response, "Não foi possível carregar os campos do quadro") || "";
             }
         }
 
@@ -576,12 +657,12 @@
             let countMap = {};
             cards.forEach(c => {
                 if (c.is_archived) return;
-                
+
                 let listDiv = document.getElementById(`list-cards-${c.list_id}`);
                 if (!listDiv) return;
 
                 countMap[c.list_id] = (countMap[c.list_id] || 0) + 1;
-                
+
                 let card = document.createElement("div");
                 card.className = "kanban-card";
                 card.draggable = true;
@@ -614,105 +695,149 @@
         // Drag & Drop
         function allowDrop(e) { e.preventDefault(); }
         function drag(e, cardId) { e.dataTransfer.setData("text/plain", cardId); e.currentTarget.classList.add("dragging"); }
+
+        /* F5: o `catch (err) {}` vazio + a ausencia de `else` faziam um move
+           recusado (403, 404, 400 de regra de negocio) ou uma queda de rede
+           sumirem sem rastro. E o backend responde 200 com um corpo COMPLETAMENTE
+           diferente — {"status": "no_change", ...},
+           `app/routers/operational_flow.py:38-45` — quando a coluna de destino e
+           a mesma; sem ler o corpo era impossivel distinguir de um move real. */
         async function drop(e, toListId) {
             e.preventDefault();
-            let cardId = e.dataTransfer.getData("text/plain");
-            
+            const cardId = e.dataTransfer.getData("text/plain");
+
             try {
-                let response = await fetch(`/api/operational/cards/${cardId}/move`, {
+                const response = await Auth.apiRequest(`/api/operational/cards/${cardId}/move`, {
                     method: "POST",
-                    headers: { 
-                        "Content-Type": "application/json",
-                        "Authorization": `Bearer ${token}` 
-                    },
                     body: JSON.stringify({ to_list_id: toListId })
                 });
+                if (!response) return;  // 401 tratado por Auth.apiRequest
                 if (response.ok) {
-                    fetchCards();
+                    let body = {};
+                    try {
+                        body = await response.json();
+                    } catch (err) {
+                        console.warn("move: resposta 200 sem JSON", err);
+                    }
+                    if (body && body.status === "no_change") {
+                        // Sucesso sem movimento: nao e erro, nao merece alerta.
+                        console.info("move: card já estava nesta coluna");
+                    }
+                } else {
+                    showError(await failMsg(response, "Não foi possível mover o card"));
                 }
-            } catch (err) {}
+                // Sucesso OU falha: repinta a partir do servidor para a tela nunca
+                // ficar mostrando um estado que o backend nao aceitou.
+                await fetchCards();
+            } catch (err) {
+                console.error("drop: falha de rede ao mover o card", err);
+                showError("Falha de rede ao mover o card. Verifique sua conexão e tente de novo.");
+            }
         }
 
         // Handle Create Card
         document.getElementById("createCardForm").onsubmit = async (e) => {
             e.preventDefault();
-            let list_id = document.getElementById("cardCol").value;
-            let title = document.getElementById("cardTitle").value;
-            let description = document.getElementById("cardDesc").value;
-            
+            const form = e.currentTarget;
+            const list_id = document.getElementById("cardCol").value;
+            const title = document.getElementById("cardTitle").value;
+            const description = document.getElementById("cardDesc").value;
+
+            setSubmitting(form, true);
             try {
-                let response = await fetch("/api/operational/cards", {
+                const response = await Auth.apiRequest("/api/operational/cards", {
                     method: "POST",
-                    headers: { 
-                        "Content-Type": "application/json",
-                        "Authorization": `Bearer ${token}` 
-                    },
                     body: JSON.stringify({ board_id: boardId, list_id, title, description })
                 });
-                
-                if (response.ok) {
+
+                if (response && response.ok) {
                     cardModal.classList.remove("show");
-                    document.getElementById("createCardForm").reset();
-                    fetchCards();
+                    form.reset();
+                    await fetchCards();
+                } else {
+                    showError(await failMsg(response, "Não foi possível criar o card"));
                 }
-            } catch (err) {}
+            } catch (err) {
+                console.error("createCard: falha de rede", err);
+                showError("Falha de rede ao criar o card. Verifique sua conexão.");
+            } finally {
+                setSubmitting(form, false);
+            }
         };
 
         // Handle Create List
         document.getElementById("createListForm").onsubmit = async (e) => {
             e.preventDefault();
-            let name = document.getElementById("listName").value;
-            
+            const form = e.currentTarget;
+            const name = document.getElementById("listName").value;
+
+            setSubmitting(form, true);
             try {
-                let response = await fetch("/api/operational/lists", {
+                const response = await Auth.apiRequest("/api/operational/lists", {
                     method: "POST",
-                    headers: { 
-                        "Content-Type": "application/json",
-                        "Authorization": `Bearer ${token}` 
-                    },
                     body: JSON.stringify({ board_id: boardId, name, position: lists.length })
                 });
-                
-                if (response.ok) {
+
+                if (response && response.ok) {
                     listModal.classList.remove("show");
-                    document.getElementById("createListForm").reset();
+                    form.reset();
                     await fetchLists();
-                    fetchCards();
+                    await fetchCards();
+                } else {
+                    showError(await failMsg(response, "Não foi possível criar a coluna"));
                 }
-            } catch (err) {}
+            } catch (err) {
+                console.error("createList: falha de rede", err);
+                showError("Falha de rede ao criar a coluna. Verifique sua conexão.");
+            } finally {
+                setSubmitting(form, false);
+            }
         };
 
-        // Rich Card Details Logic
+        /* F8: `activeCardId` era trocado ANTES do fetch e o modal simplesmente
+           nao abria em caso de erro (sem `else`) — clicar num card nao fazia
+           nada. Agora o id viaja como parametro pelos sub-fetches e uma
+           sequencia descarta o resultado de um clique que ja foi superado. */
         async function openCardDetails(cardId) {
-            activeCardId = cardId;
-            let response = await fetch(`/api/operational/cards/${cardId}`, {
-                headers: { "Authorization": `Bearer ${token}` }
-            });
+            const seq = ++cardDetailSeq;
+            let response;
+            try {
+                response = await Auth.apiRequest(`/api/operational/cards/${cardId}`);
+            } catch (err) {
+                console.error("openCardDetails: falha de rede", err);
+                showError("Falha de rede ao abrir o card. Verifique sua conexão.");
+                return;
+            }
+            if (!response) return;  // 401 tratado
             if (response.ok) {
-                let c = await response.json();
+                if (seq !== cardDetailSeq) return;  // outro card assumiu no meio do caminho
+                const c = await response.json();
+                activeCardId = cardId;
                 document.getElementById("richCardTitle").innerText = c.title;
                 document.getElementById("richCardDesc").innerText = c.description || 'Sem descrição.';
-                
-                await fetchChecklists();
-                await fetchComments();
-                await fetchAssignees();
-                await fetchCustomFields();
-                await fetchHistory();
 
+                await fetchChecklists(cardId);
+                await fetchComments(cardId);
+                await fetchAssignees(cardId);
+                await fetchCustomFields(cardId);
+                await fetchHistory(cardId);
+
+                if (seq !== cardDetailSeq) return;
                 richModal.classList.add("show");
+            } else {
+                showError(await failMsg(response, "Não foi possível abrir este card"));
             }
         }
 
-        async function fetchChecklists() {
-            let response = await fetch(`/api/operational/cards/${activeCardId}/checklists`, {
-                headers: { "Authorization": `Bearer ${token}` }
-            });
-            if (response.ok) {
-                let lists = await response.json();
-                let container = document.getElementById("checklistsContainer");
+        async function fetchChecklists(cardId = activeCardId) {
+            const container = document.getElementById("checklistsContainer");
+            const response = await Auth.apiRequest(`/api/operational/cards/${cardId}/checklists`);
+            if (response && response.ok) {
+                const checklists = await response.json();
+                if (cardId !== activeCardId) return;  // resposta de um card ja abandonado
                 container.innerHTML = "";
-                
-                lists.forEach(l => {
+
+                checklists.forEach(l => {
                     let section = document.createElement("div");
                     section.innerHTML = `
                         <div style="font-weight: var(--fw-semibold); font-size:12px; color:var(--color-text); margin-bottom:6px; display:flex; justify-content:space-between;">
@@ -724,87 +849,99 @@
                     container.appendChild(section);
                     fetchChecklistItems(l.id);
                 });
+            } else {
+                container.innerHTML = `<div style="font-size:11px; color:var(--color-error);">${esc(await failMsg(response, "Erro ao carregar checklists") || "")}</div>`;
             }
         }
 
         async function fetchChecklistItems(checklistId) {
-            let response = await fetch(`/api/operational/checklists/${checklistId}/items`, {
-                headers: { "Authorization": `Bearer ${token}` }
-            });
-            if (response.ok) {
-                let items = await response.json();
-                let listDiv = document.getElementById(`checklist-items-${checklistId}`);
+            const listDiv = document.getElementById(`checklist-items-${checklistId}`);
+            if (!listDiv) return;
+            const response = await Auth.apiRequest(`/api/operational/checklists/${checklistId}/items`);
+            if (response && response.ok) {
+                const items = await response.json();
                 listDiv.innerHTML = "";
-                
+
                 items.forEach(i => {
                     let div = document.createElement("div");
                     div.style.display = "flex";
                     div.style.alignItems = "center";
                     div.style.gap = "8px";
                     div.style.fontSize = "12px";
+                    /* F7: o browser marca/desmarca o checkbox ANTES do request.
+                       Passamos o proprio input para poder desfazer se o POST falhar. */
                     div.innerHTML = `
-                        <input type="checkbox" ${i.is_checked ? 'checked' : ''} onclick="toggleChecklistItem(${i.id})">
+                        <input type="checkbox" ${i.is_checked ? 'checked' : ''} onclick="toggleChecklistItem(${i.id}, this)">
                         <span style="${i.is_checked ? 'text-decoration: line-through; color: var(--color-text-4);' : ''}">${esc(i.name)}</span>
                     `;
                     listDiv.appendChild(div);
                 });
+            } else {
+                listDiv.innerHTML = `<div style="font-size:11px; color:var(--color-error);">${esc(await failMsg(response, "Erro ao carregar itens") || "")}</div>`;
             }
         }
 
-        async function toggleChecklistItem(itemId) {
-            let response = await fetch(`/api/operational/checklist-items/${itemId}/toggle`, {
-                method: "POST",
-                headers: { "Authorization": `Bearer ${token}` }
-            });
-            if (response.ok) {
-                fetchChecklists();
+        /* F7: sem `else`, um toggle recusado deixava a tarefa marcada como feita
+           na tela enquanto o servidor continuava com ela pendente — ate o proximo
+           reload completo. `input` chega do onclick para reverter na hora. */
+        async function toggleChecklistItem(itemId, input) {
+            try {
+                const response = await Auth.apiRequest(`/api/operational/checklist-items/${itemId}/toggle`, {
+                    method: "POST"
+                });
+                if (!response) return;  // 401 tratado
+                if (response.ok) {
+                    await fetchChecklists();
+                } else {
+                    if (input) input.checked = !input.checked;
+                    showError(await failMsg(response, "Não foi possível alterar o item"));
+                }
+            } catch (err) {
+                console.error("toggleChecklistItem: falha de rede", err);
+                if (input) input.checked = !input.checked;
+                showError("Falha de rede ao alterar o item. O estado anterior foi restaurado.");
             }
         }
 
         async function addChecklistItem(checklistId) {
-            let name = prompt("Nome da nova tarefa:");
+            const name = prompt("Nome da nova tarefa:");
             if (!name) return;
-            
-            let response = await fetch(`/api/operational/checklists/${checklistId}/items`, {
+
+            const response = await Auth.apiRequest(`/api/operational/checklists/${checklistId}/items`, {
                 method: "POST",
-                headers: { 
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${token}` 
-                },
                 body: JSON.stringify({ name })
             });
-            if (response.ok) {
-                fetchChecklists();
+            if (response && response.ok) {
+                await fetchChecklists();
+            } else {
+                showError(await failMsg(response, "Não foi possível criar o item"));
             }
         }
 
         document.getElementById("addChecklistBtn").onclick = async () => {
-            let name = prompt("Nome da lista de verificação:");
+            const name = prompt("Nome da lista de verificação:");
             if (!name) return;
-            
-            let response = await fetch(`/api/operational/cards/${activeCardId}/checklists`, {
+
+            const response = await Auth.apiRequest(`/api/operational/cards/${activeCardId}/checklists`, {
                 method: "POST",
-                headers: { 
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${token}` 
-                },
                 body: JSON.stringify({ name })
             });
-            if (response.ok) {
-                fetchChecklists();
+            if (response && response.ok) {
+                await fetchChecklists();
+            } else {
+                showError(await failMsg(response, "Não foi possível criar a lista"));
             }
         };
 
         // Comments
-        async function fetchComments() {
-            let response = await fetch(`/api/operational/cards/${activeCardId}/comments`, {
-                headers: { "Authorization": `Bearer ${token}` }
-            });
-            if (response.ok) {
-                let comments = await response.json();
-                let container = document.getElementById("commentsContainer");
+        async function fetchComments(cardId = activeCardId) {
+            const container = document.getElementById("commentsContainer");
+            const response = await Auth.apiRequest(`/api/operational/cards/${cardId}/comments`);
+            if (response && response.ok) {
+                const comments = await response.json();
+                if (cardId !== activeCardId) return;
                 container.innerHTML = "";
-                
+
                 comments.forEach(c => {
                     let div = document.createElement("div");
                     div.style.background = "var(--color-bg)";
@@ -817,39 +954,47 @@
                     `;
                     container.appendChild(div);
                 });
+            } else {
+                container.innerHTML = `<div style="font-size:11px; color:var(--color-error);">${esc(await failMsg(response, "Erro ao carregar comentários") || "")}</div>`;
             }
         }
 
         document.getElementById("addCommentForm").onsubmit = async (e) => {
             e.preventDefault();
-            let content = document.getElementById("commentContent").value;
-            
-            let response = await fetch(`/api/operational/cards/${activeCardId}/comments`, {
-                method: "POST",
-                headers: { 
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${token}` 
-                },
-                body: JSON.stringify({ content })
-            });
-            
-            if (response.ok) {
-                document.getElementById("commentContent").value = "";
-                fetchComments();
-                fetchHistory(); // comments generate history too
+            const form = e.currentTarget;
+            const content = document.getElementById("commentContent").value;
+
+            setSubmitting(form, true);
+            try {
+                const response = await Auth.apiRequest(`/api/operational/cards/${activeCardId}/comments`, {
+                    method: "POST",
+                    body: JSON.stringify({ content })
+                });
+
+                if (response && response.ok) {
+                    document.getElementById("commentContent").value = "";
+                    await fetchComments();
+                    await fetchHistory(); // comments generate history too
+                } else {
+                    showError(await failMsg(response, "Não foi possível enviar o comentário"));
+                }
+            } catch (err) {
+                console.error("addComment: falha de rede", err);
+                showError("Falha de rede ao enviar o comentário. Verifique sua conexão.");
+            } finally {
+                setSubmitting(form, false);
             }
         };
 
         // Assignees
-        async function fetchAssignees() {
-            let response = await fetch(`/api/operational/cards/${activeCardId}/assignees`, {
-                headers: { "Authorization": `Bearer ${token}` }
-            });
-            if (response.ok) {
-                let links = await response.json();
-                let container = document.getElementById("assigneesList");
+        async function fetchAssignees(cardId = activeCardId) {
+            const container = document.getElementById("assigneesList");
+            const response = await Auth.apiRequest(`/api/operational/cards/${cardId}/assignees`);
+            if (response && response.ok) {
+                const links = await response.json();
+                if (cardId !== activeCardId) return;
                 container.innerHTML = "";
-                
+
                 links.forEach(l => {
                     let u = usersList.find(user => user.id === l.user_id);
                     let name = u ? u.nome : `User #${l.user_id}`;
@@ -858,56 +1003,77 @@
                     div.style.justifyContent = "space-between";
                     div.style.alignItems = "center";
                     div.style.fontSize = "12px";
+                    // F3: `name` vem de /api/users e ia cru para o innerHTML.
                     div.innerHTML = `
-                        <span>👤 ${name}</span>
+                        <span>👤 ${esc(name)}</span>
                         <button style="background:none; border:none; color:var(--color-error); cursor:pointer; font-size:11px;" onclick="removeAssignee(${l.user_id})">Remover</button>
                     `;
                     container.appendChild(div);
                 });
+            } else {
+                container.innerHTML = `<div style="font-size:11px; color:var(--color-error);">${esc(await failMsg(response, "Erro ao carregar responsáveis") || "")}</div>`;
             }
         }
 
         document.getElementById("addAssigneeSelect").onchange = async (e) => {
-            let userId = e.target.value;
+            const select = e.currentTarget;
+            const userId = select.value;
             if (!userId) return;
 
-            let response = await fetch(`/api/operational/cards/${activeCardId}/assignees/${userId}`, {
-                method: "POST",
-                headers: { "Authorization": `Bearer ${token}` }
-            });
-            if (response.ok) {
-                e.target.value = "";
-                fetchAssignees();
-                fetchHistory();
+            select.disabled = true;
+            try {
+                const response = await Auth.apiRequest(`/api/operational/cards/${activeCardId}/assignees/${userId}`, {
+                    method: "POST"
+                });
+                if (response && response.ok) {
+                    select.value = "";
+                    await fetchAssignees();
+                    await fetchHistory();
+                } else {
+                    select.value = "";
+                    showError(await failMsg(response, "Não foi possível designar o usuário"));
+                }
+            } catch (err) {
+                console.error("addAssignee: falha de rede", err);
+                select.value = "";
+                showError("Falha de rede ao designar o usuário. Verifique sua conexão.");
+            } finally {
+                select.disabled = false;
             }
         };
 
         async function removeAssignee(userId) {
-            let response = await fetch(`/api/operational/cards/${activeCardId}/assignees/${userId}/remove`, {
-                method: "POST",
-                headers: { "Authorization": `Bearer ${token}` }
+            const response = await Auth.apiRequest(`/api/operational/cards/${activeCardId}/assignees/${userId}/remove`, {
+                method: "POST"
             });
-            if (response.ok) {
-                fetchAssignees();
-                fetchHistory();
+            if (response && response.ok) {
+                await fetchAssignees();
+                await fetchHistory();
+            } else {
+                showError(await failMsg(response, "Não foi possível remover o responsável"));
             }
         }
 
         // Custom Fields
-        async function fetchCustomFields() {
-            let response = await fetch(`/api/operational/cards/${activeCardId}/field-values`, {
-                headers: { "Authorization": `Bearer ${token}` }
-            });
+        async function fetchCustomFields(cardId = activeCardId) {
+            const container = document.getElementById("customFieldsContainer");
             let values = [];
-            if (response.ok) {
+            const response = await Auth.apiRequest(`/api/operational/cards/${cardId}/field-values`);
+            if (response && response.ok) {
                 values = await response.json();
+            } else {
+                const msg = await failMsg(response, "Erro ao carregar valores dos campos");
+                if (msg) console.error(msg);
             }
+            if (cardId !== activeCardId) return;
 
-            let container = document.getElementById("customFieldsContainer");
             container.innerHTML = "";
+            fieldSavedValues = {};
 
             if (fieldDefinitions.length === 0) {
-                container.innerHTML = "<div style='font-size:11px; color:var(--color-text-3);'>Nenhum campo estruturado cadastrado no quadro.</div>";
+                container.innerHTML = fieldDefsError
+                    ? `<div style="font-size:11px; color:var(--color-error);">${esc(fieldDefsError)}</div>`
+                    : "<div style='font-size:11px; color:var(--color-text-3);'>Nenhum campo estruturado cadastrado no quadro.</div>";
                 return;
             }
 
@@ -919,82 +1085,129 @@
                     else if (def.field_type === "date") currentVal = valObj.value_date ? valObj.value_date.substring(0, 10) : "";
                     else currentVal = valObj.value_text || "";
                 }
+                // F4: memoriza o valor confirmado pelo servidor para poder desfazer.
+                fieldSavedValues[def.id] = currentVal;
 
                 let div = document.createElement("div");
                 div.style.fontSize = "12px";
-                
+
+                /* F3 (XSS ARMAZENADO): `currentVal` sai de `valObj.value_text` —
+                   texto livre que QUALQUER usuario grava por `saveCustomField` e
+                   que era interpolado cru dentro de um atributo value="..." e das
+                   <option>. Sem CSP e com o JWT no localStorage, isso era roubo de
+                   sessao de todo operador que abrisse o card. `esc()` tambem
+                   escapa aspas, entao o atributo de aspas duplas fica seguro. */
                 let inputHtml = "";
                 if (def.field_type === "boolean") {
                     inputHtml = `<input type="checkbox" id="field-${def.id}" ${currentVal ? 'checked' : ''} onchange="saveCustomField(${def.id}, 'boolean')">`;
                 } else if (def.field_type === "date") {
-                    inputHtml = `<input type="date" id="field-${def.id}" class="form-input" style="width:100%; padding:4px;" value="${currentVal}" onchange="saveCustomField(${def.id}, 'date')">`;
+                    inputHtml = `<input type="date" id="field-${def.id}" class="form-input" style="width:100%; padding:4px;" value="${esc(currentVal)}" onchange="saveCustomField(${def.id}, 'date')">`;
                 } else if (def.field_type === "select" && def.select_options) {
                     let opts = def.select_options;
                     inputHtml = `<select id="field-${def.id}" class="form-input" style="width:100%; padding:4px;" onchange="saveCustomField(${def.id}, 'select')">
                         <option value="">Selecione...</option>
-                        ${opts.map(o => `<option value="${o}" ${o === currentVal ? 'selected' : ''}>${o}</option>`).join('')}
+                        ${opts.map(o => `<option value="${esc(o)}" ${o === currentVal ? 'selected' : ''}>${esc(o)}</option>`).join('')}
                     </select>`;
                 } else {
-                    inputHtml = `<input type="text" id="field-${def.id}" class="form-input" style="width:100%; padding:4px;" value="${currentVal}" onblur="saveCustomField(${def.id}, 'text')">`;
+                    inputHtml = `<input type="text" id="field-${def.id}" class="form-input" style="width:100%; padding:4px;" value="${esc(currentVal)}" onblur="saveCustomField(${def.id}, 'text')">`;
                 }
 
                 div.innerHTML = `
-                    <div style="font-weight:var(--fw-medium); margin-bottom:2px; font-size:11px;">${def.name}</div>
+                    <div style="font-weight:var(--fw-medium); margin-bottom:2px; font-size:11px;">${esc(def.name)}</div>
                     ${inputHtml}
                 `;
                 container.appendChild(div);
             });
         }
 
+        /* F4: o POST era aguardado e o resultado JOGADO FORA — sem `if
+           (response.ok)` e sem try/catch. Qualquer 4xx/5xx ou queda de rede
+           apagava a edicao enquanto o input continuava exibindo o texto digitado,
+           entao o usuario ia embora convencido de que salvou. */
         async function saveCustomField(definitionId, type) {
-            let input = document.getElementById(`field-${definitionId}`);
-            let body = {};
-            
+            const input = document.getElementById(`field-${definitionId}`);
+            if (!input) return;
+            const anterior = fieldSavedValues[definitionId];
+            const atual = (type === "boolean") ? input.checked : input.value;
+
+            const body = {};
             if (type === "boolean") body.value_boolean = input.checked;
             else if (type === "date") body.value_date = input.value ? new Date(input.value) : null;
             else body.value_text = input.value;
 
-            await fetch(`/api/operational/cards/${activeCardId}/field-values/${definitionId}`, {
-                method: "POST",
-                headers: { 
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${token}` 
-                },
-                body: JSON.stringify(body)
-            });
+            const desfazer = () => {
+                if (type === "boolean") input.checked = !!anterior;
+                else input.value = anterior === undefined || anterior === null ? "" : anterior;
+            };
+
+            try {
+                const response = await Auth.apiRequest(`/api/operational/cards/${activeCardId}/field-values/${definitionId}`, {
+                    method: "POST",
+                    body: JSON.stringify(body)
+                });
+                if (!response) return;  // 401 tratado: a pagina ja esta saindo
+                if (response.ok) {
+                    fieldSavedValues[definitionId] = atual;
+                } else {
+                    desfazer();
+                    showError(await failMsg(response, "Não foi possível salvar o campo"));
+                }
+            } catch (err) {
+                console.error("saveCustomField: falha de rede", err);
+                desfazer();
+                showError("Falha de rede ao salvar o campo. O valor anterior foi restaurado.");
+            }
         }
 
         // History
-        async function fetchHistory() {
-            let response = await fetch(`/api/operational/cards/${activeCardId}/activity-logs`, {
-                headers: { "Authorization": `Bearer ${token}` }
-            });
-            if (response.ok) {
-                let logs = await response.json();
-                let container = document.getElementById("cardHistoryContainer");
-                container.innerHTML = "";
-                
-                logs.forEach(l => {
-                    let date = new Date(l.created_at).toLocaleString('pt-BR');
-                    container.innerHTML += `<div>[${date}] <strong>${l.action}</strong> por User #${l.user_id}</div>`;
+        async function fetchHistory(cardId = activeCardId) {
+            const container = document.getElementById("cardHistoryContainer");
+            const response = await Auth.apiRequest(`/api/operational/cards/${cardId}/activity-logs`);
+            if (response && response.ok) {
+                const logs = await response.json();
+                if (cardId !== activeCardId) return;
+                /* F9: `l.action` ia cru para o innerHTML e, pior, o `innerHTML +=`
+                   dentro do loop reparseava o container a cada iteracao (destroi
+                   listeners e e O(n^2)). Monta tudo e atribui UMA vez. */
+                const linhas = logs.map(l => {
+                    const date = new Date(l.created_at).toLocaleString('pt-BR');
+                    return `<div>[${esc(date)}] <strong>${esc(l.action)}</strong> por User #${esc(l.user_id)}</div>`;
                 });
+                container.innerHTML = linhas.join('');
+            } else {
+                container.innerHTML = `<div style="color:var(--color-error);">${esc(await failMsg(response, "Erro ao carregar o histórico") || "")}</div>`;
             }
         }
 
         // Archive Card
-        document.getElementById("archiveCardBtn").onclick = async () => {
+        document.getElementById("archiveCardBtn").onclick = async (e) => {
             if (!confirm("Deseja realmente arquivar este card operacional?")) return;
-            
-            let response = await fetch(`/api/operational/cards/${activeCardId}/archive`, {
-                method: "POST",
-                headers: { "Authorization": `Bearer ${token}` }
-            });
-            if (response.ok) {
-                richModal.classList.remove("show");
-                fetchCards();
+            const btn = e.currentTarget;
+
+            btn.disabled = true;
+            try {
+                const response = await Auth.apiRequest(`/api/operational/cards/${activeCardId}/archive`, {
+                    method: "POST"
+                });
+                if (response && response.ok) {
+                    richModal.classList.remove("show");
+                    await fetchCards();
+                } else {
+                    showError(await failMsg(response, "Não foi possível arquivar o card"));
+                }
+            } catch (err) {
+                console.error("archiveCard: falha de rede", err);
+                showError("Falha de rede ao arquivar o card. Verifique sua conexão.");
+            } finally {
+                btn.disabled = false;
             }
         };
 
-        init();
+        /* init() faz cinco requests em serie; se uma delas estourar (rede caindo
+           no meio, JSON invalido) o quadro parava sem dizer nada. */
+        init().catch(err => {
+            console.error("init: falha ao carregar o quadro", err);
+            boardFatal("Erro inesperado ao carregar o quadro.");
+        });
     </script>
 {% endblock %}

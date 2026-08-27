@@ -11,7 +11,7 @@
     <style>
         /* Tabs and Filters */
         .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-6); flex-wrap: wrap; gap: var(--space-4); }
-        .page-header h1 { font-size: var(--font-size-2xl); font-weight: var(--font-weight-bold); }
+        .page-header h1 { font-size: var(--font-size-2xl); font-weight: var(--fw-bold); }
 
         .tabs-container {
             display: flex; gap: var(--space-2); margin-bottom: var(--space-6);
@@ -19,7 +19,7 @@
         }
         .tab-button {
             background: none; border: none; padding: var(--space-3) var(--space-4);
-            font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold);
+            font-size: var(--font-size-sm); font-weight: var(--fw-semibold);
             color: var(--color-dark-400); cursor: pointer; white-space: nowrap;
             border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.2s;
         }
@@ -33,7 +33,7 @@
         .filter-btn {
             background: var(--color-white); border: 1px solid var(--color-dark-200);
             padding: var(--space-2) var(--space-4); border-radius: var(--radius-full);
-            font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold);
+            font-size: var(--font-size-xs); font-weight: var(--fw-semibold);
             color: var(--color-dark-500); cursor: pointer; transition: all 0.2s;
         }
         .filter-btn:hover { background: var(--color-dark-100); }
@@ -49,15 +49,23 @@
         .task-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
 
         /* Status Colors */
+        /* AUDIT-2026-08-W2A (F8/F9): estas regras citavam nomes de variavel que
+           NUNCA existiram em variables.css — o "danger" das cores, os pesos
+           "font weight" por extenso e a sombra "xl". Os nomes reais sao
+           --color-error, --fw-* e --shadow-lg. Custom property indefinida invalida
+           a declaracao no computed-value time: a borda caia para currentColor
+           (texto quase preto) e as tarefas atrasadas/canceladas perdiam o unico
+           marcador visual forte; e o peso da fonte, sendo herdado, deixava os
+           titulos MAIS LEVES que o h1 padrao ja definido em base.css:38-43. */
         .task-card[data-status="pendente"] { border-left-color: var(--color-warning); }
         .task-card[data-status="em_andamento"] { border-left-color: var(--color-info); }
         .task-card[data-status="concluido"] { border-left-color: var(--color-success); opacity: 0.7; }
-        .task-card[data-status="cancelado"] { border-left-color: var(--color-danger); opacity: 0.5; }
+        .task-card[data-status="cancelado"] { border-left-color: var(--color-error); opacity: 0.5; }
 
-        .task-card.is-overdue { border-left-color: var(--color-danger); background: #fff5f5; }
+        .task-card.is-overdue { border-left-color: var(--color-error); background: #fff5f5; }
 
         .task-content { flex: 1; margin-right: var(--space-4); }
-        .task-title { font-size: var(--font-size-base); font-weight: var(--font-weight-semibold); margin-bottom: 4px; display: flex; align-items: center; gap: var(--space-2); }
+        .task-title { font-size: var(--font-size-base); font-weight: var(--fw-semibold); margin-bottom: 4px; display: flex; align-items: center; gap: var(--space-2); }
         .task-date { font-size: var(--font-size-xs); color: var(--color-dark-400); display: flex; align-items: center; gap: 4px; }
         .task-badge-auto {
             font-size: 10px;
@@ -91,10 +99,10 @@
         /* Modal */
         .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: var(--z-modal); align-items: center; justify-content: center; backdrop-filter: blur(4px); }
         .modal-overlay.show { display: flex; }
-        .modal { background: var(--color-white); border-radius: var(--radius-2xl); width: 90%; max-width: 500px; box-shadow: var(--shadow-xl); animation: modalSlideIn 0.3s ease; }
+        .modal { background: var(--color-white); border-radius: var(--radius-2xl); width: 90%; max-width: 500px; box-shadow: var(--shadow-lg); animation: modalSlideIn 0.3s ease; }
         @keyframes modalSlideIn { from { opacity: 0; transform: translateY(20px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
         .modal-header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-6); border-bottom: 1px solid var(--color-dark-100); }
-        .modal-header h3 { font-size: var(--font-size-xl); font-weight: var(--font-weight-bold); }
+        .modal-header h3 { font-size: var(--font-size-xl); font-weight: var(--fw-bold); }
         .modal-close { background: none; border: none; font-size: var(--font-size-xl); cursor: pointer; color: var(--color-dark-400); padding: var(--space-2); border-radius: var(--radius-md); }
         .modal-close:hover { background: var(--color-dark-100); }
         .modal-body { padding: var(--space-6); }
@@ -106,7 +114,7 @@
         }
         .view-toggle button {
             background: none; border: none; padding: var(--space-2) var(--space-4); font-size: var(--font-size-sm);
-            font-weight: var(--font-weight-semibold); color: var(--color-dark-500); cursor: pointer; border-radius: var(--radius-md);
+            font-weight: var(--fw-semibold); color: var(--color-dark-500); cursor: pointer; border-radius: var(--radius-md);
             transition: all 0.2s;
         }
         .view-toggle button.active { background: var(--color-white); color: var(--color-primary); box-shadow: var(--shadow-sm); }
@@ -114,7 +122,7 @@
         /* Calendar Theme Adjustments */
         .fc { font-family: var(--font-family); background: white; border-radius: var(--radius-xl); overflow: hidden; }
         .fc-theme-standard td, .fc-theme-standard th { border-color: var(--color-dark-100); }
-        .fc-col-header-cell { background: var(--color-dark-50); padding: 8px 0 !important; color: var(--color-dark-500); font-weight: 600; text-transform: uppercase; font-size: 11px; }
+        .fc-col-header-cell { background: var(--color-dark-100); padding: 8px 0 !important; color: var(--color-dark-500); font-weight: 600; text-transform: uppercase; font-size: 11px; }
         .fc-event { border: none !important; border-radius: 4px; padding: 2px 4px; font-size: 11px; font-weight: 500; cursor: pointer; transition: transform 0.1s; }
         .fc-event:hover { transform: scale(1.02); filter: brightness(0.95); }
         .fc .fc-toolbar-title { font-size: 1.25rem !important; font-weight: 700; color: var(--color-dark); text-transform: capitalize; }
@@ -211,7 +219,7 @@
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#805AD5" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
                         Resultado da IA
                     </label>
-                    <textarea id="taskResultadoIA" class="form-input" rows="3" placeholder="Preenchido automaticamente pela IA ao concluir a tarefa..." style="background:var(--color-dark-50); border-color:#805AD5;"></textarea>
+                    <textarea id="taskResultadoIA" class="form-input" rows="3" placeholder="Preenchido automaticamente pela IA ao concluir a tarefa..." style="background:var(--color-dark-100); border-color:#805AD5;"></textarea>
                 </div>
                 <div class="form-group">
                     <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--color-dark-500);margin-top:10px;">
@@ -231,6 +239,14 @@
 {% block scripts %}
     <script>
     let currentTab = 'minhas'; // minhas, equipe, automaticas
+    // AUDIT-2026-08-WG (F-442) — sequenciamento de requisicao.
+    // Trocar de aba dispara `fetchTasks()` sem cancelar a chamada anterior e
+    // sem conferir, na volta, se a aba ainda e a mesma. Duas trocas rapidas —
+    // ou uma aba lenta seguida de uma rapida — e a resposta ANTIGA chega
+    // depois e pinta a lista: o operador ve as tarefas da equipe sob o rotulo
+    // 'minhas', sem nenhum erro na tela. Mesmo idioma de `listRequestSeq` no
+    // inbox e de `previewRequestSeq` em segmentacao.html.
+    let tasksRequestSeq = 0;
     let dateFilter = 'all'; // all, overdue, today, tomorrow
     let allTasks = [];
     let calendar = null;
@@ -273,6 +289,24 @@
         if (!resp || !resp.ok) return;
         const data = await resp.json();
         const select = document.getElementById('taskResponsavel');
+
+        // AUDIT-2026-08-W2G-orq: o backend passou a exigir admin para DEFINIR o
+        // dono de uma tarefa, e com razao — quem nao e admin so ve
+        // `Task.user_id == current_user.id` na listagem, entao atribuir a outra
+        // pessoa (ou ao Agente IA, que grava user_id NULL) faria a tarefa
+        // desaparecer da tela de quem a criou, sem volta pela interface.
+        // Este filtro e COSMETICO: a autoridade e o 403 do servidor, que o
+        // handler de salvar ja exibe. Ele existe para nao oferecer uma opcao que
+        // sempre falha.
+        const _u = (window.Auth && Auth.getUser && Auth.getUser()) || {};
+        const _papel = String(_u.role || '').toLowerCase();
+        if (_papel !== 'admin') {
+            const nota = document.createElement('option');
+            nota.disabled = true;
+            nota.textContent = '— atribuir a outra pessoa: só administradores —';
+            select.appendChild(nota);
+            return;
+        }
 
         for (const u of data.users) {
             const opt = document.createElement('option');
@@ -358,9 +392,24 @@
         }
         // Se for "equipe", não passamos user_filter, e o backend (sendo Admin) trará de todos.
 
+        const seq = ++tasksRequestSeq;
+        const tabDaRequisicao = currentTab;
         const resp = await Auth.apiRequest(url);
-        if (!resp) return;
+        // Resposta obsoleta: chegou depois de o operador ja ter trocado de aba.
+        // Descartar em silencio e o certo — a requisicao vigente vai pintar.
+        if (seq !== tasksRequestSeq || tabDaRequisicao !== currentTab) return;
+        // AUDIT-2026-08-W2A (F11): so `if (resp)` nao bastava. Num 403/500 o corpo
+        // nao e a lista de tarefas, entao `.map()` estourava TypeError e a tela
+        // ficava presa em "Carregando tarefas..." para sempre. E quando nao
+        // estourava, o erro do servidor aparecia como "Nenhuma tarefa encontrada" —
+        // falha de infra indistinguivel de sistema vazio. Mesmo padrao de
+        // segmentacao.html:362-365: estado de erro explicito + botao de repetir.
+        if (!resp || !resp.ok) {
+            if (resp) list.innerHTML = `<div class="empty-state"><div class="empty-icon"></div><p>Erro ao carregar as tarefas (${resp.status}).</p><button class="btn btn-primary" onclick="fetchTasks()">Tentar de novo</button></div>`;
+            return;
+        }
         allTasks = await resp.json();
+        if (seq !== tasksRequestSeq || tabDaRequisicao !== currentTab) return;
         renderTasks();
         updateCalendarEvents();
     }
@@ -420,7 +469,7 @@
             const dateStr = t.data_vencimento ? new Date(t.data_vencimento).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : 'Sem prazo';
 
             return `
-            <div class="task-card ${isOverdue ? 'is-overdue' : ''}" data-status="${t.status}" data-tipo="${t.tipo}">
+            <div class="task-card ${isOverdue ? 'is-overdue' : ''}" data-status="${esc(t.status)}" data-tipo="${esc(t.tipo)}">
                 <div class="task-content">
                     <div class="task-title">
                         ${t.tipo === 'automatica' ? `<span class="task-badge-auto"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>IA/N8N</span>` : ''}
@@ -434,12 +483,27 @@
                 </div>
                 <div class="task-actions">
                     ${t.status !== 'concluido' ? `<button class="check-btn" title="Marcar como Concluída" onclick="updateTaskStatus(${t.id}, 'concluido')">✓</button>` : ''}
-                    <button title="Editar" onclick='editTask(${JSON.stringify(t).replace(/'/g, "&#39;")})'>Editar</button>
+                    <button title="Editar" data-task-id="${t.id}">Editar</button>
                     <button title="Excluir" onclick="deleteTask(${t.id})">Excluir</button>
                 </div>
             </div>
             `;
         }).join('');
+
+        // AUDIT-2026-08-W2A (F1): antes o objeto inteiro ia serializado dentro de
+        // um onclick com aspas simples e so `'` virava entidade. O `&` nao era
+        // escapado por ninguem (nem pela serializacao JSON), entao um titulo contendo
+        // o texto literal `&quot;` era DECODIFICADO pelo parser HTML numa aspa dupla
+        // de verdade ANTES do JS compilar — fechava a string do JSON e abria
+        // contexto de expressao. Nenhuma funcao de escape resolve isso: o problema
+        // e por dado em handler inline. Agora so o id (numero) atravessa o HTML e o
+        // objeto e buscado em allTasks. Mesmo padrao de gestao/pendencias.html:255-263.
+        list.querySelectorAll('[data-task-id]').forEach(b => {
+            b.addEventListener('click', () => {
+                const task = allTasks.find(t => String(t.id) === b.dataset.taskId);
+                if (task) editTask(task);
+            });
+        });
     }
 
     function openTaskModal(task = null) {

@@ -84,12 +84,28 @@ const Auth = {
      * Logout
      */
     async logout() {
+        // AUDIT-2026-08-W1A: `fetch` NAO rejeita em 4xx/5xx — o try/catch antigo
+        // so pegava falha de rede, entao um logout RECUSADO pelo servidor era
+        // reportado como sucesso e o usuario ia embora achando que a sessao
+        // tinha sido encerrada. Agora o status e checado e a falha aparece.
+        let ok = false;
         try {
-            await fetch('/api/auth/logout', { method: 'POST' });
+            const response = await fetch('/api/auth/logout', {
+                method: 'POST',
+                credentials: 'same-origin',
+            });
+            ok = response.ok;
         } catch (e) {
-            // Ignore
+            console.error('Logout: falha de rede ao chamar /api/auth/logout', e);
         }
+        // O estado local sai de qualquer jeito: manter credencial num logout
+        // pedido pelo usuario seria pior que o aviso abaixo.
         this.clearAuth();
+        if (!ok) {
+            alert('Nao foi possivel encerrar a sessao no servidor. '
+                + 'O cookie desta sessao pode continuar valido — feche o '
+                + 'navegador e avise o suporte.');
+        }
         window.location.href = '/login';
     },
 

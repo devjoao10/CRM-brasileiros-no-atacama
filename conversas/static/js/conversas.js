@@ -340,7 +340,10 @@
             // e qualquer acao do usuario recarrega. Badges seguem vivos.
             if (loadedWindowSize <= MAX_PAGE_LIMIT) loadConversations('refresh');
             if (activeConversation) {
-                const resp = await Auth.apiRequest(`/api/conversations/${activeConversation.id}`);
+                // opening=false: este e o refresh de 5s. Sem isto o backend
+                // refaz os read-repairs contra o CRM a cada ciclo, por aba.
+                const resp = await Auth.apiRequest(
+                    `/api/conversations/${activeConversation.id}?opening=false`);
                 if (!resp || !resp.ok) return;
                 const data = await resp.json();
                 // CONV-NOTIFICATIONS-01: novas inbound da conversa aberta
@@ -353,7 +356,19 @@
                 // ja fechada. Sem timer paralelo: o polling de 5s ja existia.
                 const windowChanged =
                     activeConversation.service_window_open !== data.service_window_open;
-                if (newCount !== oldCount || windowChanged) {
+                // AUDIT-2026-08-WA — o poll comparava APENAS a contagem de
+                // mensagens e a janela. Se outro atendente assumisse, liberasse
+                // ou trocasse o responsavel da conversa aberta, nada disso
+                // aparecia: o operador continuava vendo o estado antigo ate
+                // trocar de conversa. Agora o estado operacional entra na
+                // comparacao.
+                const estadoMudou =
+                    activeConversation.atendente_id !== data.atendente_id ||
+                    activeConversation.responsavel_id !== data.responsavel_id ||
+                    activeConversation.status !== data.status ||
+                    activeConversation.queued_at !== data.queued_at ||
+                    activeConversation.primeira_resposta_humana_at !== data.primeira_resposta_humana_at;
+                if (newCount !== oldCount || windowChanged || estadoMudou) {
                     activeConversation = data;
                     renderChat();
                     renderLeadPanel();
@@ -781,7 +796,11 @@
     }
 
     async function loadChat(conversationId) {
-        const resp = await Auth.apiRequest(`/api/conversations/${conversationId}`);
+        // opening=true: abertura de fato. E aqui que o espelho de tags do CRM e o
+        // read-repair de responsavel precisam rodar. Explicito no call site para
+        // nao depender do default do backend.
+        const resp = await Auth.apiRequest(
+            `/api/conversations/${conversationId}?opening=true`);
         if (!resp || !resp.ok) return;
 
         activeConversation = await resp.json();
@@ -898,6 +917,25 @@
     let tplSending = false;   // guard de duplo clique (UI)
 
     /**
+     * AUDIT-2026-08-WD (D1): HH:MM no fuso do navegador (mesmo padrao de
+     * formatTime, mais abaixo neste arquivo). `service_window_expires_at` e
+     * um timestamp que o BACKEND ja calculou — isto so FORMATA, nunca soma
+     * 24h.
+     */
+    function formatWindowClock(date) {
+        return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    /** "faltam 2h13min" / "faltam 47min"; null quando o instante ja passou. */
+    function formatWindowRemaining(expiresAt) {
+        const totalMin = Math.floor((expiresAt.getTime() - Date.now()) / 60000);
+        if (totalMin <= 0) return null;
+        const h = Math.floor(totalMin / 60);
+        const m = totalMin % 60;
+        return h > 0 ? `${h}h${m}min` : `${m}min`;
+    }
+
+    /**
      * Aplica o estado da janela ao composer. Esconder o composer NAO basta:
      * Enter, o input de arquivo e os botoes de reenvio continuariam vivos.
      * Cada mecanismo free-form e desligado explicitamente.
@@ -920,13 +958,33 @@
         if (btnSend) btnSend.disabled = !open;
         if (btnAttach) btnAttach.disabled = !open;
 
+        // AUDIT-2026-08-WD (D1): o atendente nao tinha como saber QUANDO a
+        // janela fecha, so que estava aberta ou fechada. `service_window_expires_at`
+        // vem PRONTO do backend (nunca somado aqui) — mostrado no cabecalho
+        // enquanto aberta e no aviso de janela encerrada depois de fechar.
+        const expiryEl = document.getElementById('chatWindowExpiry');
+        const expiresAt = (conv && conv.service_window_expires_at)
+            ? new Date(conv.service_window_expires_at) : null;
+
         if (!open) {
             closeQrPalette(false);
             closeVarPalette();
-        } else {
-            document.getElementById('windowClosedText').textContent =
-                'O cliente não envia uma mensagem há mais de 24 horas. '
-                + 'Para retomar o atendimento, envie um template aprovado.';
+            if (expiryEl) expiryEl.style.display = 'none';
+            document.getElementById('windowClosedText').textContent = expiresAt
+                ? `Janela de 24h encerrada às ${formatWindowClock(expiresAt)}. `
+                  + 'Para retomar o atendimento, envie um template aprovado.'
+                : 'O cliente não envia uma mensagem há mais de 24 horas. '
+                  + 'Para retomar o atendimento, envie um template aprovado.';
+        } else if (expiryEl) {
+            if (expiresAt) {
+                const restante = formatWindowRemaining(expiresAt);
+                expiryEl.textContent = restante
+                    ? `Janela fecha às ${formatWindowClock(expiresAt)} (faltam ${restante})`
+                    : `Janela fecha às ${formatWindowClock(expiresAt)}`;
+                expiryEl.style.display = '';
+            } else {
+                expiryEl.style.display = 'none';
+            }
         }
     }
 
@@ -1886,28 +1944,50 @@
     };
 
     // CONV-08b: reenvio manual de mensagem outbound com falha
-    window._retryMessage = async function (msgId) {
+    // AUDIT-2026-08-WD (D4): guard de modulo p/ duplo clique/duas abas.
+    // Antes desta linha `retrySending` era usado (linhas abaixo) SEM nunca
+    // ter sido declarado — em strict mode isso e ReferenceError na PRIMEIRA
+    // leitura, entao TODO clique em reenviar lancava excecao antes de chegar
+    // ao fetch: nenhuma requisicao de retry saia do navegador. O guard em si
+    // (disable do botao, checagem antes do envio, reset no finally) ja
+    // seguia o mesmo padrao de `tplSending` — faltava so esta declaracao.
+    let retrySending = false;
+    window._retryMessage = async function (msgId, btn) {
         if (!activeConversation) return;
         // CONV-WINDOW-01: reenvio e free-form — o botao some com a janela fechada,
         // mas o clique tambem e barrado aqui (e no backend, que e a autoridade).
         if (windowClosed()) { applyWindowState(activeConversation); return; }
-        const resp = await Auth.apiRequest(
-            `/api/conversations/${activeConversation.id}/messages/${Number(msgId)}/retry`,
-            { method: 'POST' }
-        );
-        if (resp && resp.ok) {
-            showToast('Mensagem reenviada');
-        } else {
-            const d = resp ? await readErrorDetail(resp) : {};
-            if (resp && resp.status === 409 && d.code === 'WINDOW_CLOSED') {
-                await handleWindowClosed(d);
-                loadChat(activeConversation.id);
-                return;
+        // AUDIT-2026-08-W2D — F2: nao havia guard nenhum. Duplo toque (trivial
+        // no celular) disparava DOIS POSTs; o backend so checa status != 'failed'
+        // ANTES da chamada assincrona a Meta, entao os dois passam e o CLIENTE
+        // recebe a mesma mensagem duas vezes — na mesma linha do banco, ou seja,
+        // invisivel na UI. Mesmo padrao do tplSending dos templates: flag de
+        // modulo + botao desabilitado durante TODO o request.
+        if (retrySending) return;
+        retrySending = true;
+        if (btn) btn.disabled = true;
+        try {
+            const resp = await Auth.apiRequest(
+                `/api/conversations/${activeConversation.id}/messages/${Number(msgId)}/retry`,
+                { method: 'POST' }
+            );
+            if (resp && resp.ok) {
+                showToast('Mensagem reenviada');
+            } else {
+                const d = resp ? await readErrorDetail(resp) : {};
+                if (resp && resp.status === 409 && d.code === 'WINDOW_CLOSED') {
+                    await handleWindowClosed(d);
+                    loadChat(activeConversation.id);
+                    return;
+                }
+                showToast(d.message || 'Falha ao reenviar a mensagem.');
             }
-            showToast(d.message || 'Falha ao reenviar a mensagem.');
+            loadChat(activeConversation.id);
+            loadConversations();
+        } finally {
+            retrySending = false;
+            if (btn && btn.isConnected) btn.disabled = false;
         }
-        loadChat(activeConversation.id);
-        loadConversations();
     };
 
     // ─── Rendering ──────────────────────────────
@@ -1961,10 +2041,22 @@
             const isActive = activeConversation && activeConversation.id === conv.id;
             const isUnread = conv.unread_count > 0;
             const preview = conv.ultimo_msg || 'Sem mensagens';
-            const respLabel = conv.responsavel_nome || 'Agente IA';
+            // AUDIT-2026-08-WA — a linha mostrava so o responsavel COMERCIAL
+            // (do CRM). Uma conversa operacionalmente do Beto aparecia rotulada
+            // com quem responde comercialmente por ela — em geral "Agente IA" —
+            // e o atendente nao tinha como saber de quem era o atendimento.
+            // Agora o ATENDENTE vem primeiro quando existe.
+            const respLabel = conv.atendente_nome || conv.responsavel_nome || 'Agente IA';
+            // Aguardando humano: a Bia terminou e ninguem respondeu ainda.
+            // NAO e o mesmo que "nao lida" — abrir a conversa zera unread_count
+            // mas nao encerra a espera.
+            const aguardandoHumano =
+                isOpenStatus(conv.status) &&
+                conv.is_bot_active === false &&
+                !conv.primeira_resposta_humana_at;
 
             return `
-                <div class="conv-item ${isActive ? 'active' : ''} ${isUnread ? 'unread' : ''}"
+                <div class="conv-item ${isActive ? 'active' : ''} ${isUnread ? 'unread' : ''} ${aguardandoHumano ? 'aguardando-humano' : ''}"
                      data-id="${conv.id}" onclick="window._openConv(${conv.id})">
                     <div class="conv-avatar">
                         ${initials}
@@ -1982,6 +2074,7 @@
                         <div style="font-size:10px; color:var(--dark-400); margin-top:2px; display:flex; align-items:center; gap:4px;">
                             <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
                             ${escapeHtml(respLabel)}
+                            ${aguardandoHumano ? '<span class="conv-aguardando" title="A Bia concluiu a triagem e nenhum atendente respondeu ainda">aguardando humano</span>' : ''}
                         </div>
                         ${(conv.tags && conv.tags.length) ? `<div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:3px;">${conv.tags.map(t => tagChipHtml(t, false)).join('')}</div>` : ''}
                     </div>
@@ -2056,6 +2149,57 @@
         container.scrollTop = container.scrollHeight;
     }
 
+
+    // AUDIT-2026-08-WF — marcacao do WhatsApp na bolha.
+    //
+    // O operador escreve (e cola de volta) texto com a sintaxe do WhatsApp:
+    // *negrito*, _italico_, ~riscado~ e ```mono```. Ate aqui a bolha mostrava
+    // os asteriscos crus, entao o operador nao via o que o cliente ia ver, e
+    // reaproveitar um orcamento significava reconstruir a mensagem a mao.
+    //
+    // Roda SEMPRE sobre o texto JA ESCAPADO por escapeHtml: as unicas tags que
+    // podem existir aqui sao as que esta funcao insere. Marcador precisa
+    // encostar em nao-espaco dos dois lados e nao atravessa linha — a mesma
+    // regra do WhatsApp — o que tambem evita casar `_` no meio de uma URL.
+    const WA_MARKUP = [
+        [/(^|[\s(>])\*(?=\S)([^*\n]*?\S)\*(?=$|[\s.,!?;:)<])/g, '<b>'],
+        [/(^|[\s(>])_(?=\S)([^_\n]*?\S)_(?=$|[\s.,!?;:)<])/g, '<i>'],
+        [/(^|[\s(>])~(?=\S)([^~\n]*?\S)~(?=$|[\s.,!?;:)<])/g, '<s>'],
+    ];
+
+    function renderWhatsappMarkup(escaped) {
+        if (!escaped) return escaped;
+        // ```bloco``` primeiro: o conteudo dele nao recebe as demais marcacoes.
+        const monos = [];
+        let out = String(escaped).replace(/```([\s\S]+?)```/g, (_, corpo) => {
+            monos.push(corpo);
+            return `\u0000MONO${monos.length - 1}\u0000`;
+        });
+        for (const [re, tag] of WA_MARKUP) {
+            const close = tag.replace('<', '</');
+            out = out.replace(re, (_, pre, corpo) => `${pre}${tag}${corpo}${close}`);
+        }
+        return out.replace(/\u0000MONO(\d+)\u0000/g, (_, i) => `<code>${monos[Number(i)]}</code>`);
+    }
+    window._renderWhatsappMarkup = renderWhatsappMarkup;  // exposto para teste
+
+    // AUDIT-2026-08-WF — le o corpo do OBJETO em memoria, nunca do DOM.
+    // `innerText` da bolha ja passou por escape, marcacao e `pre-wrap`; usar o
+    // que esta na tela devolveria texto sem `*` e com espacos normalizados.
+    function reuseMessage(messageId) {
+        const msgs = (activeConversation && activeConversation.messages) || [];
+        const msg = msgs.find(m => Number(m.id) === Number(messageId));
+        if (!msg || !msg.content) return;
+        const input = document.getElementById('msgInput');
+        if (!input) return;
+        input.value = msg.content;
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+        input.style.height = 'auto';
+        input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+    }
+    window._reuseMessage = reuseMessage;
+
     function appendMessageElement(container, msg) {
         const bubble = document.createElement('div');
         bubble.className = `message-bubble ${msg.direction}`;
@@ -2064,10 +2208,25 @@
         let statusIcon = '';
 
         if (msg.direction === 'outbound') {
+            // AUDIT-2026-08-WF — reaproveitar a mensagem enviada.
+            //
+            // Nao existia caminho nenhum para reusar um orcamento ja mandado:
+            // o operador selecionava a bolha e copiava, o que traz o TEXTO
+            // RENDERIZADO (sem os asteriscos da marcacao, com as quebras
+            // achatadas pelo navegador) e obriga a reconstruir a mensagem.
+            // Este botao devolve ao composer o CORPO ARMAZENADO, byte a byte.
+            if (msg.id && msg.content && !/^\[[A-Z]+\]$/.test(msg.content)) {
+                statusIcon += `<button class="msg-reuse-btn" onclick="window._reuseMessage(${Number(msg.id)})" title="Reaproveitar esta mensagem no campo de escrita" aria-label="Reaproveitar mensagem">&#8631;</button>`;
+            }
             if (msg.status === 'sending') statusIcon = '<span class="message-status">...</span>';
             else if (msg.status === 'sent') statusIcon = '<span class="message-status">&#10003;</span>';
             else if (msg.status === 'delivered') statusIcon = '<span class="message-status delivered">&#10003;&#10003;</span>';
             else if (msg.status === 'read') statusIcon = '<span class="message-status read">&#10003;&#10003;</span>';
+            // AUDIT-2026-08-W1D-orq: 'simulated' (dev sem credenciais da Meta) nao
+            // tinha ramo aqui e caia no else implicito — a mensagem aparecia SEM
+            // marcador nenhum, indistinguivel de uma ainda sem status. Marcador
+            // proprio, com o titulo dizendo o que aconteceu.
+            else if (msg.status === 'simulated') statusIcon = '<span class="message-status" title="Simulado: sem credenciais da Meta, nada foi enviado (apenas em desenvolvimento)">&#9210;</span>';
             else if (msg.status === 'failed') {
                 // CONV-WINDOW-01: `last_error` ja e um resumo SEGURO produzido por
                 // whatsapp._error_result (nunca token/header/payload). Antes so
@@ -2083,7 +2242,10 @@
             }
         }
 
-        let content = escapeHtml(msg.content);
+        // AUDIT-2026-08-WF — escapa primeiro, formata depois. Nunca o contrario:
+        // formatar antes deixaria as tags que inserimos serem escapadas, e
+        // escapar depois nao existe (o texto ja teria HTML nosso dentro).
+        let content = renderWhatsappMarkup(escapeHtml(msg.content));
 
         // CONV-04: caption real (esconde placeholders [IMAGE]/[VIDEO]/[DOCUMENT]/[AUDIO])
         const captionHtml = (msg.content && !/^\[[A-Z]+\]$/.test(msg.content)) ? `<br>${content}` : '';

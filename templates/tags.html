@@ -7,7 +7,7 @@
     <style>
         /* Tags page */
         .tags-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-6); flex-wrap: wrap; gap: var(--space-4); }
-        .tags-header h1 { font-size: var(--font-size-2xl); font-weight: var(--font-weight-bold); }
+        .tags-header h1 { font-size: var(--font-size-2xl); font-weight: var(--fw-bold); }
 
         .tags-grid {
             display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -23,10 +23,10 @@
         .tag-color-dot {
             width: 40px; height: 40px; border-radius: var(--radius-lg);
             flex-shrink: 0; display: flex; align-items: center; justify-content: center;
-            font-size: var(--font-size-lg); color: var(--color-white); font-weight: var(--font-weight-bold);
+            font-size: var(--font-size-lg); color: var(--color-white); font-weight: var(--fw-bold);
         }
         .tag-card-info { flex: 1; }
-        .tag-card-name { font-size: var(--font-size-base); font-weight: var(--font-weight-semibold); color: var(--color-dark); }
+        .tag-card-name { font-size: var(--font-size-base); font-weight: var(--fw-semibold); color: var(--color-dark); }
         .tag-card-meta { font-size: var(--font-size-xs); color: var(--color-dark-400); margin-top: 2px; }
         .tag-card-actions { display: flex; gap: var(--space-1); }
         .tag-card-actions button {
@@ -36,16 +36,16 @@
         }
         .tag-card-actions button:hover { background: var(--color-dark-100); }
 
-        .empty-state { text-align: center; padding: var(--space-16); color: var(--color-dark-400); }
+        .empty-state { text-align: center; padding: var(--space-12); color: var(--color-dark-400); }
         .empty-state .empty-icon { font-size: 3rem; margin-bottom: var(--space-4); }
 
         /* Modal */
         .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: var(--z-modal); align-items: center; justify-content: center; backdrop-filter: blur(4px); }
         .modal-overlay.show { display: flex; }
-        .modal { background: var(--color-white); border-radius: var(--radius-2xl); width: 90%; max-width: 440px; box-shadow: var(--shadow-xl); animation: modalSlideIn 0.3s ease; }
+        .modal { background: var(--color-white); border-radius: var(--radius-2xl); width: 90%; max-width: 440px; box-shadow: var(--shadow-lg); animation: modalSlideIn 0.3s ease; }
         @keyframes modalSlideIn { from { opacity: 0; transform: translateY(20px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
         .modal-header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-6); border-bottom: 1px solid var(--color-dark-100); }
-        .modal-header h3 { font-size: var(--font-size-xl); font-weight: var(--font-weight-bold); }
+        .modal-header h3 { font-size: var(--font-size-xl); font-weight: var(--fw-bold); }
         .modal-close { background: none; border: none; font-size: var(--font-size-xl); cursor: pointer; color: var(--color-dark-400); padding: var(--space-2); border-radius: var(--radius-md); }
         .modal-close:hover { background: var(--color-dark-100); }
         .modal-body { padding: var(--space-6); }
@@ -143,8 +143,12 @@
     function buildColorPicker() {
         const grid = document.getElementById('colorPicker');
         grid.innerHTML = COLORS.map(c =>
-            `<div class="color-swatch ${c === selectedColor ? 'selected' : ''}" style="background:${c}" data-color="${c}" onclick="selectColor('${c}')"><span class="check">✓</span></div>`
+            `<div class="color-swatch ${c === selectedColor ? 'selected' : ''}" style="background:${c}" data-color="${c}"><span class="check">✓</span></div>`
         ).join('');
+        // AUDIT-2026-08-W2A: mesmo sendo constante do proprio arquivo, nenhum dado
+        // volta a ser literal de string JS dentro de on*. O data-color ja existia.
+        grid.querySelectorAll('.color-swatch').forEach(s =>
+            s.addEventListener('click', () => selectColor(s.dataset.color)));
     }
 
     function selectColor(color) {
@@ -162,11 +166,21 @@
         preview.style.background = selectedColor;
     }
 
+    let allTags = [];
+
     async function loadTags() {
-        const resp = await Auth.apiRequest('/api/tags');
-        if (!resp) return;
-        const data = await resp.json();
         const grid = document.getElementById('tagsGrid');
+        const resp = await Auth.apiRequest('/api/tags');
+        // AUDIT-2026-08-W2A (F11): `if (resp)` sozinho deixava um 403/500 cair no
+        // ramo de baixo — falha do servidor virava "Nenhuma tag criada ainda" — ou
+        // estourar TypeError em `data.tags.length` e travar o "Carregando tags...".
+        // Padrao de segmentacao.html:362-365: erro explicito + botao de repetir.
+        if (!resp || !resp.ok) {
+            if (resp) grid.innerHTML = `<div class="empty-state"><div class="empty-icon">🏷️</div><p>Erro ao carregar as tags (${resp.status}).</p><button class="btn btn-primary" onclick="loadTags()">Tentar de novo</button></div>`;
+            return;
+        }
+        const data = await resp.json();
+        allTags = data.tags || [];
 
         if (data.tags.length === 0) {
             grid.innerHTML = '<div class="empty-state"><div class="empty-icon">🏷️</div><p>Nenhuma tag criada ainda</p></div>';
@@ -182,7 +196,7 @@
                 </div>
                 <div class="tag-card-actions">
                     <button title="Editar" onclick="editTag(${t.id})">✏️</button>
-                    <button title="Excluir" onclick="deleteTag(${t.id}, '${esc(t.nome)}')">🗑️</button>
+                    <button title="Excluir" onclick="deleteTag(${t.id})">🗑️</button>
                 </div>
             </div>
         `).join('');
@@ -233,7 +247,14 @@
         loadTags();
     }
 
-    async function deleteTag(id, nome) {
+    // AUDIT-2026-08-W2A (F2): o nome vinha interpolado no proprio onclick, como
+    // literal de string JS. O parser HTML decodifica `&#39;` de volta para uma
+    // apostrofe ANTES do JS compilar, entao o esc() ali nao protegia nada: uma tag
+    // chamada `x');alert(1);//` fechava a string e executava. Agora so o id (numero)
+    // atravessa o atributo e o nome sai de allTags, ja em memoria.
+    async function deleteTag(id) {
+        const tag = allTags.find(t => t.id === id);
+        const nome = tag ? tag.nome : '';
         if (!confirm(`Excluir a tag "${nome}"? Ela será removida de todos os leads.`)) return;
         const resp = await Auth.apiRequest(`/api/tags/${id}`, { method: 'DELETE' });
         if (resp && resp.ok) loadTags();

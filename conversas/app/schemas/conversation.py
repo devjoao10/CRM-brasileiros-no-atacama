@@ -116,6 +116,14 @@ class ConversationResponse(BaseModel):
     responsavel_nome: Optional[str] = None
     last_customer_msg_at: Optional[datetime] = None
     queued_at: Optional[datetime] = None  # PACOTE-A: entrada na fila humana
+    # AUDIT-2026-08-WA — o que separa "atribuido" de "atendido". NULL enquanto
+    # nenhum humano tiver respondido; e o eixo das abas FILA vs MEUS.
+    primeira_resposta_humana_at: Optional[datetime] = None
+    # AUDIT-2026-08-WA — nome do ATENDENTE (operacional). A lista mostrava
+    # apenas `responsavel_nome` (comercial, do CRM), entao uma conversa
+    # operacionalmente do Beto aparecia rotulada "Julia" — ou "Agente IA" — e o
+    # atendente nao conseguia saber de quem era o atendimento.
+    atendente_nome: Optional[str] = None
     # CONV-WINDOW-01: janela de 24h da Meta. Campo COMPUTADO (property do model),
     # nunca coluna — recalculado a cada serializacao. Sem `expires_at`: a UI nao
     # tem countdown, so o booleano.

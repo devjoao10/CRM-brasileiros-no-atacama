@@ -116,6 +116,14 @@ class _FakeResp:
         return self._payload
 
 
+post_kwargs = {}
+# AUDIT-2026-08-WF2 — gancho executado DENTRO do POST ao agente, ou seja, com a
+# chamada em voo. E o unico ponto de onde da para observar o que o resto do
+# sistema ve enquanto a Bia processa (pool de conexoes, mensagem que chega no
+# meio do lote).
+agent_probe = {"fn": None}
+
+
 class _FakeAsyncClient:
     def __init__(self, *a, **k):
         client_kwargs.clear()
@@ -129,6 +137,10 @@ class _FakeAsyncClient:
 
     async def post(self, url, json=None, **k):
         posts["n"] += 1
+        post_kwargs.clear()
+        post_kwargs.update(k)
+        if agent_probe["fn"] is not None:
+            await agent_probe["fn"](json)
         mode = agent_mode["mode"]
         if mode == "timeout":
             raise httpx.ReadTimeout("simulado: n8n passou de 240s")
@@ -240,6 +252,51 @@ check(client_kwargs.get("timeout") is wh.AGENT_TIMEOUT,
       f"AsyncClient recebe o AGENT_TIMEOUT (got {client_kwargs.get('timeout')!r})")
 
 
+# ============ D2 — cabecalho de auth do webhook da Bia ============
+# AUDIT-2026-08-WF2 — `/webhook/agent-bia` esta aberto na internet. O webhook
+# irmao (`/webhook/gerenciador-leads`) ja ganhou Header Auth na D1, mas este NAO
+# podia ganhar: o Conversas nao mandava cabecalho nenhum, entao ligar a
+# autenticacao no n8n derrubaria a Bia no mesmo instante. O lado-repo agora
+# manda o cabecalho quando configurado.
+#
+# A ordem importa e esta travada aqui: SEM configuracao o comportamento e
+# IDENTICO ao de hoje (nenhum cabecalho), o que torna seguro subir o Conversas
+# antes de mexer no n8n. O contrario — ligar no n8n primeiro — corta a Bia.
+print()
+print("D2 — cabecalho de autenticacao no POST para o agente")
+
+run_agent(make_conv(), "ok")
+check(post_kwargs.get("headers") == {},
+      f"SEM configuracao: nenhum cabecalho de auth (got {post_kwargs.get('headers')!r}) — "
+      f"e o comportamento de hoje, byte a byte")
+
+_orig_nome = wh.N8N_WEBHOOK_AUTH_HEADER
+_orig_valor = wh.N8N_WEBHOOK_AUTH_VALUE
+try:
+    wh.N8N_WEBHOOK_AUTH_HEADER = "X-BnA-Webhook-Token"
+    wh.N8N_WEBHOOK_AUTH_VALUE = "segredo-de-teste"
+    run_agent(make_conv(), "ok")
+    check(post_kwargs.get("headers") == {"X-BnA-Webhook-Token": "segredo-de-teste"},
+          f"COM configuracao: o cabecalho chega ao POST (got {post_kwargs.get('headers')!r})")
+
+    # Meio-configurado nao vale: mandar um cabecalho com valor vazio seria pior
+    # que nao mandar — o n8n recusaria e a Bia cairia, com a configuracao
+    # parecendo feita.
+    wh.N8N_WEBHOOK_AUTH_VALUE = ""
+    run_agent(make_conv(), "ok")
+    check(post_kwargs.get("headers") == {},
+          f"nome sem valor -> NENHUM cabecalho (got {post_kwargs.get('headers')!r})")
+
+    wh.N8N_WEBHOOK_AUTH_HEADER = ""
+    wh.N8N_WEBHOOK_AUTH_VALUE = "segredo-de-teste"
+    run_agent(make_conv(), "ok")
+    check(post_kwargs.get("headers") == {},
+          f"valor sem nome -> NENHUM cabecalho (got {post_kwargs.get('headers')!r})")
+finally:
+    wh.N8N_WEBHOOK_AUTH_HEADER = _orig_nome
+    wh.N8N_WEBHOOK_AUTH_VALUE = _orig_valor
+
+
 # ============ A. Resposta lenta (>60s, <240s) e ACEITA ============
 print("\nA — resposta que antes estourava os 60s")
 
@@ -327,12 +384,38 @@ b_bot, b_atend, b_queue, b_status = (
 )
 run_agent(cid, "timeout")
 after = get_conv(cid)
-check(after.is_bot_active == b_bot, "is_bot_active NAO muda por falha da Bia")
-check(after.atendente_id == b_atend, "atendente_id NAO muda")
-check(after.queued_at == b_queue, "queued_at NAO muda (conversa nao entra/sai da fila)")
+# AUDIT-2026-08-WA — REGRA INVERTIDA, de proposito.
+#
+# Este bloco afirmava que uma falha da Bia NAO mexe no estado operacional. A
+# intencao era boa (um blip de rede nao deve reorganizar a fila), mas o efeito
+# real era o oposto do pretendido: a conversa ficava em ATENDIMENTOS BIA com
+# `is_bot_active=True` e NENHUM humano a via. O cliente escrevia, recebia o
+# fallback pedindo para reenviar, escrevia de novo, o agente falhava de novo —
+# o "loop do repita sua mensagem" que a operacao relatou, com o cliente
+# invisivel para a equipe o tempo todo.
+#
+# Agora uma falha DEGRADADA joga a conversa na FILA DE ESPERA humana: quem
+# escreveu e nao foi atendido pela automacao precisa alcancar uma pessoa. O
+# custo (a Bia para de responder essa conversa) e reversivel pelo proprio
+# atendente, que pode religar o bot no painel.
+check(after.is_bot_active is False,
+      "AUDIT-2026-08-WA: falha da Bia DESLIGA o bot (conversa vai para humano)")
+check(after.atendente_id == b_atend,
+      "atendente_id NAO muda — isto e excecao, nao handoff de triagem concluida")
+check(after.queued_at is not None,
+      "AUDIT-2026-08-WA: conversa entra na FILA DE ESPERA (nao fica invisivel)")
+check(after.primeira_resposta_humana_at is None,
+      "continua aguardando humano — o fallback da Bia nao e atendimento")
 check(after.status == b_status, "status da conversa NAO muda")
 check(after.ultimo_msg == FALLBACK, "preview reflete o fallback, que o cliente recebeu")
 check(after.unread_count == 0, "unread zerado — houve outbound entregue")
+
+# Idempotencia: uma segunda falha nao empurra a conversa para o fim da fila.
+fila_1 = after.queued_at
+run_agent(cid, "timeout")
+after2 = get_conv(cid)
+check(after2.queued_at == fila_1,
+      "AUDIT-2026-08-WA: falha repetida PRESERVA a posicao na fila (FIFO intacto)")
 
 
 # ============ F. Fallback que falha no envio ============
@@ -362,6 +445,168 @@ check(src.count("client.post(agent_url") == 1, "existe UM unico POST ao agente n
 for pattern in ("for _ in range", "while True"):
     check(pattern not in src.split("_fetch_agent_parts")[1].split("async def _forward_to_agent")[0],
           f"nenhum laco {pattern!r} em torno da chamada ao agente")
+
+
+# ============ P. AUDIT-2026-08-WF2 (D1) — pool durante a espera ============
+# A Bia leva 1m30-4m (AGENT_TIMEOUT.read = 240s). Se a sessao ficar aberta
+# durante esse `await`, cada lote em debounce segura UMA conexao do pool, que
+# tem teto de 15 (pool_size=5 + max_overflow=10, conversas/app/database.py).
+# Numa rajada de inbound o pool zera: a proxima requisicao — inclusive o
+# proprio POST /webhook e o polling do inbox — espera `pool_timeout` e recebe
+# sqlalchemy.exc.TimeoutError, que esta em `_INFRA_ERRORS` e vira 503; a Meta
+# reentrega, gera mais lotes e o pool nao se recupera.
+print()
+print("P — conexao do pool durante a chamada ao agente")
+
+from datetime import datetime as _datetime, timezone as _tz  # noqa: E402
+from sqlalchemy import event as _sa_event  # noqa: E402
+
+_pool = {"out": 0, "durante_agente": None}
+
+
+@_sa_event.listens_for(engine, "checkout")
+def _pool_checkout(dbapi_con, con_record, con_proxy):
+    _pool["out"] += 1
+
+
+@_sa_event.listens_for(engine, "checkin")
+def _pool_checkin(dbapi_con, con_record):
+    _pool["out"] -= 1
+
+
+async def _sonda_pool(payload):
+    _pool["durante_agente"] = _pool["out"]
+
+
+agent_probe["fn"] = _sonda_pool
+cid = make_conv()
+n_posts, enviados = run_agent(cid, "slow_ok")
+agent_probe["fn"] = None
+
+check(_pool["durante_agente"] == 0,
+      f"NENHUMA conexao do pool retida durante a chamada ao agente "
+      f"(got {_pool['durante_agente']})")
+rows = outbound(cid)
+check([e["message"] for e in enviados] == ["Resposta que demorou 2m36s"],
+      f"a resposta continua chegando ao cliente (got {[e['message'] for e in enviados]})")
+check(len(rows) == 1 and rows[0].status == "sent",
+      f"e continua sendo persistida depois de reabrir a sessao "
+      f"(got {[(m.content[:20], m.status) for m in rows]})")
+
+# Soltar a sessao so e correto se o estado for RECARREGADO depois da espera:
+# em 4 minutos um atendente pode ter assumido a conversa. Aplicar o objeto lido
+# ANTES do await escreveria decisao velha por cima do estado novo.
+cid = make_conv()
+
+
+async def _humano_assume(payload):
+    s = SessionLocal()
+    try:
+        c = s.query(Conversation).filter(Conversation.id == cid).first()
+        c.primeira_resposta_humana_at = _datetime.now(_tz.utc)
+        c.queued_at = None
+        s.commit()
+    finally:
+        s.close()
+
+
+agent_probe["fn"] = _humano_assume
+run_agent(cid, "timeout")  # degradado: e o ramo que mexe no estado operacional
+agent_probe["fn"] = None
+
+depois = get_conv(cid)
+check(depois.primeira_resposta_humana_at is not None,
+      "o atendimento humano registrado durante a espera sobreviveu")
+check(depois.queued_at is None,
+      f"conversa JA atendida por um humano NAO volta para a fila — a decisao usa "
+      f"o estado de depois do await, nao o de antes (got {depois.queued_at!r})")
+
+
+# ============ L. AUDIT-2026-08-WF2 (D2) — lote em voo ============
+# `_debounce_then_forward` apaga a conversa de `_debounce_tasks`/`_debounce_cutoffs`
+# ANTES de chamar a Bia. Uma mensagem que chega durante a chamada nao encontra
+# corte em memoria e recalcula a partir do ultimo outbound COMMITADO — e as
+# respostas da Bia so commitam no fim — entao o lote seguinte reinclui o que o
+# primeiro ja mandou: o cliente recebe duas respostas para a mesma pergunta e as
+# tools do Gerenciador rodam duas vezes sobre a mesma mensagem.
+print()
+print("L — lote em voo: a mesma mensagem nao vai duas vezes ao agente")
+
+M1 = "M1 quero um pacote para o Atacama"
+M2 = "M2 alo?"
+
+lotes = []
+eventos = []
+_no_ar = {"ev": None}
+_liberar = {"ev": None}
+
+
+def _inbound(cid, texto):
+    s = SessionLocal()
+    try:
+        s.add(Message(conversation_id=cid, direction="inbound", content=texto,
+                      msg_type="text", status="received"))
+        s.commit()
+    finally:
+        s.close()
+
+
+def _chegou_do_cliente(cid, texto):
+    """O que `_process_incoming_message` faz por mensagem do cliente: persiste,
+    fotografa o corte do lote e (re)agenda o debounce."""
+    _inbound(cid, texto)
+    s = SessionLocal()
+    try:
+        wh._remember_agent_cutoff(cid, s)
+    finally:
+        s.close()
+    wh._schedule_agent_debounce(cid)
+
+
+async def _lote_em_voo(payload):
+    idx = len(lotes) + 1
+    lotes.append(payload.get("mensagem"))
+    eventos.append(f"inicio {idx}")
+    if idx == 1:
+        _no_ar["ev"].set()
+        await _liberar["ev"].wait()   # segura o lote 1 EM VOO
+    eventos.append(f"fim {idx}")
+
+
+async def _cenario_lote_em_voo(cid):
+    _no_ar["ev"] = asyncio.Event()
+    _liberar["ev"] = asyncio.Event()
+    _chegou_do_cliente(cid, M1)
+    await asyncio.wait_for(_no_ar["ev"].wait(), timeout=10)
+    # A Bia esta processando M1. O cliente impaciente manda M2.
+    _chegou_do_cliente(cid, M2)
+    # Tempo de sobra para o debounce de M2 estourar com o lote 1 ainda em voo.
+    await asyncio.sleep(0.3)
+    _liberar["ev"].set()
+    for _ in range(50):
+        pend = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        if not pend:
+            break
+        await asyncio.wait(pend, timeout=10)
+
+
+_deb_orig = wh.AGENT_DEBOUNCE_SECONDS
+wh.AGENT_DEBOUNCE_SECONDS = 0.05
+agent_mode["mode"] = "slow_ok"   # resposta de UMA parte, sem sleep entre partes
+agent_probe["fn"] = _lote_em_voo
+cid = make_conv()
+asyncio.run(_cenario_lote_em_voo(cid))
+agent_probe["fn"] = None
+wh.AGENT_DEBOUNCE_SECONDS = _deb_orig
+
+check(sum(1 for lote in lotes if M1 in (lote or "")) == 1,
+      f"M1 foi entregue ao agente UMA unica vez (got {lotes})")
+check(len(lotes) == 2 and lotes[1] == M2,
+      f"o 2o lote leva SO a mensagem nova (got {lotes})")
+check(eventos == ["inicio 1", "fim 1", "inicio 2", "fim 2"],
+      f"lotes da MESMA conversa nao se sobrepoem (got {eventos})")
+check(len(outbound(cid)) == 2,
+      f"uma resposta por lote — nenhuma resposta duplicada (got {len(outbound(cid))})")
 
 
 # ─── Resultado ────────────────────────────────────────────────────────

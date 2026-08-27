@@ -55,10 +55,44 @@ services:
       # IA usa user read-only — APENAS SELECT, timeout 10s, max 5 conexões
       - DATABASE_READONLY_URL=postgresql://crm_readonly:${CRM_READONLY_PASSWORD}@postgres:5432/crm_atacama
       - SECRET_KEY=${SECRET_KEY:?Defina SECRET_KEY no .env}
-      - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD:?Defina ADMIN_INITIAL_PASSWORD no .env}
+      # AUDIT-2026-08-W1E (F5): o par de seed estava incoerente — a senha era
+      # OBRIGATORIA mas SEED_INITIAL_ADMIN nunca chegava ao container, entao
+      # app/config.py caia no default `false` em producao e a conta que a senha
+      # protegia nunca era criada. Agora o flag e explicito (opt-in, default
+      # seguro) e a senha e opcional; config.py ja recusa subir com seed ligado
+      # e senha vazia.
+      - SEED_INITIAL_ADMIN=${SEED_INITIAL_ADMIN:-false}
+      - ADMIN_INITIAL_EMAIL=${ADMIN_INITIAL_EMAIL:-admin@brasileirosnoatacama.com}
+      - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - INTERNAL_AI_AUTH_SECRET=${INTERNAL_AI_AUTH_SECRET:-}
       - CONVERSAS_BASE_URL=http://conversas:8001
+      - CONVERSAS_API_KEY=${CONVERSAS_API_KEY:?Defina CONVERSAS_API_KEY no .env}
+      # AUDIT-2026-08-W1E (F5): sem estas linhas o container ignorava o .env e
+      # rodava com os defaults de app/config.py — APP_DOMAIN=127.0.0.1 (links de
+      # reset de senha quebrados) e MAIL_PASSWORD com o placeholder do exemplo.
+      # Passadas UMA A UMA de proposito (em vez de env_file:) para o contrato do
+      # container continuar visivel aqui.
+      # AUDIT-2026-08-WF2: o funil e a etapa em que todo lead novo nasce.
+      # Sem estas tres linhas as variaveis NAO chegavam ao container (este
+      # bloco passa tudo uma a uma, de proposito), e os ERROR/WARNING do
+      # servico mandavam o operador "configurar DEFAULT_FUNNEL_ID ou
+      # DEFAULT_FUNNEL_NOME" — instrucao correta no diagnostico e sem efeito
+      # nenhum na pratica. Os defaults sao os mesmos de app/config.py.
+      - DEFAULT_FUNNEL_ID=${DEFAULT_FUNNEL_ID:-}
+      - DEFAULT_FUNNEL_NOME=${DEFAULT_FUNNEL_NOME:-Vendas: Principal}
+      - DEFAULT_ETAPA_NOME=${DEFAULT_ETAPA_NOME:-Sem Contato}
+      - APP_DOMAIN=${APP_DOMAIN:-https://crm.crmbrasileirosnoatacama.cloud}
+      - INTERNAL_AI_AUTH_MAX_SKEW_SECONDS=${INTERNAL_AI_AUTH_MAX_SKEW_SECONDS:-300}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
+      - MAX_UPLOAD_SIZE_BYTES=${MAX_UPLOAD_SIZE_BYTES:-10485760}
+      - API_KEY_EXPIRY_DAYS=${API_KEY_EXPIRY_DAYS:-0}
+      - MAIL_USERNAME=${MAIL_USERNAME:-}
+      - MAIL_PASSWORD=${MAIL_PASSWORD:-}
+      - MAIL_FROM=${MAIL_FROM:-}
+      - MAIL_PORT=${MAIL_PORT:-587}
+      - MAIL_SERVER=${MAIL_SERVER:-smtp.hostinger.com}
+      - MAIL_FROM_NAME=${MAIL_FROM_NAME:-Brasileiros no Atacama}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.crm.rule=Host(`crm.crmbrasileirosnoatacama.cloud`)"
@@ -111,18 +145,38 @@ services:
         condition: service_healthy
     environment:
       - ENVIRONMENT=production
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-crm_user}:${POSTGRES_PASSWORD}@postgres:5432/crm_atacama
-      - SECRET_KEY=${SECRET_KEY}
+      # AUDIT-2026-08-W1E (F2): sem o `:?` o compose interpolava vazio e o
+      # Conversas caia no SECRET_KEY constante publicado no repo — os dois
+      # servicos validam o MESMO JWT, entao um segredo previsivel aqui aceita
+      # token forjado no CRM inteiro. Falha agora no `docker compose up`.
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-crm_user}:${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no .env}@postgres:5432/crm_atacama
+      - SECRET_KEY=${SECRET_KEY:?Defina SECRET_KEY no .env}
       - CRM_BASE_URL=http://crm:8000
       - N8N_BASE_URL=http://n8n:5678
-      - N8N_AGENT_ENABLED=${N8N_AGENT_ENABLED:-true}
+      # AUDIT-2026-08-W1E (F4): agente de auto-resposta e OPT-IN. O default era
+      # `true` aqui e `false` no codigo/.env.example — esquecer a variavel LIGAVA
+      # o bot sozinho na conta de WhatsApp do cliente.
+      - N8N_AGENT_ENABLED=${N8N_AGENT_ENABLED:-false}
+      # AUDIT-2026-08-WF2: o Conversas cria lead direto no banco do CRM
+      # (services/crm.py) e resolve funil/etapa com a MESMA precedencia. Se
+      # so um dos dois containers receber estas variaveis, o mesmo cliente cai
+      # em funis diferentes conforme quem criou o lead.
+      - DEFAULT_FUNNEL_ID=${DEFAULT_FUNNEL_ID:-}
+      - DEFAULT_FUNNEL_NOME=${DEFAULT_FUNNEL_NOME:-Vendas: Principal}
+      - DEFAULT_ETAPA_NOME=${DEFAULT_ETAPA_NOME:-Sem Contato}
       - META_VERIFY_TOKEN=${META_VERIFY_TOKEN:-}
       - META_ACCESS_TOKEN=${META_ACCESS_TOKEN:-}
       - META_PHONE_NUMBER_ID=${META_PHONE_NUMBER_ID:-}
       - META_WABA_ID=${META_WABA_ID:-}
+      # AUDIT-2026-08-W1E (F6): a Meta aposenta versao da Graph API em ciclo
+      # rolante; sem esta linha a unica saida era editar codigo + rebuild.
+      - META_API_VERSION=${META_API_VERSION:-v21.0}
       # OPS-CONV-MEDIA-01 (C2): webhook em producao EXIGE HMAC — sem esta
       # variavel o Conversas responde 500 a todo POST da Meta.
-      - META_APP_SECRET=${META_APP_SECRET:-}
+      # AUDIT-2026-08-W1E (F3): o `:-` transformava isso numa entrada de
+      # WhatsApp morta e INDISTINGUIVEL de crash. Com `:?` a falha aparece no
+      # `docker compose up`, com mensagem legivel, e nao no request time.
+      - META_APP_SECRET=${META_APP_SECRET:?Defina META_APP_SECRET no .env (HMAC do webhook Meta)}
       # OPS-CONV-MEDIA-01 (C1): espelho local de midia em volume PERSISTENTE
       # (sem isso os arquivos morrem no rebuild do container).
       - CONVERSAS_MEDIA_DIR=/app/data/media

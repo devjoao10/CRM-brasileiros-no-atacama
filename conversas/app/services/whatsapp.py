@@ -7,6 +7,7 @@ so they can be configured via the Settings panel at runtime.
 Falls back to environment variables if DB config is not available.
 """
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -14,6 +15,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.config import (
+    ENVIRONMENT,
     META_ACCESS_TOKEN,
     META_PHONE_NUMBER_ID,
     META_API_BASE,
@@ -79,6 +81,40 @@ def _error_result(status_code: Optional[int], summary: str) -> dict:
     return {"error": True, "status_code": status_code, "summary": summary[:300]}
 
 
+def _unconfigured_result(what: str, **simulated_extra) -> dict:
+    """
+    AUDIT-2026-08-W1D (F3/F4) — resposta unica para "credenciais Meta ausentes".
+
+    POR QUE: antes, TODO `send_*` devolvia `{"simulated": True}` quando faltava
+    token/phone_number_id. Em producao — token rotacionado, .env vazio, ApiConfig
+    desconectado — `outbound.classify_wa_response` lia isso como sucesso e o
+    `record_outbound_message` gravava 'sent'. Resultado: CADA resposta ao cliente
+    ficava marcada como entregue enquanto NADA saia do servidor, e o unico sinal
+    era uma linha de log em nivel INFO. Falha silenciosa de negocio.
+
+    Fora de development isto passa a ser uma FALHA REAL: a mensagem e persistida
+    como 'failed' com last_error, aparece para o operador e fica reenviavel.
+    Em development o modo simulado continua existindo (nao ha credencial em dev),
+    mas com marcador proprio — quem persiste grava status 'simulated', nunca 'sent'.
+
+    F4: `send_reaction` devolvia `None` cru aqui, quebrando o contrato que o
+    `outbound.py` documenta; agora usa exatamente o mesmo resultado.
+    """
+    if ENVIRONMENT != "development":
+        logger.error(
+            f"Meta Cloud API NAO configurada em ambiente '{ENVIRONMENT}': {what} "
+            f"NAO foi enviado. Verifique META_ACCESS_TOKEN/META_PHONE_NUMBER_ID."
+        )
+        return _error_result(
+            None,
+            "Meta Cloud API nao configurada (token/phone_number_id ausentes): "
+            "nenhuma mensagem foi transmitida",
+        )
+
+    logger.warning(f"Meta Cloud API não configurada (development). {what} simulado.")
+    return {"simulated": True, **simulated_extra}
+
+
 def _http_error_summary(e: httpx.HTTPStatusError) -> dict:
     """Extrai um resumo seguro de um erro HTTP da Meta (status + error.message/code)."""
     summary = f"HTTP {e.response.status_code}"
@@ -91,6 +127,80 @@ def _http_error_summary(e: httpx.HTTPStatusError) -> dict:
     except Exception:
         pass
     return _error_result(e.response.status_code, summary)
+
+
+# AUDIT-2026-08-WD (D3): retry limitado para os `send_*` — nenhum tinha loop,
+# backoff ou tratamento especial de 429/5xx, e `Message.send_attempts`/
+# `last_attempt_at` existiam sem nada que os justificasse como "base do
+# retry" (comentario original em CONV-08b/m003).
+#
+# So a classe REALMENTE transitoria dispara retry: 429 (a Meta pede para
+# esperar — honra `Retry-After`) e 5xx (instabilidade do lado da Meta), mais
+# timeout de conexao/leitura. Qualquer outro 4xx (token invalido, numero
+# bloqueado, payload rejeitado, template nao aprovado...) e PERMANENTE:
+# repetir devolve a MESMA resposta, so mais devagar, e no caso de credencial
+# ruim chega a martelar a API com um token ja sabido invalido.
+#
+# 2 retries (3 tentativas no total) com backoff curto fixo (1s, depois 2s):
+# isto roda DENTRO da requisicao HTTP que o atendente esta esperando (nao um
+# job em background), entao o teto de latencia extra tem que ficar em
+# segundos, nao minutos. O `Retry-After` da Meta e respeitado mas TAMBEM tem
+# teto, pelo mesmo motivo — nao ficamos presos ao tempo que a Meta pedir.
+# Os timeouts por chamada (`timeout=` de cada `send_*`) NAO mudam: o teto
+# esta no NUMERO de tentativas e no backoff, nao encurtando cada uma.
+_MAX_RETRIES = 2
+_RETRY_BACKOFF_SECONDS = (1.0, 2.0)
+_MAX_RETRY_AFTER_SECONDS = 3.0
+
+
+def _is_retryable_status(status_code: int) -> bool:
+    return status_code == 429 or 500 <= status_code < 600
+
+
+def _retry_delay(response: httpx.Response, attempt: int) -> float:
+    """Honra o `Retry-After` da Meta (com teto); senao usa o backoff fixo do indice `attempt`."""
+    retry_after = response.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return min(max(float(retry_after), 0.0), _MAX_RETRY_AFTER_SECONDS)
+        except ValueError:
+            pass
+    return _RETRY_BACKOFF_SECONDS[min(attempt, len(_RETRY_BACKOFF_SECONDS) - 1)]
+
+
+async def _post_with_retry(url: str, *, json: dict, headers: dict, timeout: float) -> httpx.Response:
+    """
+    POST com retry (ver constantes acima). Levanta exatamente o que uma
+    chamada UNICA levantaria — `httpx.HTTPStatusError` de `raise_for_status()`
+    ou a excecao de rede — para que os `except` de cada `send_*` continuem
+    validos sem nenhuma mudanca.
+    """
+    attempt = 0
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(url, json=json, headers=headers)
+            if _is_retryable_status(response.status_code) and attempt < _MAX_RETRIES:
+                delay = _retry_delay(response, attempt)
+                logger.warning(
+                    f"Meta HTTP {response.status_code}; nova tentativa em "
+                    f"{delay:.1f}s ({attempt + 1}/{_MAX_RETRIES})"
+                )
+                await asyncio.sleep(delay)
+                attempt += 1
+                continue
+            response.raise_for_status()
+            return response
+        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError):
+            if attempt >= _MAX_RETRIES:
+                raise
+            delay = _RETRY_BACKOFF_SECONDS[min(attempt, len(_RETRY_BACKOFF_SECONDS) - 1)]
+            logger.warning(
+                f"Timeout/conexao ao chamar a Meta; nova tentativa em "
+                f"{delay:.1f}s ({attempt + 1}/{_MAX_RETRIES})"
+            )
+            await asyncio.sleep(delay)
+            attempt += 1
 
 
 async def send_text_message(to: str, text: str, db: Optional[Session] = None) -> Optional[dict]:
@@ -107,8 +217,7 @@ async def send_text_message(to: str, text: str, db: Optional[Session] = None) ->
     """
     token, phone_id, base = _get_credentials(db)
     if not token or not phone_id:
-        logger.warning("Meta Cloud API não configurada. Mensagem não enviada.")
-        return {"simulated": True, "to": to, "text": text}
+        return _unconfigured_result("Mensagem de texto", to=to, text=text)
 
     url = f"{base}/{phone_id}/messages"
     headers = {
@@ -124,12 +233,10 @@ async def send_text_message(to: str, text: str, db: Optional[Session] = None) ->
     }
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(url, json=payload, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-            logger.info(f"Mensagem enviada para {to}: wamid={data.get('messages', [{}])[0].get('id', '?')}")
-            return data
+        response = await _post_with_retry(url, json=payload, headers=headers, timeout=15.0)
+        data = response.json()
+        logger.info(f"Mensagem enviada para {to}: wamid={data.get('messages', [{}])[0].get('id', '?')}")
+        return data
     except httpx.HTTPStatusError as e:
         logger.error(f"Erro HTTP ao enviar mensagem: {e.response.status_code} - {e.response.text}")
         return _http_error_summary(e)
@@ -209,8 +316,7 @@ async def upload_media(
     """
     token, phone_id, base = _get_credentials(db)
     if not token or not phone_id:
-        logger.warning("Meta Cloud API não configurada. upload_media simulado.")
-        return {"simulated": True, "id": None}
+        return _unconfigured_result("Upload de midia", id=None)
 
     url = f"{base}/{phone_id}/media"
     headers = {"Authorization": f"Bearer {token}"}
@@ -248,8 +354,7 @@ async def send_media_message(
     """
     token, phone_id, base = _get_credentials(db)
     if not token or not phone_id:
-        logger.warning("Meta Cloud API não configurada. Mídia não enviada.")
-        return {"simulated": True, "to": to, "media_type": media_type}
+        return _unconfigured_result("Midia", to=to, media_type=media_type)
 
     url = f"{base}/{phone_id}/messages"
     headers = {
@@ -271,12 +376,10 @@ async def send_media_message(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(url, json=payload, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-            logger.info(f"Mídia ({media_type}) enviada para {to}")
-            return data
+        response = await _post_with_retry(url, json=payload, headers=headers, timeout=30.0)
+        data = response.json()
+        logger.info(f"Mídia ({media_type}) enviada para {to}")
+        return data
     except httpx.HTTPStatusError as e:
         logger.error(f"Erro HTTP ao enviar mídia: {e.response.status_code} - {e.response.text}")
         return _http_error_summary(e)
@@ -330,8 +433,7 @@ async def send_template_message(
     """
     token, phone_id, base = _get_credentials(db)
     if not token or not phone_id:
-        logger.warning("Meta Cloud API não configurada. Template não enviado.")
-        return {"simulated": True, "to": to, "template": template_name}
+        return _unconfigured_result("Template", to=to, template=template_name)
 
     url = f"{base}/{phone_id}/messages"
     headers = {
@@ -350,12 +452,10 @@ async def send_template_message(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(url, json=payload, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-            logger.info(f"Template '{template_name}' enviado para {to}: {data}")
-            return data
+        response = await _post_with_retry(url, json=payload, headers=headers, timeout=15.0)
+        data = response.json()
+        logger.info(f"Template '{template_name}' enviado para {to}: {data}")
+        return data
     except httpx.HTTPStatusError as e:
         logger.error(f"Erro HTTP ao enviar template: {e.response.status_code} - {e.response.text}")
         return _http_error_summary(e)
@@ -378,7 +478,9 @@ async def send_reaction(
     """
     token, phone_id, base = _get_credentials(db)
     if not token or not phone_id:
-        return None
+        # AUDIT-2026-08-W1D (F4): era `return None` cru — o unico send_* que
+        # quebrava o contrato documentado em outbound.py.
+        return _unconfigured_result("Reacao", to=to, message_id=message_id)
 
     url = f"{base}/{phone_id}/messages"
     headers = {
@@ -397,10 +499,8 @@ async def send_reaction(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(url, json=payload, headers=headers)
-            response.raise_for_status()
-            return response.json()
+        response = await _post_with_retry(url, json=payload, headers=headers, timeout=10.0)
+        return response.json()
     except Exception as e:
         logger.error(f"Erro ao enviar reação: {e}")
         return None

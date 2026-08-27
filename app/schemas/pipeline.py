@@ -2,14 +2,47 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from datetime import datetime, date
 
-from app.schemas.lead import LeadResponse
+from app.schemas.lead import LeadResponse, destinos_publicos
 from app.schemas.tag import TagResponse
 
 
 # ─── Funnel Stages ───────────────────────────────
 
 class StageSchema(BaseModel):
-    id: str = Field(..., description="ID único da etapa (ex: 'novo', 'contato', 'negociacao')")
+    # AUDIT-2026-08-W2B-orq: este campo NAO era validado. Ele e escolhido pelo
+    # cliente, guardado em funnels.etapas (JSON) e depois interpolado em atributo
+    # HTML e em handler inline no board do Pipeline. Escapar no template e a
+    # defesa correta e ja foi feita; validar aqui e o que impede a proxima tela
+    # de reabrir o buraco. O slug cobre todo id que o repositorio usa hoje
+    # ('novo', 'contato', 'negociacao', 'e1', 'm1'...) e o limite de 64 respeita
+    # funnel_entries.etapa_id, que e String(100).
+    id: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        # AUDIT-2026-08-F2 — o padrao ERA `^[A-Za-z0-9_-]+$`, e isso era risco de
+        # DISPONIBILIDADE disfarcado de seguranca.
+        #
+        # `FunnelUpdate.etapas` revalida a lista INTEIRA. Entao qualquer funil de
+        # producao cuja etapa ja tenha id com espaco ou acento passaria a dar 422
+        # em QUALQUER edicao daquele funil — inclusive so renomear o funil. E o
+        # system message do proprio "Agente Gerenciador de Leads" chama a etapa
+        # de "Sem Contato", com espaco. Nao consigo ver o banco de producao para
+        # saber se isso acontece, e a correcao certa e nao depender disso.
+        #
+        # O que protege de verdade e o esc() no template (nove interpolacoes em
+        # templates/pipeline.html), travado por
+        # tests/test_frontend_injection_contract.py. Este padrao e defesa em
+        # profundidade — e defesa em profundidade que derruba funcionalidade
+        # legitima nao e defesa, e uma segunda falha.
+        #
+        # Passa a rejeitar exatamente o que quebra atributo HTML ou literal JS:
+        # aspa simples e dupla, menor/maior, & e barra invertida, mais todos os
+        # caracteres de controle. Espaco e acento sao aceitos — inofensivos
+        # depois de escapados.
+        pattern="^[^\"'<>&\\\\\\x00-\\x1f\\x7f]+$",
+        description="ID unico da etapa (ex: 'novo', 'sem_contato', 'Sem Contato')",
+    )
     nome: str = Field(..., description="Nome exibido da etapa (ex: 'Novo Lead')")
     dias_limite: int = Field(7, ge=1, description="Dias máximos antes de considerar o lead estagnado nesta etapa")
 
@@ -99,6 +132,16 @@ class LeadCardResponse(BaseModel):
     entry_created_at: Optional[datetime] = None  # Quando o lead entrou neste funil
     entry_updated_at: Optional[datetime] = None  # Última movimentação (mover etapa atualiza)
 
+    # AUDIT-2026-08-WF2 — o card do Kanban NAO passa por `LeadResponse`: o
+    # `_card()` de app/routers/pipeline.py monta este schema direto com
+    # `lead.destinos` cru. Sem esta linha, uma linha legada derrubava o board
+    # inteiro com 500 mesmo depois de a listagem de Leads estar corrigida.
+    # Mesma regra, mesma funcao — ver `destinos_publicos` em schemas/lead.py.
+    @field_validator("destinos", mode="before")
+    @classmethod
+    def _destinos_legado(cls, valor):
+        return destinos_publicos(valor)
+
 
 class KanbanStageResponse(BaseModel):
     """A single Kanban column with its leads."""
@@ -128,6 +171,31 @@ class HistoryResponse(BaseModel):
     funnel_origem_id: Optional[int] = None
     dados: dict = {}
     created_at: Optional[datetime] = None
+
+    # AUDIT-2026-08-WG (F-503) — UMA linha com `dados` NULL derrubava o
+    # historico INTEIRO do lead.
+    #
+    # `LeadHistory.dados` e `Column(JSON, default=dict)`: o default e do lado
+    # Python, entao a coluna e NULL-avel e qualquer escrita que nao passe pela
+    # ORM — reparo manual via psql, restore de dump, SQL cru, codigo antigo —
+    # grava NULL. Aqui o campo era `dict` NAO-opcional, entao o Pydantic
+    # levantava ValidationError na serializacao e
+    # `GET /api/pipeline/history/{lead_id}` devolvia 500. Nao para aquela
+    # linha: para a resposta toda. O timeline do lead ficava inacessivel, e
+    # "Ver no Funil" abria numa tela quebrada.
+    #
+    # Ja houve um incidente exatamente assim (AUDIT-2026-08-W2F/F9), corrigido
+    # do lado de QUEM ESCREVE. Isto corrige do lado de QUEM LE, que e o unico
+    # lado capaz de sobreviver a uma linha legada que ninguem pode reescrever
+    # daqui sem autorizacao.
+    #
+    # A normalizacao e para NULL apenas: um `dados` com conteudo continua
+    # intacto, e um valor que nao seja objeto continua sendo erro de verdade —
+    # nao queremos esconder dado malformado, so a ausencia.
+    @field_validator("dados", mode="before")
+    @classmethod
+    def _dados_nulo_vira_vazio(cls, valor):
+        return {} if valor is None else valor
 
     class Config:
         from_attributes = True

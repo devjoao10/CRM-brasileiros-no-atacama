@@ -179,7 +179,7 @@
                 <div class="filter-bar" id="filterBar" style="display:none;">
                     <div class="filter-group">
                         <label>Buscar</label>
-                        <input type="text" class="filter-search" id="pipeFilterSearch" placeholder="Nome, email..." oninput="applyFilters()">
+                        <input type="text" class="filter-search" id="pipeFilterSearch" placeholder="Nome, email..." oninput="debounceApplyFilters()">
                     </div>
                     <div class="filter-group">
                         <label>Destino</label>
@@ -218,7 +218,15 @@
                     </div>
                     <div class="filter-group">
                         <label>Viajantes</label>
-                        <input type="number" class="filter-days" id="pipeFilterViajantes" placeholder="min" min="1" oninput="applyFilters()" title="Filtrar leads com pelo menos X viajantes" style="width:70px">
+                        <!-- AUDIT-2026-08-WC5: "pelo menos" e "exatamente" sao perguntas
+                             diferentes. O campo era so minimo, e a operacao precisa
+                             separar viajante solo de casal e de familia. O modo e
+                             explicito para o filtro nunca mentir sobre o que faz. -->
+                        <select class="filter-days" id="pipeFilterViajantesModo" onchange="applyFilters()" title="Como comparar o numero de viajantes" style="width:96px">
+                            <option value="min">pelo menos</option>
+                            <option value="exato">exatamente</option>
+                        </select>
+                        <input type="number" class="filter-days" id="pipeFilterViajantes" placeholder="nº" min="1" oninput="applyFilters()" title="Numero de viajantes (adultos)" style="width:70px">
                     </div>
                     <button class="filter-clear" onclick="clearPipeFilters()">✕ Limpar</button>
                     <button class="filter-clear" id="clearTargetBtn" style="display:none" onclick="clearTargetLead()"
@@ -543,7 +551,7 @@
 
     function stageInit(id) {
         stageState[id] = { items: [], cursor: null, hasMore: false, total: 0,
-                           filtrado: 0, q: '', periodo: '', reqId: 0, loading: false };
+                           filtrado: 0, q: '', periodo: '', reqId: 0 };
     }
 
     // Params da barra global (server-side) + do filtro da propria coluna.
@@ -557,7 +565,27 @@
         if (g('pipeFilterSearch')) p.set('q', g('pipeFilterSearch'));
         if (g('pipeFilterDestino')) p.set('destino', g('pipeFilterDestino'));
         if (g('pipeFilterResponsavel') !== '') p.set('responsavel_id', g('pipeFilterResponsavel'));
-        if (g('pipeFilterViajantes')) p.set('viajantes_min', g('pipeFilterViajantes'));
+        if (g('pipeFilterViajantes')) {
+            // AUDIT-2026-08-WC5: um parametro OU o outro, nunca os dois — o
+            // backend recusa a combinacao com 422 de proposito.
+            const modoViajantes = g('pipeFilterViajantesModo') === 'exato'
+                ? 'viajantes_exato' : 'viajantes_min';
+            p.set(modoViajantes, g('pipeFilterViajantes'));
+        }
+        // AUDIT-2026-08-WC (F-430): pipeFilterDays era lido por hasActiveFilters()
+        // e limpo por clearPipeFilters(), mas nunca virava parametro de request —
+        // o filtro parecia ativo e nao fazia nada. Reaproveita chegada_de/
+        // chegada_ate, que ja existem no backend, em vez de um parametro novo.
+        // Os campos "Chegada de/até" explícitos, se preenchidos, têm prioridade
+        // (rodam depois e sobrescrevem a mesma chave).
+        if (g('pipeFilterDays')) {
+            const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+            const limite = new Date(hoje);
+            limite.setDate(limite.getDate() + parseInt(g('pipeFilterDays'), 10));
+            const fmt = d => d.toISOString().slice(0, 10);
+            p.set('chegada_de', fmt(hoje));
+            p.set('chegada_ate', fmt(limite));
+        }
         if (g('pipeFilterDateFrom')) p.set('chegada_de', g('pipeFilterDateFrom'));
         if (g('pipeFilterDateTo')) p.set('chegada_ate', g('pipeFilterDateTo'));
         selectedFilterTags.forEach(t => p.append('tag_ids', t));
@@ -590,16 +618,26 @@
     // Esqueleto: colunas + cabecalho + loading proprio de cada uma.
     function renderSkeleton() {
         document.getElementById('kanbanBoard').innerHTML = boardMeta.stages.map(stage => `
-            <div class="kanban-column" data-stage="${stage.id}">
+            <!-- AUDIT-2026-08-W2B-orq: stage.id e STRING LIVRE vinda do cliente
+                 (app/schemas/pipeline.py StageSchema.id, sem pattern), guardada em
+                 funnels.etapas. Aqui ela era interpolada CRUA em seis atributos e
+                 dentro de tres literais JS de handler inline. Uma aspa dupla fechava
+                 o atributo; uma aspa simples fechava a string do handler. Agora todo
+                 atributo passa por esc() e os handlers leem this.dataset.stage, que
+                 o parser ja devolve decodificado. As assinaturas de onStageSearch /
+                 onStagePeriodo / onDrop nao mudaram: so o caminho do dado. -->
+            <div class="kanban-column" data-stage="${esc(stage.id)}">
                 <div class="column-header">
                     <span class="column-title">${esc(stage.nome)}</span>
-                    <span class="column-count" id="cnt-${stage.id}">${stage.total}</span>
+                    <span class="column-count" id="cnt-${esc(stage.id)}">${stage.total}</span>
                 </div>
                 <div class="column-filter" style="display:flex;gap:4px;padding:0 8px 6px">
-                    <input id="q-${stage.id}" class="form-input" style="font-size:12px;padding:4px 6px"
-                           placeholder="nome ou telefone" oninput="onStageSearch('${stage.id}', this.value)">
-                    <select id="per-${stage.id}" class="form-input" style="font-size:12px;padding:4px;width:88px"
-                            onchange="onStagePeriodo('${stage.id}', this.value)">
+                    <input id="q-${esc(stage.id)}" class="form-input" style="font-size:12px;padding:4px 6px"
+                           data-stage="${esc(stage.id)}"
+                           placeholder="nome ou telefone" oninput="onStageSearch(this.dataset.stage, this.value)">
+                    <select id="per-${esc(stage.id)}" class="form-input" style="font-size:12px;padding:4px;width:88px"
+                            data-stage="${esc(stage.id)}"
+                            onchange="onStagePeriodo(this.dataset.stage, this.value)">
                         <option value="">Todos</option>
                         <option value="hoje">Hoje</option>
                         <option value="3d">3 dias</option>
@@ -607,8 +645,8 @@
                         <option value="30d">30 dias</option>
                     </select>
                 </div>
-                <div class="column-body" data-stage="${stage.id}" id="body-${stage.id}"
-                     ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event, '${stage.id}')">
+                <div class="column-body" data-stage="${esc(stage.id)}" id="body-${esc(stage.id)}"
+                     ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event, this.dataset.stage)">
                     <div class="empty-column">Carregando...</div>
                 </div>
             </div>`).join('');
@@ -617,16 +655,22 @@
     // Busca UMA pagina de UMA etapa. reset=true recomeca do cursor zero.
     async function loadStage(stageId, reset, extra) {
         const st = stageState[stageId];
-        if (!st || st.loading) return;
-        st.loading = true;
-        const meuReq = ++st.reqId;   // guarda de corrida: so a resposta mais nova vale
+        if (!st) return;
+        // AUDIT-2026-08-WC (F-165): a guarda antiga (`if (st.loading) return`)
+        // DESCARTAVA a chamada inteira quando uma requisicao da mesma coluna ja
+        // estava em voo — nao so a resposta, o PEDIDO. Um onDrop recarregando a
+        // coluna de origem enquanto ela ainda respondia a um filtro anterior
+        // nunca chegava a pedir nada, e o card ficava fantasma ate um F5
+        // (C4.2). O reqId abaixo (mesmo idioma de previewRequestSeq em
+        // segmentacao.html) ja garante que so a resposta mais nova e aplicada —
+        // bloquear a CHAMADA em cima disso so causava recarga perdida.
+        const meuReq = ++st.reqId;
 
         const params = Object.assign({}, extra || {});
         if (!reset && st.cursor) params.cursor = st.cursor;
         const qs = stageParams(stageId, params);
         const resp = await Auth.apiRequest(
             '/api/pipeline/board/' + currentFunnelId + '/stage/' + encodeURIComponent(stageId) + '?' + qs);
-        st.loading = false;
         if (!resp || !resp.ok) return;
         const data = await resp.json();
         if (meuReq !== st.reqId) return;   // chegou resposta mais nova: descarta esta
@@ -647,10 +691,20 @@
         const body = document.getElementById('body-' + stageId);
         if (!st || !body) return;
 
+        // AUDIT-2026-08-WF2: o botao "Carregar mais" montava o onclick por
+        // CONCATENACAO de strings, nao por template literal — por isso escapou da
+        // varredura AUDIT-2026-08-W2B-orq: o detector de
+        // tests/test_frontend_injection_contract.py so procura a forma `'${`.
+        // stageId vem de KanbanStageMeta.id, um `str` SEM pattern — o pattern de
+        // StageSchema.id so vale na ESCRITA, entao etapa legada com aspa no id
+        // chegava crua dentro do literal JS do handler. Correcao igual a das outras
+        // colunas (renderSkeleton): data-* + this.dataset.stage, porque esc() NAO
+        // protege dentro de handler inline — o parser devolve o &#39; antes de o JS
+        // compilar a linha.
         body.innerHTML = st.items.length === 0
             ? '<div class="empty-column">Nenhum lead</div>'
             : st.items.map(l => renderLeadCard(l)).join('') +
-              (st.hasMore ? '<button class="btn btn-sm" style="width:100%;margin-top:6px" onclick="loadStage(\'' + stageId + '\', false)">Carregar mais</button>' : '');
+              (st.hasMore ? '<button class="btn btn-sm" style="width:100%;margin-top:6px" data-stage="' + esc(stageId) + '" onclick="loadStage(this.dataset.stage, false)">Carregar mais</button>' : '');
 
         // "32 de 842" quando ha filtro; so o total quando nao ha.
         const cnt = document.getElementById('cnt-' + stageId);
@@ -691,7 +745,16 @@
         const lid = parseInt(urlLeadId);
         const resp = await Auth.apiRequest('/api/pipeline/locate/' + lid +
             (currentFunnelId ? '?prefer_funnel_id=' + currentFunnelId : ''));
-        if (!resp || !resp.ok) return;
+        if (!resp || !resp.ok) {
+            // AUDIT-2026-08-WC (C4.1): antes era um no-op silencioso — o board
+            // ficava parado sem nenhum sinal de que o "Ver no Funil" falhou
+            // (ex: lead sem nenhuma FunnelEntry, 404).
+            if (resp) {
+                const err = await resp.json().catch(() => ({}));
+                alert(err.detail || 'Não foi possível localizar este lead no funil.');
+            }
+            return;
+        }
         const loc = await resp.json();
 
         if (loc.funnel_id !== currentFunnelId) {   // lead esta em outro funil
@@ -782,10 +845,22 @@
         if (countEl) countEl.textContent = hasActiveFilters() ? 'filtro ativo' : '';
     }
 
+    // AUDIT-2026-08-WC (F-165): a busca global disparava applyFilters() — que
+    // recarrega TODAS as colunas — a cada tecla digitada. Mesmo idioma de
+    // debouncePreview() em templates/segmentacao.html.
+    let applyFiltersTimer = null;
+    function debounceApplyFilters() {
+        clearTimeout(applyFiltersTimer);
+        applyFiltersTimer = setTimeout(applyFilters, 300);
+    }
+
     function clearPipeFilters() {
         ['pipeFilterSearch','pipeFilterDestino','pipeFilterDays','pipeFilterDateFrom',
          'pipeFilterDateTo','pipeFilterResponsavel','pipeFilterViajantes']
             .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+        // AUDIT-2026-08-WC5: o modo volta ao default (pelo menos), nao a "".
+        const modoEl = document.getElementById('pipeFilterViajantesModo');
+        if (modoEl) modoEl.value = 'min';
         selectedFilterTags.clear();
         renderFilterTagsDropdown();
         updateTagBtnLabel();
@@ -887,11 +962,20 @@
         if (resp && resp.ok) {
             // So as duas colunas envolvidas. O destino pode ter filtro ativo,
             // entao refazer a 1a pagina das duas e mais confiavel do que
-            // duplicar a logica de filtro no JavaScript.
+            // duplicar a logica de filtro no JavaScript. Fonte de verdade e
+            // SEMPRE a resposta persistida, nunca uma edicao otimista do DOM.
             const origem = e.dataTransfer.getData('stage-origem');
             await loadStage(stageId, true);
             if (origem && origem !== stageId) await loadStage(origem, true);
             await atualizarTotais();
+        } else if (resp) {
+            // AUDIT-2026-08-WC (C4.2): o card nunca sai do DOM de forma
+            // otimista (so loadStage() o faz, com dado do servidor) — mas ate
+            // aqui uma falha na persistencia nao dizia nada ao usuario, que via
+            // o card continuar na coluna de origem sem saber se foi por erro
+            // ou porque o drop nao fez nada.
+            const err = await resp.json().catch(() => ({}));
+            alert(err.detail || 'Não foi possível mover o lead. Tente novamente.');
         }
     }
 
@@ -975,6 +1059,25 @@
         });
         if (resp && resp.ok) {
             const data = await resp.json();
+            // AUDIT-2026-08-WF2: trocar o responsavel aqui NAO e so comercial —
+            // a mesma rota notifica o Conversas, que DESLIGA a Bia e poe a
+            // conversa do WhatsApp na fila humana. Uma revisao adversarial
+            // apontou que o vendedor fazia isso sem nenhum aviso: a Bia parava
+            // no meio da triagem e o cliente ficava esperando um humano que nao
+            // sabia da conversa. O cabecalho X-Conversa-Handoff diz o que
+            // aconteceu de verdade; `pendente` significa que o Conversas nao
+            // respondeu (desligado, fora do ar ou timeout) e a conversa pode ter
+            // ficado com a Bia.
+            const handoff = resp.headers.get('X-Conversa-Handoff');
+            if (handoff === 'movida') {
+                alert('✅ Responsável alterado.\n\nA conversa deste lead no '
+                    + 'WhatsApp saiu da Bia e entrou na FILA DE ESPERA do '
+                    + 'Conversas, aguardando atendimento humano.');
+            } else if (handoff === 'pendente') {
+                alert('⚠️ Responsável alterado no CRM, mas o Conversas não '
+                    + 'respondeu.\n\nA conversa no WhatsApp pode ter continuado '
+                    + 'com a Bia. Confira no inbox.');
+            }
             loadBoard();
         } else {
             alert('Erro ao alterar responsável');
@@ -992,7 +1095,9 @@
         let info = '';
         info += `<div class="detail-field"><span class="detail-field-label">Email</span><span class="detail-field-value">${lead.email ? esc(lead.email) : '—'}</span></div>`;
         info += `<div class="detail-field"><span class="detail-field-label">WhatsApp</span><span class="detail-field-value">${lead.whatsapp ? esc(lead.whatsapp) : '—'}</span></div>`;
-        info += `<div class="detail-field"><span class="detail-field-label">Destinos</span><span class="detail-field-value">${(lead.destinos || []).join(', ') || '—'}</span></div>`;
+        // AUDIT-2026-08-WF2: destinos e texto livre gravado pelo n8n/WhatsApp; este
+        // bloco cai inteiro em detailInfo.innerHTML no fim da funcao.
+        info += `<div class="detail-field"><span class="detail-field-label">Destinos</span><span class="detail-field-value">${esc((lead.destinos || []).join(', ')) || '—'}</span></div>`;
         info += `<div class="detail-field"><span class="detail-field-label">Chegada</span><span class="detail-field-value">${lead.data_chegada ? fmtDate(lead.data_chegada) : '—'}</span></div>`;
         info += `<div class="detail-field"><span class="detail-field-label">Partida</span><span class="detail-field-value">${lead.data_partida ? fmtDate(lead.data_partida) : '—'}</span></div>`;
         if (lead.total_dias) {
@@ -1019,7 +1124,10 @@
             viajantesText = `${lead.num_viajantes} adulto${lead.num_viajantes > 1 ? 's' : ''}`;
             if (lead.num_criancas && lead.num_criancas > 0) {
                 viajantesText += ` + ${lead.num_criancas} criança${lead.num_criancas > 1 ? 's' : ''}`;
-                if (lead.idades_criancas) viajantesText += ` (${lead.idades_criancas} anos)`;
+                // AUDIT-2026-08-WF2: idades_criancas e string livre — o n8n preenche
+                // com o que o LLM extrai da conversa de WhatsApp. viajantesText e
+                // interpolado cru em detailInfo.innerHTML logo abaixo.
+                if (lead.idades_criancas) viajantesText += ` (${esc(lead.idades_criancas)} anos)`;
             }
         }
         info += `<div class="detail-field"><span class="detail-field-label">Viajantes</span><span class="detail-field-value">${viajantesText || '—'}</span></div>`;
@@ -1110,7 +1218,11 @@
         const funnel = funnels.find(f => f.id === funnelId);
         const select = document.getElementById('transferStage');
         if (!funnel) { select.innerHTML = '<option value="">Selecione o funil primeiro...</option>'; return; }
-        select.innerHTML = funnel.etapas.map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join('');
+        // AUDIT-2026-08-WF2: FunnelResponse.etapas e `list[dict]` — passthrough do
+        // JSON do banco, sem validacao na leitura. `s.id` e string livre e ia crua
+        // para dentro do atributo value. O .value lido por executeTransfer continua
+        // identico: o parser decodifica a entidade de volta.
+        select.innerHTML = funnel.etapas.map(s => `<option value="${esc(s.id)}">${esc(s.nome)}</option>`).join('');
     }
 
     async function executeTransfer() {
@@ -1229,7 +1341,7 @@
                     <button onclick="editFunnel(${f.id})" style="background:none;border:none;cursor:pointer;padding:var(--space-1);color:var(--color-text-3);">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                     </button>
-                    <button onclick="deleteFunnel(${f.id}, '${esc(f.nome)}')" style="background:none;border:none;cursor:pointer;padding:var(--space-1);color:var(--color-error);">
+                    <button data-funnel-id="${f.id}" data-nome="${esc(f.nome)}" onclick="deleteFunnel(this)" style="background:none;border:none;cursor:pointer;padding:var(--space-1);color:var(--color-error);">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
                     </button>
                 </div>
@@ -1353,7 +1465,11 @@
         loadFunnels();
     }
 
-    async function deleteFunnel(id, nome) {
+    // AUDIT-2026-08-W2B-orq: o nome do funil e livre e vinha dentro de um
+    // literal JS no onclick, onde esc() nao protege. Agora vem por data-nome.
+    async function deleteFunnel(btn) {
+        const id = Number(btn.dataset.funnelId);
+        const nome = btn.dataset.nome || '';
         if (!confirm(`Excluir o funil "${nome}"? Todos os leads serão removidos dele.`)) return;
         const resp = await Auth.apiRequest(`/api/pipeline/funnels/${id}`, { method: 'DELETE' });
         if (resp && resp.ok) {

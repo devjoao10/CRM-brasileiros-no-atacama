@@ -294,6 +294,103 @@ def test_filtro_viajantes_minimo():
     assert ctx["l4"] not in ids, "lead sem num_viajantes nao pode casar >= N"
 
 
+def test_remover_etapa_com_lead_e_recusado():
+    """
+    AUDIT-2026-08-WC (F-246) — trocar a lista de etapas orfanava leads em silencio.
+
+    `Funnel.etapas` e uma coluna JSON substituida inteira, e
+    `funnel_entries.etapa_id` aponta para essas strings sem nenhuma FK por tras.
+    Remover uma etapa deixava todo lead dela com um `etapa_id` inexistente — e o
+    board so renderiza entries cujo `etapa_id` esta na lista atual. Os leads nao
+    eram apagados: ficavam INVISIVEIS, sem erro e sem caminho de volta pela
+    interface.
+
+    Recusar e melhor que migrar em silencio: para onde vai um lead que estava em
+    "Proposta enviada" e uma decisao de negocio, e adivinhar perderia informacao
+    sem ninguem ficar sabendo.
+    """
+    client, ctx = _setup()
+    funnel_id = ctx["f1"]
+
+    atual = client.get(f"/api/pipeline/funnels/{funnel_id}").json()
+    etapas = list(atual["etapas"])
+    # A fixture nasce com UMA etapa. Acrescentamos uma vazia para poder testar
+    # os dois lados da regra: remover a ocupada e recusado, remover a vazia nao.
+    if len(etapas) < 2:
+        etapas = etapas + [{"id": "e2_vazia", "nome": "Etapa vazia"}]
+        r_add = client.put(f"/api/pipeline/funnels/{funnel_id}", json={"etapas": etapas})
+        assert r_add.status_code == 200, f"nao consegui preparar a fixture: {r_add.status_code}"
+        etapas = client.get(f"/api/pipeline/funnels/{funnel_id}").json()["etapas"]
+
+    ocupada = next(e for e in etapas if e["id"] == "e1")
+    restantes = [e for e in etapas if e["id"] != ocupada["id"]]
+
+    r = client.put(f"/api/pipeline/funnels/{funnel_id}", json={"etapas": restantes})
+    assert r.status_code == 409,         f"remover etapa com lead deve ser recusado com 409, veio {r.status_code}"
+    corpo = r.json().get("detail", "")
+    assert ocupada["id"] in corpo, f"o 409 precisa NOMEAR a etapa: {corpo}"
+    assert "lead" in corpo.lower(), f"o 409 precisa dizer quantos leads: {corpo}"
+
+    # E o funil NAO pode ter sido alterado pela tentativa recusada.
+    depois = client.get(f"/api/pipeline/funnels/{funnel_id}").json()
+    assert [e["id"] for e in depois["etapas"]] == [e["id"] for e in etapas],         "a recusa nao pode ter alterado as etapas"
+
+    # Renomear/reordenar SEM remover continua permitido.
+    reordenado = list(reversed(etapas))
+    r2 = client.put(f"/api/pipeline/funnels/{funnel_id}", json={"etapas": reordenado})
+    assert r2.status_code == 200,         f"reordenar sem remover deve continuar funcionando, veio {r2.status_code}"
+
+    # E remover uma etapa VAZIA continua permitido.
+    vazias = [e for e in etapas if e["id"] != "e1"]
+    assert vazias, "a fixture precisa de ao menos uma etapa vazia para este caso"
+    sem_a_vazia = [e for e in etapas if e["id"] != vazias[0]["id"]]
+    r3 = client.put(f"/api/pipeline/funnels/{funnel_id}", json={"etapas": sem_a_vazia})
+    assert r3.status_code == 200,         f"remover etapa VAZIA deve continuar permitido, veio {r3.status_code}"
+
+
+def test_filtro_viajantes_exato():
+    """
+    AUDIT-2026-08-WC5 — "pelo menos X" e "exatamente X" sao perguntas diferentes.
+
+    O filtro nasceu como MINIMO (a UI diz "pelo menos X" e
+    `test_filtro_viajantes_minimo`, logo acima, trava esse contrato). A operacao
+    precisa tambem separar viajante solo de casal e de familia, o que o minimo
+    nao consegue expressar. Trocar a semantica do parametro existente atenderia
+    um dos dois e quebraria o outro — inclusive quem ja tivesse salvo um filtro.
+    Por isso e um parametro NOVO, e os dois convivem.
+
+    Fixtures: l1 tem 4 viajantes, l2 tem 2, l3 tem 9, l4 tem NULL.
+    """
+    client, ctx = _setup()
+
+    ids, _ = _ids(client, _stage(ctx, viajantes_exato=4))
+    assert ids == {ctx["l1"]}, f"viajantes == 4 deve trazer SO o l1: {ids}"
+    assert ctx["l3"] not in ids, "l3 tem 9 viajantes — o exato nao pode se comportar como minimo"
+
+    ids2, _ = _ids(client, _stage(ctx, viajantes_exato=2))
+    assert ids2 == {ctx["l2"]}, f"viajantes == 2 deve trazer SO o l2: {ids2}"
+
+    ids3, _ = _ids(client, _stage(ctx, viajantes_exato=1))
+    assert ids3 == set(), f"nenhum lead tem exatamente 1 viajante: {ids3}"
+
+    # NULL nao casa com numero nenhum, igual ao ramo do minimo.
+    ids4, _ = _ids(client, _stage(ctx, viajantes_exato=9))
+    assert ctx["l4"] not in ids4, "lead sem num_viajantes nao pode casar == N"
+
+    # O minimo continua intacto ao lado — este e o ponto do parametro novo.
+    ids5, _ = _ids(client, _stage(ctx, viajantes_min=4))
+    assert ids5 == {ctx["l1"], ctx["l3"]}, f"viajantes >= 4 nao pode ter mudado: {ids5}"
+
+
+def test_filtro_viajantes_min_e_exato_juntos_e_recusado():
+    """
+    Mandar os dois seria ambiguo: o backend nao deve escolher um em silencio.
+    """
+    client, ctx = _setup()
+    resp = client.get(_stage(ctx, viajantes_min=2, viajantes_exato=4))
+    assert resp.status_code == 422,         f"min + exato juntos devem ser recusados com 422, veio {resp.status_code}"
+
+
 def test_filtro_chegada_intervalo():
     client, ctx = _setup()
     ids, _ = _ids(client, _stage(ctx, chegada_de="2026-03-01", chegada_ate="2026-03-31"))
@@ -371,8 +468,11 @@ def test_queries_novas_compilam_em_postgresql():
                    "destino": "Atacama", "tag_ids": [1, 2],
                    "viajantes_min": 2, "chegada_de": None, "chegada_ate": None}
         # forca o ramo PostgreSQL do helper de destino
-        original = pipe.IS_SQLITE
-        pipe.IS_SQLITE = False
+        # AUDIT-2026-08-WF2 — o ramo mora em app/query_filters.py; pipeline.py
+        # so delega e nao tem mais IS_SQLITE proprio.
+        import app.query_filters as QF
+        original = QF.IS_SQLITE
+        QF.IS_SQLITE = False
         try:
             q = pipe._stage_query(db, 1, "e1", filtros)
             q = q.order_by(FunnelEntry.updated_at.desc(), FunnelEntry.id.desc())
@@ -380,17 +480,21 @@ def test_queries_novas_compilam_em_postgresql():
                          < (datetime.now(timezone.utc), 10))
             sql = str(q.statement.compile(dialect=postgresql.dialect()))
         finally:
-            pipe.IS_SQLITE = original
+            QF.IS_SQLITE = original
     finally:
         db.close()
 
     baixo = sql.lower()
     assert "order by" in baixo and "desc" in baixo, "keyset perdeu o ORDER BY"
-    assert "jsonb" in baixo, (
-        "o filtro de destino precisa castar para JSONB no PostgreSQL "
-        "(a coluna e `json` e @> so existe para jsonb)"
+    # AUDIT-2026-08-WF2 — antes: `jsonb` + `@>`. Guardavam "o SQL compila";
+    # o cast que exigiam e a operacao que morre em linha armazenavel e leva
+    # junto a consulta de todos os leads. Propriedade: ver
+    # tests/test_leads_destino_filter_dialect.py.
+    assert "jsonb" not in baixo, (
+        "o cast para jsonb voltou ao filtro de destino — [1e1000000] e json "
+        "valido e o derruba"
     )
-    assert "@>" in sql, "operador de containment ausente"
+    assert "json_array_elements_text(" in baixo, "filtro de destino nao compilou"
     assert "ilike" in baixo, "a busca precisa ser case-insensitive"
     assert "exists" in baixo or "in (" in baixo, "filtro de tags nao compilou"
     # nada especifico de SQLite pode vazar para producao

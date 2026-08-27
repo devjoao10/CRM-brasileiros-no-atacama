@@ -2,22 +2,37 @@
 PACOTE-B — novo inbox do Conversas (5 categorias, server-side).
 
 Categorias (predicados no SQL, fonte unica `_inbox_predicates`):
-  meus       aberta + is_bot_active=false + atendente_id = current_user
-  fila       aberta + is_bot_active=false + atendente_id IS NULL
   bia        aberta + is_bot_active=true
+  fila       aberta + is_bot_active=false + primeira_resposta_humana_at IS NULL
+  meus       aberta + is_bot_active=false + primeira_resposta_humana_at NOT NULL
+             + atendente_id = current_user
   todos      aberta + is_bot_active=false
   encerradas status='encerrada'
 
+AUDIT-2026-08-WA — o eixo fila/meus deixou de ser `atendente_id` e passou a
+ser `primeira_resposta_humana_at`. ATRIBUIDO != ATENDIDO: uma conversa com
+dono mas SEM resposta humana continua na FILA DE ESPERA, nao em "meus
+atendimentos". `atendente_id` continua filtrando `meus` (e o dono), so deixou
+de decidir sozinho se a conversa esta esperando.
+
+Fixture set: A=BIA, B/C=fila (sem dono), D/E=meus (Julia/Joao, JA
+respondidas — tem primeira_resposta_humana_at), D2/E2=fila-com-dono
+(atribuidas a Julia/Joao mas AINDA sem resposta — o caso do bug principal),
+F=encerrada, G=legado (queued_at NULL).
+
 Prova que:
-  1. Fixture A-G classifica exatamente como especificado, para Julia e Joao.
+  1. Fixture classifica exatamente como especificado, para Julia e Joao —
+     incluindo D2/E2 (ATRIBUIDA mas NAO RESPONDIDA): aparecem na FILA, em
+     NENHUM "meus".
   2. FIFO da fila: queued_at ASC, legado (NULL) por ultimo, id como desempate;
      mensagem nova do cliente NAO altera a ordem.
   3. Matriz de exclusividade: BIA nao intersecta Fila/Meus/Todos;
-     Fila nao intersecta Meus; Fila e Meus sao subconjuntos de Todos;
-     Encerradas fora das quatro abertas.
-  4. /counts bate com o len() de cada listagem, numa unica query agregada.
+     Fila nao intersecta Meus (mesmo com D2/E2 tendo dono); Fila e Meus sao
+     subconjuntos de Todos; Encerradas fora das quatro abertas.
+  4. /counts bate com o len() de cada listagem, numa unica query agregada, e
+     expoe `aguardando_humano` (== fila, != unread).
   5. `meus` usa o usuario AUTENTICADO — nao existe parametro de user_id.
-  6. Paginacao: 250 conversas, total correto, primeira pagina limitada,
+  6. Paginacao: 250+ conversas, total correto, primeira pagina limitada,
      restante acessivel, filtro/busca aplicados no SQL (nao sobre a pagina).
   7. Filtros combinados: inbox+search, inbox+responsavel_id, inbox+tag_id,
      inbox+search+tag.
@@ -104,17 +119,27 @@ def conv(**kw):
     return Conversation(**kw)
 
 
-# A=BIA  B/C=fila  D=Julia  E=Joao  F=encerrada  G=legado (queued_at NULL)
+# A=BIA  B/C=fila (sem dono)  D/E=meus (JA respondidas)  D2/E2=fila-com-dono
+# (AUDIT-2026-08-WA — ATRIBUIDAS mas AINDA sem resposta: a regressao do bug
+# principal, elas TEM que cair na fila e em NENHUM "meus")  F=encerrada
+# G=legado (queued_at NULL)
 _db.add_all([
     conv(id=1, lead_id=1, whatsapp="551100001", nome="A bia", is_bot_active=True),
     conv(id=2, lead_id=2, whatsapp="551100002", nome="B fila", queued_at=T),
     conv(id=3, lead_id=3, whatsapp="551100003", nome="C fila",
          queued_at=T + dt.timedelta(minutes=5)),
+    # AUDIT-2026-08-WA — D/E precisam de primeira_resposta_humana_at para
+    # continuarem em "meus": sob a regra antiga bastava ter atendente_id.
     conv(id=4, lead_id=4, whatsapp="551100004", nome="D Maria", atendente_id=1,
-         responsavel_id=7),
-    conv(id=5, lead_id=5, whatsapp="551100005", nome="E Pedro", atendente_id=2),
+         responsavel_id=7, primeira_resposta_humana_at=T),
+    conv(id=5, lead_id=5, whatsapp="551100005", nome="E Pedro", atendente_id=2,
+         primeira_resposta_humana_at=T),
     conv(id=6, lead_id=6, whatsapp="551100006", nome="F encerrada", status="encerrada"),
     conv(id=7, lead_id=7, whatsapp="551100007", nome="G legado", queued_at=None),
+    conv(id=10, lead_id=10, whatsapp="551100010", nome="D2 Julia sem resposta",
+         atendente_id=1, queued_at=T + dt.timedelta(minutes=10)),
+    conv(id=11, lead_id=11, whatsapp="551100011", nome="E2 Joao sem resposta",
+         atendente_id=2, queued_at=T + dt.timedelta(minutes=15)),
 ])
 _db.commit()
 c4 = _db.query(Conversation).filter(Conversation.id == 4).first()
@@ -164,11 +189,25 @@ def total(inbox, **params):
 # ============ 1. CLASSIFICACAO ============
 print("1 — classificacao das 5 categorias (Julia)")
 check(names("meus") == ["D Maria"], f"meus(Julia) = D  ({names('meus')})")
-check(names("fila") == ["B fila", "C fila", "G legado"], f"fila = B,C,G  ({names('fila')})")
+check(names("fila") == ["B fila", "C fila", "D2 Julia sem resposta",
+                         "E2 Joao sem resposta", "G legado"],
+      f"fila = B,C,D2,E2,G  ({names('fila')})")
 check(names("bia") == ["A bia"], f"bia = A  ({names('bia')})")
-check(sorted(names("todos")) == ["B fila", "C fila", "D Maria", "E Pedro", "G legado"],
-      f"todos = B,C,D,E,G  ({sorted(names('todos'))})")
+check(sorted(names("todos")) == ["B fila", "C fila", "D Maria",
+                                  "D2 Julia sem resposta", "E Pedro",
+                                  "E2 Joao sem resposta", "G legado"],
+      f"todos = B,C,D,D2,E,E2,G  ({sorted(names('todos'))})")
 check(names("encerradas") == ["F encerrada"], f"encerradas = F  ({names('encerradas')})")
+
+# AUDIT-2026-08-WA — REGRESSAO GUARD do bug principal, no nivel do inbox real
+# (test_conversas_operational_state.py ja prova o mesmo no estado bruto do
+# banco): atribuida-mas-nao-respondida aparece na FILA e em NENHUM "meus".
+check("D2 Julia sem resposta" in names("fila") and "D2 Julia sem resposta" not in names("meus"),
+      "D2 (dono=Julia, sem resposta) esta na FILA e NAO em meus(Julia)")
+as_user(_U2())
+check("E2 Joao sem resposta" in names("fila") and "E2 Joao sem resposta" not in names("meus"),
+      "E2 (dono=Joao, sem resposta) esta na FILA e NAO em meus(Joao)")
+as_user(_U1())
 
 print("1b — 'meus' segue o usuario AUTENTICADO")
 as_user(_U2())
@@ -178,7 +217,8 @@ as_user(_U1())
 
 # ============ 2. FIFO ============
 print("2 — FIFO da fila")
-check(names("fila") == ["B fila", "C fila", "G legado"],
+FILA_ORDEM = ["B fila", "C fila", "D2 Julia sem resposta", "E2 Joao sem resposta", "G legado"]
+check(names("fila") == FILA_ORDEM,
       "ordem: queued_at ASC, legado (NULL) por ultimo")
 d = SessionLocal()
 cB = d.query(Conversation).filter(Conversation.id == 2).first()
@@ -187,7 +227,7 @@ cB.last_customer_msg_at = dt.datetime.now(dt.timezone.utc)
 cB.updated_at = dt.datetime.now(dt.timezone.utc)
 d.commit()
 d.close()
-check(names("fila") == ["B fila", "C fila", "G legado"],
+check(names("fila") == FILA_ORDEM,
       "mensagem nova do cliente NAO altera a posicao na fila")
 
 print("2b — desempate deterministico entre legados (queued_at NULL)")
@@ -195,8 +235,7 @@ d = SessionLocal()
 d.add(conv(id=8, lead_id=8, whatsapp="551100008", nome="H legado", queued_at=None))
 d.commit()
 d.close()
-check(names("fila") == ["B fila", "C fila", "G legado", "H legado"],
-      "legados ordenados por id ASC")
+check(names("fila") == FILA_ORDEM + ["H legado"], "legados ordenados por id ASC")
 d = SessionLocal()
 d.query(Conversation).filter(Conversation.id == 8).delete()
 d.commit()
@@ -208,7 +247,7 @@ S = {k: set(names(k)) for k in ("meus", "fila", "bia", "todos", "encerradas")}
 check(not (S["bia"] & S["fila"]), "BIA inter Fila = vazio")
 check(not (S["bia"] & S["meus"]), "BIA inter Meus = vazio")
 check(not (S["bia"] & S["todos"]), "BIA inter Todos = vazio")
-check(not (S["fila"] & S["meus"]), "Fila inter Meus = vazio")
+check(not (S["fila"] & S["meus"]), "Fila inter Meus = vazio (mesmo com D2/E2 tendo dono)")
 check(S["fila"] <= S["todos"], "Fila subconjunto de Todos")
 check(S["meus"] <= S["todos"], "Meus subconjunto de Todos")
 check(not (S["encerradas"] & (S["meus"] | S["fila"] | S["bia"] | S["todos"])),
@@ -219,9 +258,13 @@ print("4 — /counts")
 r = client.get("/api/conversations/counts")
 check(r.status_code == 200, "counts responde 200")
 cnt = r.json()
-check(cnt["meus"] == 1 and cnt["fila"] == 3 and cnt["bia"] == 1
-      and cnt["todos"] == 5 and cnt["encerradas"] == 1,
-      f"counts(Julia) = meus1 fila3 bia1 todos5 encerradas1  ({cnt})")
+check(cnt["meus"] == 1 and cnt["fila"] == 5 and cnt["bia"] == 1
+      and cnt["todos"] == 7 and cnt["encerradas"] == 1,
+      f"counts(Julia) = meus1 fila5 bia1 todos7 encerradas1  ({cnt})")
+# AUDIT-2026-08-WA — aguardando_humano e a MESMA contagem de fila; e um
+# numero DIFERENTE de unread (zerado ao abrir, mas nao move fila/meus).
+check(cnt.get("aguardando_humano") == cnt["fila"] == 5,
+      f"aguardando_humano == fila == 5  (got {cnt.get('aguardando_humano')})")
 for k in ("meus", "fila", "bia", "todos", "encerradas"):
     check(cnt[k] == total(k), f"counts[{k}] == total da listagem ({cnt[k]})")
 as_user(_U2())
@@ -289,9 +332,15 @@ d = SessionLocal()
 for i in range(250):
     d.add(conv(id=1000 + i, lead_id=1000 + i, whatsapp=f"5599{i:06d}",
                nome=f"Vol {i:03d}", atendente_id=1,
+               # AUDIT-2026-08-WA — sem prh a conversa cai na FILA, nao em
+               # MEUS, e o bloco de polling (10c, abaixo) que depende de
+               # "meus" ter >= 100 linhas calcularia limit=0 e o servidor
+               # devolveria 422 (era exatamente a falha corrente).
+               primeira_resposta_humana_at=T,
                updated_at=T - dt.timedelta(minutes=i)))
 d.add(conv(id=9999, lead_id=9999, whatsapp="5598000000", nome="Agulha Distante",
-           atendente_id=1, updated_at=T - dt.timedelta(days=400)))
+           atendente_id=1, primeira_resposta_humana_at=T,
+           updated_at=T - dt.timedelta(days=400)))
 d.commit()
 d.close()
 

@@ -87,8 +87,37 @@ def test_sector_sidebar_isolation():
             assert bad not in html, f"{name} ({sector}): vazou link de outro setor: {bad}"
 
 
+def test_listas_que_trocam_de_filtro_sequenciam_a_requisicao():
+    """
+    AUDIT-2026-08-WG (F-442) — resposta obsoleta pintando a tela.
+
+    Toda lista que troca de filtro/aba sem cancelar a chamada anterior pode
+    receber a resposta ANTIGA depois da nova e pintar dados do filtro errado,
+    sem nenhum erro visivel. Aconteceu em tres telas independentes; a defesa e
+    sempre a mesma — um contador de sequencia comparado DEPOIS do await.
+
+    Este teste percorre as telas onde isso ja mordeu. Uma tela nova com o mesmo
+    padrao nao cai aqui sozinha (o teste nao adivinha intencao), mas o custo de
+    acrescentar uma linha e baixo e o defeito e recorrente.
+    """
+    import pathlib as _p
+
+    raiz = _p.Path(__file__).resolve().parent.parent
+    alvos = {
+        "templates/tarefas.html": "tasksRequestSeq",
+        "templates/segmentacao.html": "previewRequestSeq",
+        "conversas/static/js/conversas.js": "listRequestSeq",
+    }
+    for caminho, contador in alvos.items():
+        fonte = (raiz / caminho).read_text(encoding="utf-8")
+        assert contador in fonte, f"{caminho}: contador de sequencia `{contador}` sumiu"
+        assert f"++{contador}" in fonte,             f"{caminho}: `{contador}` nunca e incrementado — o guard vira no-op"
+        assert f"!== {contador}" in fonte or f"!= {contador}" in fonte,             f"{caminho}: `{contador}` e incrementado mas nunca comparado depois do await"
+
+
 if __name__ == "__main__":
     test_all_templates_render()
+    test_listas_que_trocam_de_filtro_sequenciam_a_requisicao()
     test_ai_chat_is_sanitized()
     test_sector_sidebar_isolation()
     print("OK: todos os render smoke tests passaram")

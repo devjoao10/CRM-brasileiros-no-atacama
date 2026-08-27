@@ -16,8 +16,9 @@ last_review: "2026-07-08"
   diretamente. Parceiros operacionais locais executam os tours.
 - Equipes locais em San Pedro de Atacama com **+8 anos de experiência**.
 - Organiza com antecedência e acompanha o cliente antes e durante a viagem.
-- Destinos atendidos: **Deserto do Atacama, Santiago e região, Salar de Uyuni
-  (Bolívia)** — somente esses.
+- Destinos atendidos: **Atacama, Santiago (e região), Uyuni** — somente
+  esses (nomes padronizados de fala, ver `00_persona/tom_de_voz.md`;
+  AUDIT-2026-08-WH2).
 - Não trabalha com: **hospedagem** nem **transfer** (indica opções).
 
 ## Dados formais

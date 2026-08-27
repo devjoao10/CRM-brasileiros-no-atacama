@@ -35,8 +35,14 @@ class Task(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Foreign Keys
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
-    lead_id = Column(Integer, ForeignKey("leads.id"), nullable=True, index=True)
+    # AUDIT-2026-08-W2E (F6) — eram as DUAS unicas FKs do app sem `ondelete`.
+    # Sem isso o banco BLOQUEIA o delete do pai em vez de propagar, e o unico
+    # lugar que compensava era routers/leads.py:533-535 apagando tasks na mao:
+    # qualquer hard delete por outro caminho (admin, script, cascade de outro
+    # objeto) morria com violacao de FK. `SET NULL` no dono (a tarefa sobrevive
+    # ao usuario que saiu) e `CASCADE` no lead (tarefa sem lead nao existe).
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    lead_id = Column(Integer, ForeignKey("leads.id", ondelete="CASCADE"), nullable=True, index=True)
 
     # Relationships
     user = relationship("app.models.user.User", backref="tasks")

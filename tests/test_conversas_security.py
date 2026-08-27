@@ -15,7 +15,17 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-JS = (ROOT / "conversas" / "static" / "js" / "conversas.js").read_text(encoding="utf-8")
+
+# AUDIT-2026-08-W0 — este binding NAO e cosmetico: e o discriminador de job do CI.
+# .github/workflows/test.yml separa as duas suites com
+# `grep -L/-l CONVERSAS_DIR tests/test_*.py`, e este arquivo era o UNICO teste do
+# Conversas sem o literal — logo rodava no job do CRM (Python 3.11 +
+# requirements.txt). Passava por acidente, porque nao importa `app.*`. No dia em
+# que alguem transformar estes greps em teste de comportamento (que e o proximo
+# passo obvio), o import ou falha por dependencia ausente ou, pior, resolve `app`
+# para o pacote do CRM e afirma sobre o codigo errado.
+CONVERSAS_DIR = ROOT / "conversas"
+JS = (CONVERSAS_DIR / "static" / "js" / "conversas.js").read_text(encoding="utf-8")
 
 failures = []
 
