@@ -256,25 +256,35 @@ Cada migration alterada foi executada **duas vezes seguidas** contra PostgreSQL
 
 ## 11. Contagem
 
-**Matriz** (`MASTER_FUNCTIONAL_BUG_MATRIX.md`): **144 linhas**, 110 da rodada
-anterior + 34 da Wave 8.
+**Matriz** (`MASTER_FUNCTIONAL_BUG_MATRIX.md`): **148 linhas**, 110 da rodada
+anterior + 38 da Wave 8.
 
 | Status | Quantidade |
 |---|---:|
-| `RESOLVED` | 84 |
+| `RESOLVED` | 87 |
 | `FIXED_PENDING_MANUAL_N8N` | 17 |
 | `DUPLICATE_ROOT_CAUSE` | 16 |
 | `NOT_REPRODUCED_WITH_EVIDENCE` | 15 |
 | `BLOCKED_OPERATOR` | 6 |
-| `DEFERRED` | 5 |
+| `DEFERRED` | 6 |
 | `OPEN` | 1 |
-| **Total** | **144** |
+| **Total** | **148** |
 
-**Suíte**: `85/85 PASS`, um processo por arquivo, como o CI faz
-(`scratch/suite_final3.txt`). Medida no HEAD final, depois do último delta de
-teste (`0d4c9a6`) — não é uma contagem herdada de antes dele. Baseline da rodada anterior: 83/83 — os dois arquivos a
-mais são `tests/test_pipeline_funnel_race.py` e `tests/test_conversas_lead_link.py`,
-nascidos nesta rodada.
+**Suíte**: `86/86 PASS`, um processo por arquivo, como o CI faz
+(`scratch/suite_final5.txt`). Medida no HEAD final `a5a53a0`, com a árvore
+committada e estável — não é contagem herdada de commit anterior. Baseline da
+rodada anterior: 83/83. Os três arquivos a mais nasceram nesta rodada:
+`tests/test_pipeline_funnel_race.py`, `tests/test_conversas_lead_link.py` e
+`tests/test_leads_destinos_response_legado.py`.
+
+**Cinco testes precisaram ser reescritos** porque travavam o *mecanismo*
+(`jsonb_each_text`, `jsonb_typeof`, `AS JSONB`, `@>`, "CASE aninhado") em vez da
+propriedade. Foi exatamente isso que os tornou frágeis, e duas vezes: as
+correções do W8-28 e do W8-35 removeram o cast de propósito, e os testes
+quebraram sem que nada tivesse regredido. Um deles chegava a **exigir** a
+operação parcial que era o defeito — travava o mecanismo e prendia o bug no
+lugar. As asserções passaram a exigir a propriedade: uma linha ruim não derruba
+a consulta das outras.
 
 **Smoke e2e contra PostgreSQL 16**: `22/22 PASS`, zero falhas, com limpeza
 confirmada ao final. Mesmo número da rodada anterior; a cadeia de handoff
@@ -289,9 +299,36 @@ removeu o cast de propósito, e eles quebraram sem que nada tivesse regredido. A
 asserções passaram a exigir a propriedade — uma linha ruim não derruba a
 consulta das outras — que é o que o F-043 sempre foi.
 
-O único `OPEN` é **W2-21**, e apenas na parte que é refatoração: consolidar os
-cinco caminhos que escrevem `responsavel_id`. A parte **funcional** dele — o
-caminho que pulava o histórico e a ponte — foi corrigida (W8-14).
+O único `OPEN` continua sendo **W2-21**, e apenas na parte que é refatoração:
+consolidar os cinco caminhos que escrevem `responsavel_id`. A parte **funcional**
+dele — o caminho que pulava o histórico e a ponte — foi corrigida (W8-14).
+**Nenhum `OPEN` funcional restante.**
+
+### Verificação pré-deploy (W8-35 a W8-38)
+
+Depois do fechamento, o cartão *"verificar mesma exposição no filtro de destino"*
+foi adjudicado e **procedia**. A adjudicação dele descobriu mais dois defeitos da
+mesma linha legada, em outras camadas:
+
+- **W8-35** — `leads.destinos` tinha a mesma exposição do F-043 na camada de
+  **query**: três cópias de `cast(coluna, JSONB) @>` na coluna crua. Corpus de 14
+  valores contra PostgreSQL 16.14 — o `INSERT` passa nos 14 e o `::jsonb` morre
+  em 7. **Alcançável pela API**: `_rejeita_nul` não decora `destinos`.
+- **W8-36** — a mesma linha derrubava a camada de **resposta** em oito endpoints,
+  incluindo o Kanban por um segundo schema (`LeadCardResponse`) que não passa por
+  `LeadResponse`.
+- **W8-37** — e a camada de **agregação**: o dropdown do filtro de destino e o
+  relatório, com dois pontos de morte cada. O relatório ainda tinha um erro
+  silencioso que a tabela de 500 não mostrava — `[123]`/`[true]` respondiam 200
+  vazando `"123"`/`"true"` para o breakdown, nome de destino inventado.
+- **W8-38** — a correção de raiz (coluna `json` → `jsonb`, que recusaria na
+  escrita) é migration em dado de produção. Fica `DEFERRED`.
+
+As quatro camadas usam hoje a **mesma** redução central (`destinos_publicos`), e
+a semântica dela veio do contrato histórico do próprio campo — `normalize_destinos`
+do lado da escrita e o que a UI consome — não de chute. A única divergência
+deliberada: onde a escrita fabricaria `"inf"`/`"123"`/`"True"`, a resposta
+descarta. Inventar nome de destino é pior que perder um.
 
 ---
 
@@ -358,6 +395,8 @@ verificados contra PostgreSQL de verdade; e o que não foi corrigido está
 nomeado, com o motivo, em vez de escondido atrás de um status verde.
 
 **VEREDITO: B — `READY FOR CONTROLLED DEPLOY — PENDING PRODUCTION VALIDATION`.**
+
+HEAD final: `a5a53a0`. Suíte `86/86 PASS` sobre ele.
 
 Condicionado à ordem da seção 14. Em particular: as migrations antes do código
 que depende delas, e o Conversas antes do Header Auth no n8n.

@@ -248,7 +248,19 @@ rodada**. Ficam registradas como tal, não escondidas.
 | W8-33 | revisão (operação) | Conversa que a Bia acabou de responder aparece ate ~4min mais velha no inbox | `conversations.updated_at` tem o mesmo carimbo de inicio de transacao e o inbox ordena por ele. Trocar o `onupdate` atinge TODA rota que faz UPDATE — decisao maior que o defeito relatado | Conversas | Repo | — | DEFERRED | 57aa69d |
 | W8-34 | revisão (operação) | Com 2+ workers uvicorn, a guarda de lote em voo nao vale | `_agent_locks`/`_agent_delivered_until` sao dicts de UM processo, como os dicts de debounce que ja existiam. Para valer entre workers tem de virar marcador no banco | Conversas | Repo | — | DEFERRED | 57aa69d |
 
-**Tetos declarados nesta wave** (W8-30 a W8-34): reais, medidos, e **não**
+| W8-35 | cartão Claude App | UMA linha com `destinos` legado derruba a listagem de TODOS os leads | Mesma exposicao do F-043, na mesma familia: `leads.destinos` tambem e coluna `json`, e as TRES copias de `_json_list_contains` faziam `cast(coluna, JSONB) @> ...` na coluna CRUA. Corpus de 14 valores contra PostgreSQL 16.14: o INSERT passa nos 14 e o `::jsonb` morre em 7. ALCANCAVEL PELA API — `_rejeita_nul` nao decora `destinos`, entao `POST /api/leads` com `destinos=[' ']` e aceito. O cast SUMIU (nao ganhou guard: guard de escape nao cobre overflow); `json_array_elements_text` sob allowlist que falha FECHANDO | CRM | Repo | test_leads_destino_filter_dialect | RESOLVED | 090cbfb |
+| W8-36 | revisão (serialização) | Lead com `destinos` legado devolve 500 em oito endpoints, e leva a linha valida junto | `LeadResponse.destinos` e `LeadCardResponse.destinos` eram `Optional[list[str]]` SEM validador, entao o Pydantic validava na SAIDA um valor vindo da coluna `json`, que nunca garantiu essa forma. Defeito de Python/Pydantic — identico em SQLite e PostgreSQL. `destinos_publicos` centraliza a reducao ao contrato publico, e a semantica veio do contrato historico do proprio campo (`normalize_destinos` + o que a UI consome), nao de chute | CRM | Repo | test_leads_destinos_response_legado | RESOLVED | a5a53a0 |
+| W8-37 | revisão (serialização) | A mesma linha legada derruba o DROPDOWN do filtro de destino e o relatorio | Duas rotas de agregacao nao passam por schema nenhum, com DOIS pontos de morte cada: `sorted()` sobre tipos mistos e `set.add(['x'])` em `/api/leads/destinos`; chave de dict nao-hashavel e o render do JSONResponse (`allow_nan=False`) em `/api/analytics/reports`. Um guard so na chave teria deixado o `inf` quebrado. E `[123]`/`[true]` respondiam 200 VAZANDO "123"/"true" para o breakdown — nome de destino inventado, o mesmo que a resposta de lead ja recusa | CRM | Repo | test_leads_destinos_response_legado 6 | RESOLVED | a5a53a0 |
+| W8-38 | revisão (serialização) | A coluna `destinos` continua aceitando forma que o contrato publico nao representa | A correcao estrutural de raiz seria `json` -> `jsonb` na coluna, que recusaria `[1e1000000]` na propria escrita. E migration em dado de producao, com risco de abortar em linha legada existente — fora do escopo desta rodada e proibido nela. Enquanto isso, a leitura e fail-closed nas quatro camadas e o dado bruto nao e tocado | CRM | Repo | — | DEFERRED | a5a53a0 |
+
+**Verificacao pre-deploy (W8-35 a W8-38)** — os tres primeiros vieram do cartao
+"verificar mesma exposicao no filtro de destino" e do que a adjudicacao dele
+descobriu no caminho. W8-36 e W8-37 sao a MESMA linha legada em outra camada: a
+query ja voltava, e quem quebrava era a resposta. As quatro camadas
+(query, serializacao de lead, serializacao de card, agregacao) usam hoje a mesma
+reducao central.
+
+**Tetos declarados nesta wave** (W8-30 a W8-34, mais W8-38): reais, medidos, e **não**
 corrigidos — cada um com o motivo no comentário do próprio código ou em
 `RELEASE_READINESS.md`. Nenhum deles é sintoma relatado pelo operador; todos
 exigem decisão de produto ou mudança ampla que esconderia regressão se
