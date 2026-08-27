@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from datetime import datetime, date
 
-from app.schemas.lead import LeadResponse
+from app.schemas.lead import LeadResponse, destinos_publicos
 from app.schemas.tag import TagResponse
 
 
@@ -131,6 +131,16 @@ class LeadCardResponse(BaseModel):
     responsavel_nome: Optional[str] = None
     entry_created_at: Optional[datetime] = None  # Quando o lead entrou neste funil
     entry_updated_at: Optional[datetime] = None  # Última movimentação (mover etapa atualiza)
+
+    # AUDIT-2026-08-WF2 — o card do Kanban NAO passa por `LeadResponse`: o
+    # `_card()` de app/routers/pipeline.py monta este schema direto com
+    # `lead.destinos` cru. Sem esta linha, uma linha legada derrubava o board
+    # inteiro com 500 mesmo depois de a listagem de Leads estar corrigida.
+    # Mesma regra, mesma funcao — ver `destinos_publicos` em schemas/lead.py.
+    @field_validator("destinos", mode="before")
+    @classmethod
+    def _destinos_legado(cls, valor):
+        return destinos_publicos(valor)
 
 
 class KanbanStageResponse(BaseModel):

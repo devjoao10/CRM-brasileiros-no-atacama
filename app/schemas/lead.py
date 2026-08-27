@@ -45,6 +45,52 @@ def _rejeita_nul(valor, campo: str):
 
 
 
+# AUDIT-2026-08-WF2 — `destinos` legado derrubava a RESPOSTA inteira.
+#
+# Isto NAO e o defeito da camada de QUERY (o `cast(json -> jsonb)`): ali a
+# CONSULTA estourava. Aqui a consulta volta, e o 500 nasce depois, quando o
+# Pydantic recusa o valor que veio do banco:
+#
+#     ValidationError: 1 validation error for LeadResponse
+#     destinos.0
+#       Input should be a valid string [input_value=inf, input_type=float]
+#
+# `Lead.destinos` e `Column(JSON)`, que no PostgreSQL compila para o tipo
+# `json` — valida so a SINTAXE. `[1e1000000]` e JSON sintaticamente valido
+# (`::jsonb` estoura, `::json` guarda) e volta para o Python como `[inf]`.
+# Pela API isso nao entra: `normalize_destinos` coage a lista com `str()` e o
+# schema recusa dict/escalar com 422. Entra por psql, COPY/restore e carga
+# fora da ORM — e uma UNICA linha dessas fazia `GET /api/leads`,
+# `GET /api/leads/segment`, `POST /api/segments/preview` e o Kanban
+# responderem 500 para TODOS os leads, medido em SQLite e em PostgreSQL 16.
+#
+# Mesmo padrao do F-503 em `HistoryResponse.dados`: corrige do lado de QUEM
+# LE, o unico lado capaz de sobreviver a uma linha legada que ninguem pode
+# reescrever daqui sem autorizacao. Nada de dado persistido e alterado.
+#
+# A semantica segue o contrato de ESCRITA que ja existe em
+# `normalize_destinos` ("Accept either a single string or a list of
+# strings"), com UMA excecao deliberada: a escrita faz `str(d).strip()`, que
+# transformaria `inf` em "inf", `None` em "None" e `123` em "123". Resposta
+# nao INVENTA nome de destino — onde a escrita fabricaria, a leitura
+# descarta. O que sobra e exatamente o que a UI sabe desenhar
+# (`getDestinoTags` em templates/leads.html faz `d.toLowerCase()` em cada
+# elemento, entao elemento nao-texto quebraria a tela do mesmo jeito).
+def destinos_publicos(valor):
+    """Reduz `leads.destinos` cru ao contrato publico: lista de strings.
+
+    String no topo vira lista separada por virgula (formato legado que a
+    escrita sempre aceitou); elemento nao-texto e DESCARTADO; qualquer outra
+    forma (objeto, escalar) vira ausencia de destino. Lista de strings sai
+    intacta — sem strip, sem dedupe, sem reordenar.
+    """
+    if isinstance(valor, str):
+        return [d.strip() for d in valor.split(",") if d.strip()]
+    if isinstance(valor, list):
+        return [d for d in valor if isinstance(d, str)]
+    return None
+
+
 class LeadFunnelInfo(BaseModel):
     """Summary of a lead's placement in a funnel."""
     funnel_id: int
@@ -245,6 +291,12 @@ class LeadResponse(BaseModel):
     funis: list[LeadFunnelInfo] = []
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+    # AUDIT-2026-08-WF2 — ver `destinos_publicos` no topo do arquivo.
+    @field_validator("destinos", mode="before")
+    @classmethod
+    def _destinos_legado(cls, valor):
+        return destinos_publicos(valor)
 
     class Config:
         from_attributes = True

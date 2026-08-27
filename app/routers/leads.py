@@ -25,6 +25,7 @@ from app.schemas.lead import (
     LeadFunnelInfo,
     ImportResponse,
     DESTINOS_PRINCIPAIS,
+    destinos_publicos,
 )
 from app.auth import get_current_user, require_admin
 from app.query_filters import campo_personalizado_match, destino_match
@@ -300,15 +301,26 @@ def list_destinos(
     db: Session = Depends(get_db),
 ):
     """Retorna os destinos principais + todos os destinos já cadastrados."""
+    # AUDIT-2026-08-WF2 — mesma linha legada do finding de serializacao, outro
+    # mecanismo: aqui nada passa por `LeadResponse`, os elementos crus vao
+    # direto para um `set` e para o `sorted()`. Dois pontos de morte medidos:
+    #
+    #   `[123]` / `[true]` / `[1e1000000]` / `["Atacama", 123]`
+    #       -> sorted() sobre {str, int|bool|float}
+    #          TypeError: '<' not supported between instances of 'str' and 'int'
+    #   `[["x"]]`
+    #       -> set.add(["x"])  TypeError: unhashable type: 'list'
+    #
+    # E o DROPDOWN do filtro de destino: uma unica linha legada e o filtro
+    # inteiro parava de carregar para todo mundo. `destinos_publicos` (ver
+    # app/schemas/lead.py) e a MESMA reducao que a serializacao usa — duplicar
+    # a regra aqui garantiria divergencia entre o dropdown e a lista.
     all_destinos = set(DESTINOS_PRINCIPAIS)
     leads = db.query(Lead.destinos).filter(Lead.destinos.isnot(None)).all()
     for (dest_list,) in leads:
-        if isinstance(dest_list, list):
-            for d in dest_list:
-                if d:
-                    all_destinos.add(d)
-        elif isinstance(dest_list, str) and dest_list:
-            all_destinos.add(dest_list)
+        for d in destinos_publicos(dest_list) or []:
+            if d:
+                all_destinos.add(d)
     return {"destinos": sorted(all_destinos)}
 
 

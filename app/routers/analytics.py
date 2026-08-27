@@ -9,6 +9,7 @@ from app.models.lead import Lead
 from app.models.pipeline import Funnel, FunnelEntry, LeadHistory
 from app.models.task import Task
 from app.models.user import User
+from app.schemas.lead import destinos_publicos
 from app.auth import get_current_user, require_admin
 
 router = APIRouter(prefix="/api/analytics", tags=["Analytics"])
@@ -193,10 +194,26 @@ def get_detailed_reports(
                 status_by_day[d_str][l.status_venda] += 1
                 
         # Variables
-        if l.destinos and isinstance(l.destinos, list):
-            for d in l.destinos:
-                if d:
-                    destinos_count[d] = destinos_count.get(d, 0) + 1
+        # AUDIT-2026-08-WF2 — mesma linha legada do finding de serializacao,
+        # outro mecanismo: o relatorio nao serializa lead nenhum, ele usa o
+        # elemento cru como CHAVE de dict. Dois pontos de morte medidos:
+        #
+        #   `[["x"]]`      -> destinos_count[["x"]]
+        #                     TypeError: unhashable type: 'list'
+        #   `[1e1000000]`  -> a chave `inf` e hashavel e a rota TERMINA; quem
+        #                     estoura e o render do JSONResponse do FastAPI
+        #                     (`json.dumps(..., allow_nan=False)`)
+        #                     ValueError: Out of range float values are not JSON compliant
+        #
+        # `[123]` e `[true]` nao derrubavam, mas vazavam para o breakdown como
+        # "123"/"true" (chave coagida pelo `json.dumps`) — nome de destino
+        # inventado a partir de valor nao-textual, exatamente o que a resposta
+        # de lead ja recusa fabricar. `destinos_publicos` (ver
+        # app/schemas/lead.py) e a MESMA reducao usada na serializacao e no
+        # dropdown; duplicar a regra aqui garantiria divergencia.
+        for d in destinos_publicos(l.destinos) or []:
+            if d:
+                destinos_count[d] = destinos_count.get(d, 0) + 1
         
         if l.campos_personalizados and isinstance(l.campos_personalizados, dict):
             origem = l.campos_personalizados.get("origem") or l.campos_personalizados.get("Origem") or "Outros/Manual"
