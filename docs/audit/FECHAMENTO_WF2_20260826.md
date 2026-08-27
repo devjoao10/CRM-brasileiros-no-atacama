@@ -271,9 +271,8 @@ anterior + 34 da Wave 8.
 | **Total** | **144** |
 
 **Suíte**: `85/85 PASS`, um processo por arquivo, como o CI faz
-(`scratch/final2.txt`). Depois dessa medição entrou um último delta em dois
-arquivos de teste (`0d4c9a6`), reverificados individualmente nos dois backends:
-`test_postgres_dialect_divergence` e `test_segments_sql_count`, exit 0 nos dois. Baseline da rodada anterior: 83/83 — os dois arquivos a
+(`scratch/suite_final3.txt`). Medida no HEAD final, depois do último delta de
+teste (`0d4c9a6`) — não é uma contagem herdada de antes dele. Baseline da rodada anterior: 83/83 — os dois arquivos a
 mais são `tests/test_pipeline_funnel_race.py` e `tests/test_conversas_lead_link.py`,
 nascidos nesta rodada.
 
