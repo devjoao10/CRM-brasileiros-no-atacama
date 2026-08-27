@@ -45,6 +45,33 @@ check("- CONVERSAS_MEDIA_DIR=/app/data/media" in COMPOSE,
 check("- META_APP_SECRET=${META_APP_SECRET" in COMPOSE,
       "META_APP_SECRET passado ao conversas por REFERENCIA ${...}")
 
+# AUDIT-2026-08-WF2 — item de `environment` com `: ` PRECISA de aspas.
+#
+# `- VAR=${VAR:-Vendas: Principal}` nao e string para o YAML: o `: ` (dois
+# pontos SEGUIDO DE ESPACO) faz o parser ler o item da lista como MAPA, e o
+# compose recusa o arquivo inteiro com
+# `services.conversas.environment.[7]: unexpected type map[string]interface {}`.
+# Foi bloqueador de deploy: o compose ficou invalido em producao.
+#
+# `${VAR:-...}` sozinho nao dispara nada — ali o dois-pontos vem seguido de `-`,
+# nao de espaco. Quem quebra e o espaco no VALOR (`Vendas: Principal`), entao a
+# regra e sobre `: `, nao sobre `:`.
+#
+# Sem PyYAML de proposito: ele nao esta em requirements.txt nem em
+# conversas/requirements.txt, e este guard tem de rodar no CI como esta.
+_env_sem_aspas = []
+for _linha in COMPOSE.splitlines():
+    _cru = _linha.strip()
+    if not _cru.startswith("- ") or "=" not in _cru:
+        continue
+    _item = _cru[2:]
+    if ": " in _item and not (_item.startswith('"') and _item.endswith('"')):
+        _env_sem_aspas.append(_item)
+check(not _env_sem_aspas,
+      f"todo item de environment com `: ` esta entre aspas — sem elas o YAML le "
+      f"a linha como MAPA e o compose recusa o arquivo inteiro "
+      f"(violacoes: {_env_sem_aspas})")
+
 # Segredos nunca literais no compose (toda credencial e ${VAR})
 secretish = re.findall(r"(SECRET_KEY|META_APP_SECRET|META_ACCESS_TOKEN|POSTGRES_PASSWORD)=([^\s]+)", COMPOSE)
 literals = [(k, v) for k, v in secretish if not v.startswith("${")]

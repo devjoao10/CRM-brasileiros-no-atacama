@@ -80,7 +80,7 @@ services:
       # DEFAULT_FUNNEL_NOME" — instrucao correta no diagnostico e sem efeito
       # nenhum na pratica. Os defaults sao os mesmos de app/config.py.
       - DEFAULT_FUNNEL_ID=${DEFAULT_FUNNEL_ID:-}
-      - DEFAULT_FUNNEL_NOME=${DEFAULT_FUNNEL_NOME:-Vendas: Principal}
+      - "DEFAULT_FUNNEL_NOME=${DEFAULT_FUNNEL_NOME:-Vendas: Principal}"
       - DEFAULT_ETAPA_NOME=${DEFAULT_ETAPA_NOME:-Sem Contato}
       - APP_DOMAIN=${APP_DOMAIN:-https://crm.crmbrasileirosnoatacama.cloud}
       - INTERNAL_AI_AUTH_MAX_SKEW_SECONDS=${INTERNAL_AI_AUTH_MAX_SKEW_SECONDS:-300}
@@ -162,7 +162,7 @@ services:
       # so um dos dois containers receber estas variaveis, o mesmo cliente cai
       # em funis diferentes conforme quem criou o lead.
       - DEFAULT_FUNNEL_ID=${DEFAULT_FUNNEL_ID:-}
-      - DEFAULT_FUNNEL_NOME=${DEFAULT_FUNNEL_NOME:-Vendas: Principal}
+      - "DEFAULT_FUNNEL_NOME=${DEFAULT_FUNNEL_NOME:-Vendas: Principal}"
       - DEFAULT_ETAPA_NOME=${DEFAULT_ETAPA_NOME:-Sem Contato}
       - META_VERIFY_TOKEN=${META_VERIFY_TOKEN:-}
       - META_ACCESS_TOKEN=${META_ACCESS_TOKEN:-}
