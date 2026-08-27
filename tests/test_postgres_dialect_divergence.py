@@ -182,13 +182,17 @@ COPIAS = (("leads.py", R_LEADS), ("segments.py", R_SEG), ("pipeline.py", R_PIPE)
 
 
 def json_contains_sql(modulo, is_sqlite):
-    original = modulo.IS_SQLITE
-    modulo.IS_SQLITE = is_sqlite
+    # AUDIT-2026-08-WF2 — as tres copias delegam para app/query_filters.py, que
+    # e onde o ramo de dialeto vive agora. Forcar modulo.IS_SQLITE nao teria
+    # efeito nenhum e o teste mediria sempre o mesmo ramo.
+    import app.query_filters as _QF2
+    original = _QF2.IS_SQLITE
+    _QF2.IS_SQLITE = is_sqlite
     try:
         expr = modulo._json_list_contains(Lead.destinos, "Atacama")
         return sql(expr, LITE if is_sqlite else PG)
     finally:
-        modulo.IS_SQLITE = original
+        _QF2.IS_SQLITE = original
 
 
 pg_json = {nome: json_contains_sql(m, False) for nome, m in COPIAS}
@@ -204,24 +208,31 @@ check(len(set(lite_json.values())) == 1,
 
 for nome in pg_json:
     s = pg_json[nome]
-    check("AS JSONB" in s.upper() and "@>" in s,
-          f"{nome}: ramo PostgreSQL faz CAST(... AS JSONB) antes do @> "
-          f"(a coluna e `json` e `json @> unknown` nao existe no PostgreSQL)")
+    # AUDIT-2026-08-WF2 — os dois asserts antigos exigiam `AS JSONB` + `@>` e
+    # que a coluna crua nao colasse no `@>`. Os dois guardavam a mesma coisa: "o
+    # SQL compila no PostgreSQL". Nenhum guardava que ele SOBREVIVE — e o cast
+    # que eles exigiam e justamente a operacao que morre em linha armazenavel
+    # (`[1e1000000]`, `["\\u0000"]`, `["\\ud800"]`). A propriedade foi para
+    # tests/test_leads_destino_filter_dialect.py, medida contra PostgreSQL real.
+    check("JSONB" not in s.upper(),
+          f"{nome}: o cast para jsonb nao pode voltar — uma unica linha que nao "
+          f"caste derruba a listagem de TODOS os leads (F-043)")
+    check("json_array_elements_text(" in s and "json_typeof(" in s,
+          f"{nome}: ramo PostgreSQL expande os elementos como texto sobre a "
+          f"coluna `json`, atras da guarda de tipo")
     check(not re.search(r"leads\.destinos\s*@>", s),
           f"{nome}: a coluna crua nunca cola no @> — isso seria 500 em producao")
 
-check("json_type" not in pg_json["pipeline.py"] and "@>" not in lite_json["pipeline.py"],
-      "pipeline.py: os ramos nao vazam um para o outro "
-      "(tests/test_leads_destino_filter_dialect.py cobre so leads.py e "
-      "segments.py; pipeline.py entrou aqui)")
+check("json_type(" not in pg_json["pipeline.py"] and "@>" not in lite_json["pipeline.py"],
+      "pipeline.py: os ramos nao vazam um para o outro")
 
 # Divergencia SEMANTICA, nao de sintaxe: o ramo SQLite dobra a caixa dos dois
-# lados e o `@>` do PostgreSQL compara o elemento JSON literalmente.
+# lados e o ramo PostgreSQL compara o elemento literalmente.
 check("lower(" in lite_json["leads.py"],
       "SQLite: `lower(CAST(destinos AS VARCHAR)) LIKE lower('%\"Atacama\"%')` "
       "— o filtro e CASE-INSENSITIVE")
 check("lower(" not in pg_json["leads.py"],
-      "PostgreSQL: `@> '[\"Atacama\"]'` e CASE-SENSITIVE e exato. "
+      "PostgreSQL: a comparacao do elemento e CASE-SENSITIVE e exata. "
       "DIVERGENCIA REAL: destino='atacama' devolve leads no SQLite e devolve "
       "ZERO em producao — sem erro, so uma lista vazia")
 

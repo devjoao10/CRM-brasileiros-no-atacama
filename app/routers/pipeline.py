@@ -3,11 +3,11 @@ from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy import func, or_, tuple_, String
+from sqlalchemy import func, or_, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.database import get_db, IS_SQLITE
+from app.database import get_db
 from app.models.pipeline import Funnel, FunnelEntry, LeadHistory
 from app.models.lead import Lead
 from app.models.tag import lead_tags
@@ -21,6 +21,7 @@ from app.schemas.pipeline import (
 )
 from app.schemas.tag import TagResponse
 from app.auth import get_current_user, require_admin
+from app.query_filters import destino_match
 
 router = APIRouter(prefix="/api/pipeline", tags=["Pipeline"])
 
@@ -341,13 +342,9 @@ _PERIODOS = {"hoje": 1, "3d": 3, "7d": 7, "30d": 30}
 
 
 def _json_list_contains(column, value: str):
-    """Mesma expressao de leads.py/segments.py: @> com cast jsonb no PostgreSQL
-    (a coluna e `json`), LIKE no SQLite."""
-    if IS_SQLITE:
-        return column.cast(String).ilike(f'%"{value}"%')
-    import json
-    from sqlalchemy.dialects.postgresql import JSONB
-    return column.cast(JSONB).op("@>")(json.dumps([value]))
+    """Mesma expressao de leads.py/segments.py — agora uma so, em
+    app/query_filters.py (AUDIT-2026-08-WF2)."""
+    return destino_match(column, value)
 
 
 def _cursor_encode(entry: FunnelEntry) -> Optional[str]:

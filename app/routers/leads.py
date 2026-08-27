@@ -27,7 +27,7 @@ from app.schemas.lead import (
     DESTINOS_PRINCIPAIS,
 )
 from app.auth import get_current_user, require_admin
-from app.query_filters import campo_personalizado_match
+from app.query_filters import campo_personalizado_match, destino_match
 from app.config import LEAD_TAG_ORIGEM_API
 from app.services.lead_creation import criar_lead, resolver_funil_por_nome
 
@@ -123,16 +123,13 @@ def _digitos_no_banco(coluna):
 
 
 def _json_list_contains(column, value: str):
-    """Filtra coluna JSON list que contenha um valor. Compatível com SQLite e PostgreSQL."""
-    if IS_SQLITE:
-        # SQLite armazena JSON como texto — LIKE funciona
-        return column.cast(String).ilike(f'%"{value}"%')
-    else:
-        # PostgreSQL: @> so existe para jsonb e a coluna e json — cast na
-        # EXPRESSAO da query (nao altera o schema nem os dados).
-        import json
-        from sqlalchemy.dialects.postgresql import JSONB
-        return column.cast(JSONB).op("@>")(json.dumps([value]))
+    """Filtra coluna JSON list que contenha um valor. Compatível com SQLite e PostgreSQL.
+
+    AUDIT-2026-08-WF2 — a expressao mora em app/query_filters.py: eram TRES
+    copias do mesmo `cast(coluna, JSONB) @> ...`, e o cast na coluna `json`
+    crua derrubava a listagem inteira com 500 (mesmo defeito do F-043).
+    """
+    return destino_match(column, value)
 
 
 def _build_lead_response(lead: Lead) -> LeadResponse:

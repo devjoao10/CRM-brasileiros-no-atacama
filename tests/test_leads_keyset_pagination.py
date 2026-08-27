@@ -748,11 +748,20 @@ def test_postgres_campo_personalizado_e_exists_com_guarda_de_tipo():
     )
 
 
-def test_postgres_destino_e_jsonb_contains():
+def test_postgres_destino_nao_casta_para_jsonb():
+    """AUDIT-2026-08-WF2 — o assert antigo era `@>` + `JSONB`, e ele guardava
+    apenas "o SQL compila" (a coluna e `json` e `json @> unknown` nao existe).
+    So que o proprio cast e a operacao PARCIAL: `[1e1000000]` e json valido,
+    armazenavel, e derruba a consulta de TODOS os leads. A propriedade foi
+    parar em tests/test_leads_destino_filter_dialect.py, que mede o corpus
+    inteiro contra PostgreSQL real; aqui fica o tripwire de forma."""
     from app.models.lead import Lead
     sql = _sql_pg(lambda db, L, QF: db.query(Lead.id).filter(
         L._json_list_contains(Lead.destinos, "Atacama")))
-    assert "@>" in sql and "JSONB" in sql.upper(), sql[:300]
+    assert "JSONB" not in sql.upper(), (
+        f"o cast para jsonb voltou — e ele que quebra com [1e1000000]: {sql[:300]}")
+    assert "json_array_elements_text(" in sql, sql[:300]
+    assert "json_typeof(" in sql, f"guarda de tipo tem que sobreviver: {sql[:300]}"
 
 
 def test_postgres_busca_usa_ilike_nos_tres_campos():

@@ -499,15 +499,18 @@ def _sql(filtros, sqlite):
     from app import query_filters as QF
     db = SessionLocal()
     try:
-        orig, origQF = S.IS_SQLITE, QF.IS_SQLITE
-        S.IS_SQLITE = QF.IS_SQLITE = sqlite
+        # AUDIT-2026-08-WF2 — o predicado de DESTINO tambem migrou para
+        # query_filters (eram tres copias do mesmo cast para jsonb), entao
+        # segments.py nao tem mais ramo de dialeto proprio: forcar QF basta.
+        origQF = QF.IS_SQLITE
+        QF.IS_SQLITE = sqlite
         try:
             q = S._resolve_segment_query(filtros, db, for_count=True)
             stmt = select(func.count()).select_from(q.subquery())
             return str(stmt.compile(dialect=lite() if sqlite else pg(),
                                     compile_kwargs={"literal_binds": True}))
         finally:
-            S.IS_SQLITE, QF.IS_SQLITE = orig, origQF
+            QF.IS_SQLITE = origQF
     finally:
         db.close()
 
@@ -585,11 +588,17 @@ def test_postgres_valor_com_curinga_e_escapado():
     )
 
 
-def test_postgres_destino_usa_jsonb_contains():
+def test_postgres_destino_nao_casta_para_jsonb():
+    """AUDIT-2026-08-WF2 — antes: `@>` + `JSONB`. Aquele assert guardava so que
+    o SQL compila; o cast que ele exigia e a operacao PARCIAL que derruba a
+    consulta inteira em linha armazenavel. A propriedade mora em
+    tests/test_leads_destino_filter_dialect.py (corpus x PostgreSQL real)."""
     sql = _sql_pg({"destino": "Atacama"})
-    assert "@>" in sql and "JSONB" in sql.upper(), (
-        f"destino deveria usar @> sobre jsonb: {sql[:200]}"
-    )
+    assert "JSONB" not in sql.upper(), (
+        f"o cast para jsonb voltou — [1e1000000] e json valido e o derruba: {sql[:200]}")
+    assert "json_array_elements_text(" in sql, (
+        f"destino deveria expandir os elementos como texto: {sql[:200]}")
+    assert "json_typeof(" in sql, f"guarda de tipo ausente: {sql[:200]}"
 
 
 def test_postgres_contagem_e_count_sem_join_multiplicador():

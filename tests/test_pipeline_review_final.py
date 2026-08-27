@@ -468,8 +468,11 @@ def test_queries_novas_compilam_em_postgresql():
                    "destino": "Atacama", "tag_ids": [1, 2],
                    "viajantes_min": 2, "chegada_de": None, "chegada_ate": None}
         # forca o ramo PostgreSQL do helper de destino
-        original = pipe.IS_SQLITE
-        pipe.IS_SQLITE = False
+        # AUDIT-2026-08-WF2 — o ramo mora em app/query_filters.py; pipeline.py
+        # so delega e nao tem mais IS_SQLITE proprio.
+        import app.query_filters as QF
+        original = QF.IS_SQLITE
+        QF.IS_SQLITE = False
         try:
             q = pipe._stage_query(db, 1, "e1", filtros)
             q = q.order_by(FunnelEntry.updated_at.desc(), FunnelEntry.id.desc())
@@ -477,17 +480,21 @@ def test_queries_novas_compilam_em_postgresql():
                          < (datetime.now(timezone.utc), 10))
             sql = str(q.statement.compile(dialect=postgresql.dialect()))
         finally:
-            pipe.IS_SQLITE = original
+            QF.IS_SQLITE = original
     finally:
         db.close()
 
     baixo = sql.lower()
     assert "order by" in baixo and "desc" in baixo, "keyset perdeu o ORDER BY"
-    assert "jsonb" in baixo, (
-        "o filtro de destino precisa castar para JSONB no PostgreSQL "
-        "(a coluna e `json` e @> so existe para jsonb)"
+    # AUDIT-2026-08-WF2 — antes: `jsonb` + `@>`. Guardavam "o SQL compila";
+    # o cast que exigiam e a operacao que morre em linha armazenavel e leva
+    # junto a consulta de todos os leads. Propriedade: ver
+    # tests/test_leads_destino_filter_dialect.py.
+    assert "jsonb" not in baixo, (
+        "o cast para jsonb voltou ao filtro de destino — [1e1000000] e json "
+        "valido e o derruba"
     )
-    assert "@>" in sql, "operador de containment ausente"
+    assert "json_array_elements_text(" in baixo, "filtro de destino nao compilou"
     assert "ilike" in baixo, "a busca precisa ser case-insensitive"
     assert "exists" in baixo or "in (" in baixo, "filtro de tags nao compilou"
     # nada especifico de SQLite pode vazar para producao

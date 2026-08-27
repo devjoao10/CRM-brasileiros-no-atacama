@@ -59,6 +59,28 @@ _RE_PAR_SUBSTITUTO = (
 _RE_ESCAPE_CONVERSIVEL = r"\\u(?!0000)(?![dD][89a-fA-F])[0-9a-fA-F]{4}"
 
 
+def _conversivel(coluna):
+    """
+    Predicado TOTAL: a linha pode virar `text` sem o PostgreSQL estourar?
+
+    Le a coluna `json` so por `::text` — medido, e junto com `json_typeof` a
+    unica operacao que sobrevive a tudo que a coluna aceita guardar. Remove do
+    texto os escapes de codepoint que sabemos converter e exige que nao sobre
+    nenhum: o que este guard nao reconhecer FALHA FECHANDO (a linha some do
+    filtro), nunca abrindo (500 para todo mundo). O racional completo esta no
+    ramo PostgreSQL de campo_personalizado_match.
+
+    `strpos`, e nao LIKE: no PostgreSQL a barra e o caractere de escape DEFAULT
+    do LIKE, e foi assim que uma revisao anterior barrou `ref-u0000-alpha`, que
+    nunca teve barra nenhuma.
+    """
+    texto = cast(coluna, String)
+    sem_barra_escapada = func.replace(texto, _ESCAPE_BARRA, "")
+    sem_par = func.regexp_replace(sem_barra_escapada, _RE_PAR_SUBSTITUTO, "", "g")
+    so_estranho = func.regexp_replace(sem_par, _RE_ESCAPE_CONVERSIVEL, "", "g")
+    return func.strpos(so_estranho, _ESCAPE_U) == 0
+
+
 def campo_personalizado_match(coluna, chave: str, valor: str):
     """
     EXISTS sobre os pares chave/valor de um campo JSON de objeto, no banco.
@@ -139,11 +161,7 @@ def campo_personalizado_match(coluna, chave: str, valor: str):
         # chave/valor/aninhado, 1 a 4 barras antes do escape, substituto solto e
         # par valido, hex maiusculo, caminho do Windows, overflow numerico,
         # array/null/string no topo): zero linha insegura, zero falso positivo.
-        texto = cast(coluna, String)
-        sem_barra_escapada = func.replace(texto, _ESCAPE_BARRA, "")
-        sem_par = func.regexp_replace(sem_barra_escapada, _RE_PAR_SUBSTITUTO, "", "g")
-        so_estranho = func.regexp_replace(sem_par, _RE_ESCAPE_CONVERSIVEL, "", "g")
-        conversivel = func.strpos(so_estranho, _ESCAPE_U) == 0
+        conversivel = _conversivel(coluna)
 
         # Sem o cast para jsonb os DOIS lados do AND sao totais (nenhum estoura),
         # entao a ordem que o planner escolher e indiferente e o CASE ANINHADO de
@@ -165,3 +183,53 @@ def campo_personalizado_match(coluna, chave: str, valor: str):
         # autoescape: % e _ digitados pelo usuario sao literais, nao curinga
         condicoes.append(func.lower(valor_col).contains(valor_norm, autoescape=True))
     return select(literal(1)).select_from(pares).where(*condicoes).exists()
+
+
+def destino_match(coluna, valor: str):
+    """
+    A coluna JSON de lista contem exatamente este elemento?
+
+    AUDIT-2026-08-WF2 — era `cast(coluna, JSONB).op("@>")`, tres vezes copiado
+    (leads.py, pipeline.py, segments.py). Mesmo defeito do F-043, e nao um
+    parente dele: `leads.destinos` tambem e coluna `json`, o cast tambem roda
+    LINHA A LINHA antes de qualquer protecao, e UMA linha que nao caste derruba
+    a listagem de TODOS os leads com 500 permanente.
+
+    Medido contra PostgreSQL 16.14, corpus de valores que a coluna `json`
+    ACEITA guardar — tres classes distintas matam `::jsonb`, e as duas
+    primeiras entram pelo POST/PUT /api/leads, sem SQL nenhum:
+      ["\\u0000"]        -> UntranslatableCharacter   (a API aceita: nenhum
+                            validador de destinos rejeita NUL — `_rejeita_nul`
+                            so cobre os campos de dict)
+      ["\\ud800"]        -> InvalidTextRepresentation (idem, substituto solto)
+      [1e1000000]        -> NumericValueOutOfRange    (INSERT fora da ORM)
+      {"a": 1e1000000}   -> NumericValueOutOfRange    (json legado nao-lista)
+
+    A correcao e a mesma do campo personalizado, pela mesma razao:
+
+    1. O CAST SUMIU. `json_array_elements_text` devolve 1e1000000 como TEXTO,
+       sem converter para numeric (medido) — a classe inteira de overflow deixa
+       de existir porque a operacao que falhava nao e mais executada.
+    2. O QUE SOBRA e virar escape de codepoint em `text`, e quem decide isso e
+       o guard de allowlist compartilhado (`_conversivel`), que FALHA FECHANDO.
+    3. `json_typeof(coluna) = 'array'` blinda contra json legado nao-lista:
+       json_array_elements_text estoura em objeto/escalar/null (medido).
+
+    Paridade com o `@>` que saiu: comparacao exata e case-sensitive do
+    elemento; conferida linha a linha contra PostgreSQL real em todo o corpus,
+    inclusive acento/emoji gravados como escape pelo `ensure_ascii` da ORM.
+
+    Ramo SQLite inalterado — dev e SQLite, producao e PostgreSQL, e os dois
+    precisam passar.
+    """
+    if IS_SQLITE:
+        # SQLite armazena JSON como texto — LIKE funciona
+        return coluna.cast(String).ilike(f'%"{valor}"%')
+
+    vazio = cast(literal("[]"), JSON)
+    seguro = case(
+        (_conversivel(coluna) & (func.json_typeof(coluna) == "array"), coluna),
+        else_=vazio,
+    )
+    elementos = func.json_array_elements_text(seguro).table_valued("value")
+    return select(literal(1)).select_from(elementos).where(elementos.c.value == valor).exists()
