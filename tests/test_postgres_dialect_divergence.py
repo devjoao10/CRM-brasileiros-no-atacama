@@ -24,6 +24,12 @@ pre-requisito faltar (psycopg2, dialeto, versao do SQLite), ele REPROVA com a
 mensagem dizendo o que falta — um SKIP aqui seria exatamente o falso verde que
 este arquivo existe para eliminar.
 
+AUDIT-2026-08-WF2 — unica excecao, e ela nao afrouxa nada: a secao 10 EXECUTA
+um corpus hostil contra um PostgreSQL de verdade quando (e so quando) o
+operador apontar DATABASE_URL para um. Nao e um SKIP invertido — os checks de
+compilacao daquela secao rodam SEMPRE e ja reprovam sozinhos; o servidor so
+acrescenta a prova de comportamento, que por definicao nao existe sem servidor.
+
 Nao importa o pacote `app` do Conversas: `app` existe nos DOIS servicos e
 colide no mesmo processo. Onde o alvo e do Conversas, a evidencia e (a) o
 texto-fonte do arquivo e (b) a compilacao de uma expressao equivalente sobre
@@ -43,6 +49,17 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 pathlib.Path(ROOT / "scratch").mkdir(exist_ok=True)
+
+# AUDIT-2026-08-WF2 — o `app` deste arquivo continua em SQLite: as provas de
+# COMPILACAO nao precisam de servidor e o CI nao tem um. Mas se o operador
+# apontar DATABASE_URL para um PostgreSQL descartavel, a secao 10 ganha por
+# cima dele a prova COMPORTAMENTAL do F-043. Precisa ser lido ANTES do update
+# abaixo, que sobrescreve a variavel. Mesmo desvio de
+# tests/test_pipeline_funnel_race.py e tests/test_leads_segment_drift.py.
+_PG_URL = os.environ.get("DATABASE_URL", "")
+if not _PG_URL.startswith("postgres"):
+    _PG_URL = ""
+
 os.environ.update({
     "ENVIRONMENT": "development",
     "DATABASE_URL": "sqlite:///./scratch/pg_dialect_divergence.db",
@@ -610,88 +627,355 @@ for _nome, _tabela, _cols, _finding in M011._UNIQUE_TARGETS:
 
 # ══════════════════════════════════════════════════════════════════════════
 print()
-print("10) campo personalizado: o cast json->jsonb precisa ficar DENTRO do guard")
-# AUDIT-2026-08-WG (F-043) — travamento da FORMA. A prova de COMPORTAMENTO exige
-# um PostgreSQL de verdade (o SQLite nao tem `jsonb` e nunca reproduz), e esta em
-# `docs/audit/POSTGRES_VALIDATION.md`: `'{"origem":"\u0000x"}'::json` e aceito,
-# `::json::jsonb` levanta `UntranslatableCharacter`, e UMA linha assim derrubava a
-# consulta inteira — o filtro de campo personalizado e todo segmento que o usasse
-# viravam 500 permanente para TODOS os leads.
+print("10) campo personalizado: UMA linha impossivel nao pode derrubar a consulta de TODOS")
+# AUDIT-2026-08-WF2 — SECAO REESCRITA. A versao anterior travava o MECANISMO de
+# UMA implementacao: "o cast para jsonb tem de ficar DENTRO do guard", "o guard
+# e strpos", "o guard esta num CASE aninhado". Duas consequencias, as duas
+# ruins: ela quebrou assim que o mecanismo mudou, e — pior — ela dava PASS na
+# implementacao que MORRIA em producao. `{"orcamento": 1e1000000}` e `json`
+# valido, entra na coluna sem reclamar, passa inteiro por um guard de NUL e
+# derruba o cast para jsonb com NumericValueOutOfRange. O F-043 nunca foi sobre
+# `jsonb`: e sobre UMA linha derrubar a consulta de TODOS.
 #
-# O defeito era a ORDEM: `cast(coluna, JSONB)` estava FORA do CASE, entao era
-# avaliado por linha antes de qualquer protecao. O que este check trava e
-# exatamente isso — o guard de TEXTO tem de aparecer ANTES do primeiro cast para
-# jsonb no SQL emitido. Um `check` de presenca do NOT LIKE em qualquer lugar
-# passaria com o cast de volta para fora, que e a regressao real.
-from sqlalchemy import Column as _Col, Integer as _Int, JSON as _JSON, MetaData as _MD, Table as _Tbl
+# A PROPRIEDADE travada aqui, que sobrevive a qualquer reimplementacao:
+#
+#   (P1) uma unica linha cujo conteudo o PostgreSQL nao consegue processar nao
+#        pode derrubar o filtro de campo personalizado para TODOS os leads;
+#   (P2) o guard tambem nao pode sumir com linha LEGITIMA em silencio — a ORM
+#        grava com json.dumps(ensure_ascii=True), entao TODO acento do banco ja
+#        e um escape de codepoint e um guard grosseiro apagaria meio CRM.
+#
+# O CORPUS abaixo E a especificacao dessas duas frases: cada entrada e um texto
+# que o PostgreSQL ACEITA guardar numa coluna `json`, com o veredito de se a
+# linha e legitima (tem de continuar encontravel) ou impossivel de processar
+# (pode sumir do filtro, jamais derrubar a consulta). Ele alimenta as duas
+# provas abaixo.
+_B = chr(92)   # a barra literal, montada como em app/query_filters.py
+
+# (rotulo, texto JSON exatamente como fica na coluna, e uma linha LEGITIMA?)
+CORPUS_F043 = [
+    ("ascii",               '{"origem": "Instagram"}',                             True),
+    ("acento-ensure-ascii", '{"origem": "indica' + _B + 'u00e7' + _B + 'u00e3o"}', True),
+    ("emoji-par-valido",    '{"origem": "festa ' + _B + 'ud83c' + _B + 'udf89"}',  True),
+    ("u0000-sem-barra",     '{"origem": "ref-u0000-alpha"}',                       True),
+    ("barra-escapada",      '{"origem": "C:' + _B * 2 + 'users"}',                 True),
+    ("barra-mais-u0000",    '{"origem": "C:' + _B * 2 + 'u0000dir"}',              True),
+    ("overflow-numerico",   '{"orcamento": 1e1000000, "origem": "x"}',             True),
+    ("escape-de-nul",       '{"origem": "' + _B + 'u0000x"}',                      False),
+    ("substituto-solto",    '{"origem": "' + _B + 'ud800 solto"}',                 False),
+    ("legado-lista",        '["a", "b"]',                                          False),
+    ("legado-escalar",      '"sou string"',                                        False),
+]
+
+from sqlalchemy import JSON as _JSON  # noqa: E402
+from sqlalchemy.sql.elements import Case as _Case, Cast as _Cast  # noqa: E402
+from sqlalchemy.sql.functions import Function as _Function  # noqa: E402
 
 import app.query_filters as _qf  # noqa: E402
 
-_md_cp = _MD()
-_t_cp = _Tbl("leads_cp", _md_cp, _Col("id", _Int), _Col("campos_personalizados", _JSON))
+_md_cp = MetaData()
+_t_cp = Table("leads_cp_prova", _md_cp,
+              Column("id", Integer), Column("campos_personalizados", _JSON))
+_col_cp = _t_cp.c.campos_personalizados
 
-_qf_sqlite_original = _qf.IS_SQLITE
-try:
-    _qf.IS_SQLITE = False
-    _sql_pg = sql(
-        select(_t_cp.c.id).where(
-            _qf.campo_personalizado_match(_t_cp.c.campos_personalizados, "origem", "x")),
-        PG,
-    )
-finally:
-    _qf.IS_SQLITE = _qf_sqlite_original
 
-_up = _sql_pg.upper()
-# AUDIT-2026-08-WG (revisao 2) — o guard e `strpos`, nao `LIKE`. No PostgreSQL a
-# BARRA e o caractere de escape default do LIKE, entao `LIKE '%BARRAu0000%'`
-# significava `LIKE '%u0000%'` e barrava valor legitimo com essa substring sem
-# barra. `strpos` procura a substring literal, sem semantica de escape.
-_pos_guard = _up.find("STRPOS")
-_pos_cast = _up.find("AS JSONB")
-check("NOT LIKE" not in _up,
-      "o guard NAO usa LIKE — a barra seria consumida como escape e o padrao "
-      "casaria texto sem barra nenhuma")
-check(_pos_guard != -1,
-      "ramo PostgreSQL tem o guard de texto contra o escape de NUL (via strpos)")
-check(_pos_cast != -1, "ramo PostgreSQL ainda faz o cast para jsonb")
-check(-1 < _pos_guard < _pos_cast,
-      f"o guard vem ANTES do primeiro cast para jsonb "
-      f"(guard@{_pos_guard}, cast@{_pos_cast}) — se o cast voltar para fora do "
-      f"CASE, uma unica linha legada derruba o filtro para todos")
+def _predicado_cp(is_sqlite):
+    """O predicado REAL de app/query_filters.py, no dialeto pedido."""
+    _orig = _qf.IS_SQLITE
+    try:
+        _qf.IS_SQLITE = is_sqlite
+        # valor vazio = casa pela presenca da chave, para o corpus inteiro ser
+        # julgado pelo guard e nao pelo conteudo do valor
+        return _qf.campo_personalizado_match(_col_cp, "origem", "")
+    finally:
+        _qf.IS_SQLITE = _orig
 
-# AUDIT-2026-08-WG (revisao) — o guard precisa estar num CASE PROPRIO, nao
-# num `AND` dentro do mesmo WHEN. O PostgreSQL nao garante curto-circuito de
-# `AND` (a ordem de avaliacao e livre para o planner), so de `CASE`. Com o
-# `AND`, o cast para jsonb PODE ser avaliado antes do guard e reproduzir a
-# queda — e isso depende de estatistica e volume, entao passa em teste pequeno
-# e falha em producao. Este check mata o retorno para a forma `AND`.
-_prefixo_ate_cast = _up[:_pos_cast]
-check(_prefixo_ate_cast.count("CASE WHEN") >= 2,
-      "o guard esta num CASE proprio (aninhado), nao num AND dentro do mesmo WHEN — "
-      "so CASE tem curto-circuito garantido no PostgreSQL")
-check(" AND " not in _up[_pos_guard:_pos_cast],
-      "nao ha `AND` entre o guard e o cast — seria exatamente a forma sem garantia")
-check(_qf._ESCAPE_NUL == chr(92) + "u0000",
-      "o padrao procurado sao os SEIS caracteres do escape, nao um byte NUL")
 
-# O ramo SQLite NAO muda: `json` do SQLite nao tem a restricao do `jsonb`.
-_qf_sqlite_original = _qf.IS_SQLITE
-try:
-    _qf.IS_SQLITE = True
-    _sql_lite = sql(
-        select(_t_cp.c.id).where(
-            _qf.campo_personalizado_match(_t_cp.c.campos_personalizados, "origem", "x")),
-        LITE,
-    )
-finally:
-    _qf.IS_SQLITE = _qf_sqlite_original
-check("NOT LIKE" not in _sql_lite.upper(),
-      "ramo SQLite segue sem o guard — la o defeito nao existe e o custo seria gratuito")
-check("json_each" in _sql_lite,
-      "ramo SQLite continua usando json_each")
+# ─── PROVA A: comportamental, contra PostgreSQL de verdade ────────────────
+# E a unica prova possivel de (P1): "o PostgreSQL nao estoura" nao se demonstra
+# sem um PostgreSQL — o SQLite nao tem `jsonb`, aceita tudo e nunca reproduz.
+# Roda quando DATABASE_URL apontar para um PostgreSQL descartavel. NAO e um
+# skip disfarcado: a prova B abaixo roda SEMPRE e sozinha ja reprova a
+# implementacao anterior. Sem servidor, o que se perde e forca, nao veredito.
+if _PG_URL:
+    print(f"     [A] corpus contra PostgreSQL real ({_PG_URL.split('@')[-1]})")
+    _eng_cp = create_engine(_PG_URL)
+    try:
+        with _eng_cp.connect() as _con_cp:
+            # TEMP TABLE: morre com a sessao, nao toca em dado de ninguem.
+            _con_cp.execute(text(
+                "CREATE TEMP TABLE leads_cp_prova (id int, campos_personalizados json)"))
+            _guardadas = []
+            for _i, (_rot, _txt, _leg) in enumerate(CORPUS_F043, 1):
+                _sp = _con_cp.begin_nested()
+                try:
+                    _con_cp.execute(
+                        text("INSERT INTO leads_cp_prova VALUES (:i, CAST(:j AS json))"),
+                        {"i": _i, "j": _txt})
+                    _sp.commit()
+                    _guardadas.append(_rot)
+                except Exception:  # noqa: BLE001
+                    _sp.rollback()
+            _recusadas = [r for r, _, _ in CORPUS_F043 if r not in _guardadas]
+            check(not _recusadas,
+                  f"o PostgreSQL ACEITA todo o corpus numa coluna `json` — se ele "
+                  f"recusasse alguma entrada ja no INSERT, essa linha nunca chegaria "
+                  f"ao filtro e o corpus estaria mentindo. Recusadas: {_recusadas}")
+
+            try:
+                _ids = {r[0] for r in _con_cp.execute(
+                    select(_t_cp.c.id).where(_predicado_cp(is_sqlite=False)))}
+                _erro_cp = None
+            except Exception as exc:  # noqa: BLE001
+                _ids = set()
+                _erro_cp = f"{type(exc).__name__}: {str(exc).strip().splitlines()[0]}"
+            check(_erro_cp is None,
+                  f"(P1) a consulta RODA com o corpus inteiro na tabela — a linha "
+                  f"que o PostgreSQL nao processa sai do RESULTADO, nunca derruba a "
+                  f"consulta para todos os leads (F-043). Estourou com: {_erro_cp}")
+
+            _sumiram = [r for _i, (r, _t, _leg) in enumerate(CORPUS_F043, 1)
+                        if _leg and _i not in _ids]
+            check(_erro_cp is None and not _sumiram,
+                  f"(P2) nenhuma linha LEGITIMA sumiu em silencio: {_sumiram}. "
+                  f"Acento, emoji e barra do Windows chegam ao banco como escape de "
+                  f"codepoint — um guard que barre escape em bloco, ou que case a "
+                  f"substring errada, apaga lead sem erro nenhum")
+    finally:
+        _eng_cp.dispose()
+else:
+    print("     [A] corpus contra PostgreSQL real: nao rodou (DATABASE_URL nao "
+          "aponta para PostgreSQL). Rode com "
+          "DATABASE_URL=postgresql+psycopg2://... para a prova completa")
+
+# ─── PROVA B: estatica, sempre ────────────────────────────────────────────
+# Estatica porque este arquivo, por contrato (ver o cabecalho), nao conecta em
+# lugar nenhum e nao pula nada — e o CI nao tem PostgreSQL. Ela nao afirma "nao
+# estoura"; afirma o unico invariante do qual isso decorre:
+#
+#   toda operacao que o SQL aplica a coluna CRUA tem de ser uma que o
+#   PostgreSQL avalia para QUALQUER valor armazenavel em `json`.
+#
+# Isso nao e o mecanismo: nao diz qual guard usar, nem em que ordem, nem com
+# que nome. Diz so que a coluna crua nao pode ser entregue a uma operacao
+# parcial, porque operacao parcial roda LINHA A LINHA, antes de qualquer
+# protecao — que e literalmente o F-043. Lida da ARVORE DE EXPRESSAO do
+# SQLAlchemy, nao do texto do SQL: renomear identificador Python, alias ou
+# parametro nao mexe neste check.
+def _nome_da_op(no):
+    """Nome SQL do no; None em no transparente (ClauseList, Grouping, `==`)."""
+    if isinstance(no, _Function):
+        return no.name.lower()
+    if isinstance(no, _Cast):
+        return f"cast:{no.type}".lower()
+    if isinstance(no, _Case):
+        return "case"
+    return None
+
+
+def _ops_sobre_a_coluna(expr, coluna=None):
+    """Operacoes aplicadas DIRETAMENTE a coluna crua, em qualquer profundidade."""
+    coluna = _col_cp if coluna is None else coluna
+    achados, vistos = set(), set()
+
+    def anda(no, dono):
+        if id(no) in vistos:
+            return
+        vistos.add(id(no))
+        nome = _nome_da_op(no) or dono
+        for filho in no.get_children():
+            if filho is coluna:
+                achados.add(nome)
+            else:
+                anda(filho, nome)
+
+    anda(expr, None)
+    return achados
+
+
+def _gates_da_coluna(expr):
+    """CASEs que DEVOLVEM a coluna crua — a unica porta por onde ela pode
+    chegar a uma operacao parcial sem que a linha ruim mate a consulta."""
+    out, vistos = [], set()
+
+    def anda(no):
+        if id(no) in vistos:
+            return
+        vistos.add(id(no))
+        if isinstance(no, _Case) and any(r is _col_cp for _, r in no.whens):
+            out.append(no)
+        for filho in no.get_children():
+            anda(filho)
+
+    anda(expr)
+    return out
+
+
+# Medido em PostgreSQL 16.14 contra o corpus acima: destas operacoes nenhuma
+# levanta erro para qualquer valor que caiba numa coluna `json`. TODA operacao
+# que le DENTRO do JSON (`->`, `->>`, `json_each*`, `json_object_keys`, e o
+# cast para `jsonb`) des-escapa avidamente e estoura — essas so podem receber
+# um valor que ja passou pelo gate.
+_TOTAIS_PG = {
+    "cast:varchar": "`::text` devolve o texto cru, sem des-escapar nada",
+    "json_typeof": "le so o tipo do topo, nunca o conteudo",
+    "case": "o GATE — o unico no que pode entregar a coluna crua adiante",
+}
+_TOTAIS_LITE = {
+    "json_type": "gate de tipo: campos_personalizados legado nao-objeto nao vira par",
+    "case": "o GATE",
+}
+
+_expr_pg = _predicado_cp(is_sqlite=False)
+_parciais = _ops_sobre_a_coluna(_expr_pg) - set(_TOTAIS_PG)
+check(not _parciais,
+      f"(P1) no ramo PostgreSQL a coluna CRUA so chega a operacao TOTAL "
+      f"{sorted(_TOTAIS_PG)}; encontradas alem dessas: {sorted(_parciais)}. "
+      f"Operacao parcial sobre a coluna crua e avaliada linha a linha antes de "
+      f"qualquer protecao — foi assim que `cast(coluna, JSONB)` transformou uma "
+      f"linha legada em 500 permanente para TODOS os leads")
+
+_gates = _gates_da_coluna(_expr_pg)
+check(len(_gates) == 1,
+      f"(P1) existe UM gate no ramo PostgreSQL — o CASE que decide se a linha "
+      f"segue para a expansao dos pares. Encontrados: {len(_gates)}")
+check(all(_ops_sobre_a_coluna(_cond) for _g in _gates for _cond, _ in _g.whens),
+      "(P1) o gate INSPECIONA o valor que libera: um CASE cuja condicao nao "
+      "olha a coluna nao e gate nenhum, e so um desvio que entrega a linha ruim "
+      "adiante — passaria neste arquivo e cairia em producao")
+
+_ops_lite = _ops_sobre_a_coluna(_predicado_cp(is_sqlite=True))
+check(_ops_lite == set(_TOTAIS_LITE),
+      f"ramo SQLite intocado: esperado {sorted(_TOTAIS_LITE)}, encontrado "
+      f"{sorted(_ops_lite)}. Se aparecer aqui a maquinaria do ramo PostgreSQL, "
+      f"alguem esta pagando custo por linha por um defeito que este dialeto nao "
+      f"tem (`json` do SQLite nao tem a restricao do `jsonb`); se o gate de tipo "
+      f"sumir, some tambem a paridade entre os dois ramos")
 
 _con.close()
 eng.dispose()
+
+# ══════════════════════════════════════════════════════════════════════════
+print()
+print("11) created_at de mensagem: `now()` e o inicio da TRANSACAO no PostgreSQL")
+# AUDIT-2026-08-WF2 — a divergencia mais silenciosa deste arquivo.
+#
+#   postgres: now()  ==  transaction_timestamp()  -> UM valor por TRANSACAO
+#   sqlite  : CURRENT_TIMESTAMP                   -> avaliado por STATEMENT
+#
+# `_debounce_then_forward` (conversas/app/routers/webhook.py) abre a transacao
+# numa leitura, chama a Bia no n8n (AGENT_TIMEOUT=240s; 1m30-2m40 reais),
+# persiste cada parte da resposta com `commit=False` e so commita no fim. Com
+# `server_default=func.now()` sozinho, TODAS as partes ficavam com o timestamp
+# em que o debounce ACORDOU — anterior ao das mensagens que o cliente mandou
+# durante a espera, cada uma commitada na transacao curta dela.
+#
+# PROVA em PostgreSQL 16.14 real, mesmo cenario, so a coluna mudando:
+#
+#   ANTES   22:01:00.316  inbound   1) cliente: quanto custa o tour?
+#           22:01:00.350  outbound  3) Bia: R$ 250          <- now() da txn
+#           22:01:00.350  outbound  4) Bia: almoco incluso  <- now() da txn
+#           22:01:00.350  outbound  5) Bia: quer reservar?  <- now() da txn
+#           22:01:02.350  inbound   2) cliente: e com almoco?
+#           => a RESPOSTA ordena ANTES da PERGUNTA, no inbox e no `historico`
+#
+#   DEPOIS  22:01:15.174 / 16.761 / 18.286 x3  => ordem cronologica
+#
+# No SQLite as duas formas parecem iguais — e por isso a suite dizia verde.
+# O que este bloco trava e a FORMA da coluna, nao o comportamento (que exige
+# servidor): se alguem devolver `created_at` para o server_default sozinho, cai.
+from datetime import datetime as _dt, timezone as _tz  # noqa: E402
+
+_md_ts = MetaData()
+_t_nu = Table(  # forma ANTIGA: quem decide e o servidor, uma vez por transacao
+    "msgs_nu", _md_ts,
+    Column("id", Integer, primary_key=True),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+)
+_t_ok = Table(  # forma CORRIGIDA: a ORM decide, a cada INSERT
+    "msgs_ok", _md_ts,
+    Column("id", Integer, primary_key=True),
+    Column("created_at", DateTime(timezone=True),
+           default=lambda: _dt.now(_tz.utc), server_default=func.now()),
+)
+
+_ddl_nu_pg = " ".join(str(CreateTable(_t_nu).compile(dialect=PG)).split())
+_ddl_nu_lite = " ".join(str(CreateTable(_t_nu).compile(dialect=LITE)).split())
+_ddl_ok_pg = " ".join(str(CreateTable(_t_ok).compile(dialect=PG)).split())
+print(f"     [PG]   {_ddl_nu_pg}")
+print(f"     [LITE] {_ddl_nu_lite}")
+
+check("DEFAULT now()" in _ddl_nu_pg,
+      "PostgreSQL grava `DEFAULT now()` no DDL — e `now()` e o timestamp da "
+      "TRANSACAO, nao do INSERT")
+check("DEFAULT (CURRENT_TIMESTAMP)" in _ddl_nu_lite,
+      "SQLite grava `DEFAULT CURRENT_TIMESTAMP`, avaliado por STATEMENT: o "
+      "MESMO modelo se comporta diferente nos dois bancos")
+check(_ddl_ok_pg.replace("msgs_ok", "msgs_nu") == _ddl_nu_pg,
+      "o DDL das duas formas e IDENTICO — o default do lado do Python nao "
+      "aparece no CREATE TABLE. Consequencia pratica: a correcao NAO exige "
+      "migration e NAO cria drift com a tabela que ja existe em producao")
+
+# Onde o valor e decidido: sem parametro no INSERT = o servidor decide (uma vez
+# por transacao); com parametro = a ORM decide, ao emitir cada INSERT.
+_eng_ts = create_engine("sqlite://")
+_inserts = []
+event.listen(
+    _eng_ts, "before_cursor_execute",
+    lambda conn, cur, stmt, params, ctx, many: _inserts.append(" ".join(stmt.split())),
+)
+_md_ts.create_all(_eng_ts)
+with _eng_ts.begin() as _c_ts:
+    _c_ts.execute(_t_nu.insert())
+    _c_ts.execute(_t_ok.insert())
+_ins_nu = next(i for i in _inserts if i.upper().startswith("INSERT INTO MSGS_NU"))
+_ins_ok = next(i for i in _inserts if i.upper().startswith("INSERT INTO MSGS_OK"))
+print(f"     [antiga]    {_ins_nu}")
+print(f"     [corrigida] {_ins_ok}")
+check("created_at" not in _ins_nu,
+      "forma antiga: `created_at` nem aparece no INSERT — o valor vem do "
+      "DEFAULT do servidor, que no PostgreSQL e o mesmo para a transacao toda")
+check("created_at" in _ins_ok,
+      "forma corrigida: `created_at` viaja como PARAMETRO do INSERT, avaliado "
+      "no momento em que a ORM emite a linha — igual nos dois dialetos")
+_eng_ts.dispose()
+
+# ─── A TRAVA ───────────────────────────────────────────────────────────────
+_conv_src = fonte("conversas/app/models/conversation.py")
+_msg_src = _conv_src[_conv_src.index("class Message(Base):"):]
+
+check(not re.search(
+          r"created_at\s*=\s*Column\(\s*DateTime\(timezone=True\)\s*,\s*"
+          r"server_default=func\.now\(\)\s*\)", _msg_src),
+      "`Message.created_at` NAO e so `server_default=func.now()` — nessa "
+      "forma, em PostgreSQL, TODA a resposta da Bia recebe o timestamp em que "
+      "o debounce acordou e o historico ordena a resposta ANTES da pergunta")
+check("default=lambda: datetime.now(timezone.utc)" in _msg_src,
+      "`Message.created_at` tem default do lado do PYTHON — avaliado no "
+      "INSERT, sem depender de dialeto nem de quando a transacao comecou")
+check("server_default=func.now()" in _msg_src,
+      "`server_default` FICA: e o DEFAULT do DDL para INSERT fora da ORM "
+      "(psql, COPY, restore), onde a transacao e curta e `now()` basta. "
+      "Remove-lo criaria drift com a tabela de producao")
+check('order_by="Message.created_at, Message.id"' in _conv_src,
+      "`Conversation.messages` desempata por `id`: com autoflush=False as "
+      "partes da mesma resposta da Bia sao flushadas juntas e chegam a ficar a "
+      "microssegundos (medido: 3us em PostgreSQL 16.14). Sem desempate a ordem "
+      "entre elas e arbitraria — os outros dois leitores ja usam Message.id")
+
+# Por que a trava existe: se estas duas coisas sairem do webhook, a transacao
+# deixa de ficar aberta durante a chamada da Bia e a decisao pode ser revista.
+_wh_src = fonte("conversas/app/routers/webhook.py")
+check("AGENT_TIMEOUT = httpx.Timeout(240.0" in _wh_src,
+      "webhook.py ainda permite 240s de chamada ao n8n DENTRO da transacao do "
+      "debounce — e essa janela que transforma `now()` em timestamp errado")
+check("commit=False," in _wh_src,
+      "webhook.py ainda persiste as partes da resposta com `commit=False` "
+      "(uma unica transacao para o lote inteiro)")
+check("sessionmaker(autocommit=False, autoflush=False" in fonte("conversas/app/database.py"),
+      "conversas/app/database.py mantem `autoflush=False` — nada flusha as "
+      "partes antes do commit final, entao os timestamps delas sao vizinhos e "
+      "o desempate por `id` e o que garante ordem TOTAL")
 
 # ══════════════════════════════════════════════════════════════════════════
 print()

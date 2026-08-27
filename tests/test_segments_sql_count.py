@@ -512,19 +512,35 @@ def _sql(filtros, sqlite):
 
 def test_guarda_de_tipo_json_existe_nos_dois_dialects():
     """
-    campos_personalizados legado que nao e objeto: no PostgreSQL
-    jsonb_each_text ESTOURA e derruba GET /api/segments inteiro. O SQLite nao
-    estoura com array, entao esta guarda e invisivel para um teste de
-    comportamento local — so da para fixa-la no SQL compilado.
+    campos_personalizados legado que nao e objeto: no PostgreSQL a expansao dos
+    pares ESTOURA e derruba GET /api/segments inteiro. O SQLite nao estoura com
+    array, entao esta guarda e invisivel para um teste de comportamento local —
+    aqui so da para fixa-la no SQL compilado.
+
+    AUDIT-2026-08-WF2 — a assercao era `"jsonb_typeof" in pg_sql` e quebrou
+    quando o predicado deixou de castar para `jsonb` (virou `json_typeof`). A
+    PROPRIEDADE nunca foi o sabor do tipo JSON: e existir uma checagem de TIPO
+    antes de expandir os pares. Por isso o alvo agora e o sufixo `typeof(`, que
+    `json_typeof` e `jsonb_typeof` satisfazem igualmente — o proximo rename
+    dessa familia nao derruba o teste, e a ausencia do guard continua derrubando.
+    A prova de COMPORTAMENTO desta propriedade (uma linha impossivel nao derruba
+    a consulta de todos) exige PostgreSQL de verdade e vive na secao 10 de
+    tests/test_postgres_dialect_divergence.py.
     """
     filtros = {"campo_chave": "origem"}
     pg_sql = _sql(filtros, sqlite=False)
-    assert "jsonb_typeof" in pg_sql, (
-        "sem jsonb_typeof, um unico lead com campos_personalizados nao-objeto "
-        "derruba a listagem inteira com 500 no PostgreSQL")
+    assert "typeof(" in pg_sql, (
+        "sem checagem de tipo do JSON, um unico lead com campos_personalizados "
+        "nao-objeto derruba a listagem inteira com 500 no PostgreSQL")
     lite_sql = _sql(filtros, sqlite=True)
     assert "json_type" in lite_sql, (
         "guarda de tipo tambem no ramo SQLite, para os dois ramos casarem")
+    # herdado da secao 10 de test_postgres_dialect_divergence.py, que passou a
+    # ler a arvore de expressao (onde json_each fica atras do gate e some do
+    # conjunto observado): o ramo SQLite continua expandindo os pares NO BANCO.
+    assert "json_each(" in lite_sql, (
+        "o ramo SQLite continua expandindo os pares com json_each no banco — "
+        "voltar a varrer o dict em Python foi o bug original do SEG-SQL-01")
 
 
 def _sql_pg(filtros):
@@ -532,13 +548,32 @@ def _sql_pg(filtros):
     return _sql(filtros, sqlite=False)
 
 
-def test_postgres_campo_personalizado_usa_jsonb_e_exists():
+def test_postgres_campo_personalizado_expande_no_banco_com_exists():
+    """
+    AUDIT-2026-08-WF2 — cada assercao aqui existe para proteger UMA coisa; a
+    lista abaixo e o contrato, para o proximo rename nao repetir a quebra que
+    o cast `jsonb` -> `json` causou neste arquivo.
+    """
     sql = _sql_pg({"campo_chave": "origem", "campo_valor": "insta"})
-    assert "EXISTS" in sql, "campo personalizado precisa virar EXISTS"
-    assert "jsonb_each_text" in sql, "no PostgreSQL os pares saem por jsonb_each_text"
-    assert "AS JSONB" in sql.upper(), "a coluna e json: precisa do cast para jsonb"
-    assert "json_each(" not in sql, "json_each e a forma do SQLite, nao pode vazar"
-    assert "jsonb_typeof" in sql, "sem a guarda de tipo, JSON legado derruba a query"
+    assert "EXISTS" in sql, (
+        "protege: o filtro e um EXISTS correlacionado — nem varredura em Python "
+        "(o bug do SEG-SQL-01) nem JOIN, que multiplicaria a contagem")
+    assert "_each_text(" in sql, (
+        "protege: os pares sao expandidos NO BANCO ja com o valor como texto. "
+        "`json_each_text` e `jsonb_each_text` servem igual — o alvo e o sufixo, "
+        "nao o sabor do tipo JSON")
+    assert "JSONB" not in sql.upper(), (
+        "protege: o cast para jsonb SUMIU DE PROPOSITO e nao pode voltar. Ele e "
+        "a operacao que falha em linha ARMAZENAVEL — medido em PostgreSQL "
+        "16.14, `{\"orcamento\": 1e1000000}` e json valido e derruba o cast com "
+        "NumericValueOutOfRange, levando junto a consulta de TODOS os leads "
+        "(F-043). Sem cast, essa classe de falha deixa de existir")
+    assert "json_each(" not in sql, (
+        "protege: json_each e a forma do SQLite e nao pode vazar para o ramo "
+        "PostgreSQL, onde ela devolveria json em vez de texto")
+    assert "typeof(" in sql, (
+        "protege: a guarda de TIPO — sem ela, campos_personalizados legado que "
+        "nao seja objeto derruba a query")
 
 
 def test_postgres_valor_com_curinga_e_escapado():
