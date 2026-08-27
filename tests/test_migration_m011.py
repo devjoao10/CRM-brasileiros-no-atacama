@@ -7,14 +7,17 @@ destruido aqui dentro.
 
 Rodar:  python tests/test_migration_m011.py
 
-JOB DO CI: este arquivo cai no job `crm` (nao contem o literal CONVERSAS_DIR,
-que e o discriminador em .github/workflows/test.yml). E deliberado, apesar de
-ele montar o schema dos DOIS servicos: os unicos pacotes que
-conversas/requirements.txt tem a mais sao `httpx` — que o job crm ja instala
-explicitamente, para o TestClient — e `pydantic`, que vem como dependencia
-transitiva do fastapi. Ou seja, o ambiente do job crm cobre os dois lados; o do
-job conversas nao cobriria o do CRM (faltariam slowapi, passlib, bcrypt,
-google-generativeai e outros sete).
+JOB DO CI: este arquivo cai no job `crm` — nao casa o discriminador definido em
+.github/workflows/test.yml. AUDIT-2026-08-WF2: esta frase SOLETRAVA o marcador
+para explica-lo, e o grep nao le prosa — a explicacao roteava o arquivo para o
+job `conversas`, onde `import app.main` do CRM morre em ModuleNotFoundError.
+tests/test_ci_job_routing_guard.py agora barra a recaida. O job `crm` e
+deliberado, apesar de este teste montar o schema dos DOIS servicos: os unicos
+pacotes que conversas/requirements.txt tem a mais sao `httpx` — que o job crm
+ja instala explicitamente, para o TestClient — e `pydantic`, que vem como
+dependencia transitiva do fastapi. Ou seja, o ambiente do job crm cobre os dois
+lados; o do job conversas nao cobriria o do CRM (faltariam slowapi, passlib,
+bcrypt, google-generativeai e outros sete).
 
 Por que isto existe: `RELEASE_READINESS.md` afirma que a m011 "detecta
 duplicatas e se recusa a continuar, sem apagar nada". Essa afirmacao vale zero
