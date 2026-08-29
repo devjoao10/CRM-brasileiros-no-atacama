@@ -18,6 +18,11 @@ from app.models.api_config import ApiConfig  # noqa: F401
 from app.models.message_variable import MessageVariable  # noqa: F401 — CONV-VAR-01
 from app.routers import webhook, conversations, pages, auth, quick_replies, templates, settings, api_config, media, tags, notes, variables
 from app.seed import seed_dev_user, seed_quick_replies, seed_templates, seed_auto_replies, seed_business_hours, CONVERSAS_SEED_DEV_DATA
+from app.logging_config import configurar_logging
+
+# BIA-V2 Fase 0 — sem isto o root logger fica em WARNING sem handler, e toda a
+# trilha `.info` que este servico ja escreve morre dentro do processo.
+configurar_logging()
 
 logger = logging.getLogger(__name__)
 
