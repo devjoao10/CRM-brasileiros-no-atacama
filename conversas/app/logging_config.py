@@ -15,8 +15,20 @@ escreve ("Nova conversa criada", "Handoff BIA->humano na conversa X",
 nunca sai do processo. Sobrevivem apenas `.warning`/`.error`, sem timestamp
 e sem nome do logger.
 
-As chamadas `.info` ja existem e estao bem escritas. Este modulo so instala
-o handler que faltava.
+As chamadas `.info` ja existem. Este modulo so instala o handler que faltava.
+
+ATENCAO — o CONTEUDO delas nao foi auditado. A revisao de seguranca desta
+mesma task confirmou que varias registram nome, telefone completo e os
+primeiros 50 caracteres da mensagem do cliente (`webhook.py:616,626,689`,
+`conversations.py:489,1347`, `crm.py:279`, entre outras). Tornar o INFO
+observavel e, ao mesmo tempo, exposicao NOVA de PII no log do container.
+
+O `FormatadorSeguro` abaixo resolve apenas a INJECAO de linha de log. Ele
+NAO mascara PII, e nao deve ser transformado numa regex generica que tente
+adivinhar dado sensivel — filtro por heuristica falha nos dois sentidos.
+A reducao de PII exige revisar os call sites da V1 e definir politica de
+retencao: ver R11 e DEPLOY-GATE-01 no plano da V2. Nenhum deploy contendo
+esta task pode ir a producao antes disso.
 
 ESCOPO — SOMENTE O CONVERSAS
 ----------------------------
