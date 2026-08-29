@@ -36,6 +36,36 @@ _FORMATO = "%(asctime)s %(levelname)s %(name)s %(message)s"
 logger = logging.getLogger(__name__)
 
 
+class FormatadorSeguro(logging.Formatter):
+    """Formatter que impede injecao de linha de log por dado do cliente.
+
+    O texto que o cliente manda no WhatsApp aceita quebra de linha, e varias
+    chamadas de log interpolam esse texto e o nome de perfil direto numa
+    f-string — por exemplo `webhook.py`, ao registrar a mensagem recebida.
+    Sem tratamento, uma mensagem contendo \\n permite ao cliente FORJAR uma
+    linha inteira dentro do log: basta escrever algo que se pareca com um
+    registro legitimo.
+
+    O proprio `webhook.py` ja aplica essa disciplina ao `hub_verify_token`,
+    com comentario explicando o risco. A regra existia; nunca tinha sido
+    aplicada aos dados do cliente.
+
+    Sanitizar aqui, no formatter, cobre TODAS as chamadas de log do servico
+    de uma vez — inclusive as que ainda serao escritas — sem alterar nenhum
+    arquivo da V1.
+
+    Sobrescreve `formatMessage`, e nao `format`, de proposito: `format` roda
+    depois e e quem anexa o traceback de `exc_info`. Sanitizar em `format`
+    espremeria o traceback inteiro numa linha so, destruindo justamente a
+    informacao mais util num erro. Em `formatMessage` a mensagem vira uma
+    linha e o traceback continua multilinha.
+    """
+
+    def formatMessage(self, record: logging.LogRecord) -> str:
+        record.message = record.message.replace("\r", "\\r").replace("\n", "\\n")
+        return super().formatMessage(record)
+
+
 def configurar_logging(nivel: str | None = None) -> None:
     """Instala handler e formatter no root logger.
 
@@ -55,7 +85,12 @@ def configurar_logging(nivel: str | None = None) -> None:
         {
             "version": 1,
             "disable_existing_loggers": False,
-            "formatters": {"padrao": {"format": _FORMATO}},
+            "formatters": {
+                "padrao": {
+                    "()": "app.logging_config.FormatadorSeguro",
+                    "format": _FORMATO,
+                }
+            },
             "handlers": {
                 "stdout": {
                     "class": "logging.StreamHandler",
