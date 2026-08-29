@@ -16,6 +16,7 @@ from app.models.template import MessageTemplate, ServiceTemplate  # noqa: F401 �
 from app.models.auto_reply import AutoReply, BusinessHours  # noqa: F401
 from app.models.api_config import ApiConfig  # noqa: F401
 from app.models.message_variable import MessageVariable  # noqa: F401 — CONV-VAR-01
+from app.models.evento import ConversationEvent  # noqa: F401 — BIA-V2 Fase 0
 from app.routers import webhook, conversations, pages, auth, quick_replies, templates, settings, api_config, media, tags, notes, variables
 from app.seed import seed_dev_user, seed_quick_replies, seed_templates, seed_auto_replies, seed_business_hours, CONVERSAS_SEED_DEV_DATA
 from app.logging_config import configurar_logging
