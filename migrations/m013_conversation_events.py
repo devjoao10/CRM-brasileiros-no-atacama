@@ -86,6 +86,17 @@ _UNIQUE_EVENT_ID = "uq_conversation_events_event_id"
 _INDEX_CONVERSATION_ID = "ix_conversation_events_conversation_id"
 _INDEX_CREATED_AT = "ix_conversation_events_created_at"
 
+# Contrato NOME+COLUNA dos indices secundarios - usado SO pelo gate pos-DDL.
+# Checar NOME sozinho aceitaria um indice com o nome certo sobre a coluna
+# ERRADA (ex.: alguem cria "ix_conversation_events_conversation_id" sobre
+# lead_id por engano) - o gate precisa provar "indice DE conversation_id",
+# nao so "objeto com esse nome existe". Sem validacao de tipo/ordem/opclass
+# de proposito: fora do escopo desta funcao (ver _verificar_pos_ddl).
+_INDICES_ESPERADOS = {
+    _INDEX_CONVERSATION_ID: ["conversation_id"],
+    _INDEX_CREATED_AT: ["created_at"],
+}
+
 # Espelha as colunas de conversas/app/models/evento.py:ConversationEvent —
 # usado SO pelo gate pos-DDL para provar presenca (nao tipo: ver
 # _verificar_pos_ddl).
@@ -193,8 +204,10 @@ def _verificar_pos_ddl(engine, actions):
     `CREATE TABLE IF NOT EXISTS` e `CREATE INDEX IF NOT EXISTS` sao NO-OP
     silencioso contra uma tabela/indice PRE-EXISTENTE ou PARCIAL — so a
     reinspecao pos-DDL (via `inspect()`, nunca lendo de volta o que o proprio
-    DDL declarou) pega essa lacuna. Checa so PRESENCA (colunas, UNIQUE,
-    indices) — nunca tenta provar equivalencia de TIPO entre SQLite e
+    DDL declarou) pega essa lacuna. Checa PRESENCA de colunas e da UNIQUE, e
+    para os indices secundarios checa NOME+COLUNA (`_INDICES_ESPERADOS`) —
+    um objeto com o nome certo sobre a coluna errada tambem e rejeitado.
+    Nunca tenta provar equivalencia de TIPO/ordem/opclass entre SQLite e
     PostgreSQL, o que exigiria logica fragil por dialeto e esta fora do
     escopo desta funcao.
 
@@ -229,10 +242,18 @@ def _verificar_pos_ddl(engine, actions):
         )
     actions.append(f"{_UNIQUE_EVENT_ID}:verificado")
 
-    nomes_indices_pos = {ix.get("name") for ix in indices_pos}
-    for nome_indice in (_INDEX_CONVERSATION_ID, _INDEX_CREATED_AT):
-        if nome_indice not in nomes_indices_pos:
+    indices_pos_por_nome = {ix.get("name"): ix for ix in indices_pos}
+    for nome_indice, colunas_esperadas in _INDICES_ESPERADOS.items():
+        indice = indices_pos_por_nome.get(nome_indice)
+        if indice is None:
             raise RuntimeError(f"{nome_indice} AUSENTE depois do DDL — migration abortada.")
+        colunas_reais = indice.get("column_names")
+        if colunas_reais != colunas_esperadas:
+            raise RuntimeError(
+                f"{nome_indice} existe mas indexa {colunas_reais} em vez de "
+                f"{colunas_esperadas} — nome do indice bate, coluna indexada nao bate. "
+                "Migration abortada."
+            )
         actions.append(f"{nome_indice}:verificado")
 
     return actions

@@ -5,12 +5,17 @@ Cobre SO `_verificar_pos_ddl(engine, actions)`, extraida de
 `migrations/m013_conversation_events.py` especificamente para ser testavel
 sem rodar a migration inteira (ver docstring da funcao). `run()`/`main()` da
 m013 NUNCA sao chamados neste arquivo - nenhum dos dois e sequer importado.
-Os 4 cenarios abaixo constroem engines SQLite DESCARTAVEIS em scratch/ com
+Os 6 cenarios abaixo constroem engines SQLite DESCARTAVEIS em scratch/ com
 DDL cru e chamam so a funcao de verificacao contra cada um.
 
 O cenario que motivou a extracao (tabela PARCIAL pre-existente faz
 `CREATE TABLE IF NOT EXISTS` virar NO-OP silencioso) nao tinha nenhuma
 cobertura antes deste arquivo.
+
+Cenarios 5 e 6 cobrem o gate NOME+COLUNA dos indices secundarios: um objeto
+NOMEADO como o indice esperado mas criado sobre a coluna ERRADA precisa ser
+rejeitado do mesmo jeito que um indice AUSENTE - checar so o nome deixaria
+passar "ix_conversation_events_conversation_id" apontando para lead_id.
 
 Roda standalone:  python tests/test_v2_m013_gate.py
 """
@@ -53,6 +58,7 @@ from sqlalchemy import create_engine, text  # noqa: E402
 from migrations.m013_conversation_events import (  # noqa: E402
     _UNIQUE_EVENT_ID,
     _INDEX_CONVERSATION_ID,
+    _INDEX_CREATED_AT,
     _verificar_pos_ddl,
 )
 # Import por ultimo de proposito, mesma logica do check 18 de
@@ -162,6 +168,65 @@ check(levantou, "4. UNIQUE presente mas ix_conversation_events_conversation_id a
 check(
     _INDEX_CONVERSATION_ID in mensagem,
     f"4b. RuntimeError nomeia {_INDEX_CONVERSATION_ID} (mensagem={mensagem!r})",
+)
+
+
+# --- 5. Indice NOMEADO certo, mas sobre a coluna ERRADA (lead_id em vez de
+# conversation_id) - prova "indice DE conversation_id", nao so "objeto com
+# esse nome existe". created_at correto de proposito, para isolar a causa.
+engine_indice_errado_conv = _engine_descartavel("indice_errado_conv")
+with engine_indice_errado_conv.begin() as conn:
+    conn.execute(text(_DDL_COLUNAS_COMPLETAS))
+    conn.execute(text(
+        f"CREATE UNIQUE INDEX {_UNIQUE_EVENT_ID} ON conversation_events (event_id)"
+    ))
+    conn.execute(text(
+        f"CREATE INDEX {_INDEX_CONVERSATION_ID} ON conversation_events (lead_id)"
+    ))
+    conn.execute(text(
+        f"CREATE INDEX {_INDEX_CREATED_AT} ON conversation_events (created_at)"
+    ))
+levantou, mensagem = False, ""
+try:
+    _verificar_pos_ddl(engine_indice_errado_conv, [])
+except RuntimeError as exc:
+    levantou, mensagem = True, str(exc)
+check(
+    levantou,
+    f"5. indice NOMEADO {_INDEX_CONVERSATION_ID} mas criado sobre lead_id e rejeitado",
+)
+check(
+    _INDEX_CONVERSATION_ID in mensagem and "lead_id" in mensagem,
+    f"5b. RuntimeError nomeia o indice errado e a coluna real indexada (mensagem={mensagem!r})",
+)
+
+
+# --- 6. Indice NOMEADO certo, mas sobre a coluna ERRADA (message_id em vez
+# de created_at) - mesmo gate do cenario 5, agora no segundo indice.
+engine_indice_errado_created = _engine_descartavel("indice_errado_created")
+with engine_indice_errado_created.begin() as conn:
+    conn.execute(text(_DDL_COLUNAS_COMPLETAS))
+    conn.execute(text(
+        f"CREATE UNIQUE INDEX {_UNIQUE_EVENT_ID} ON conversation_events (event_id)"
+    ))
+    conn.execute(text(
+        f"CREATE INDEX {_INDEX_CONVERSATION_ID} ON conversation_events (conversation_id)"
+    ))
+    conn.execute(text(
+        f"CREATE INDEX {_INDEX_CREATED_AT} ON conversation_events (message_id)"
+    ))
+levantou, mensagem = False, ""
+try:
+    _verificar_pos_ddl(engine_indice_errado_created, [])
+except RuntimeError as exc:
+    levantou, mensagem = True, str(exc)
+check(
+    levantou,
+    f"6. indice NOMEADO {_INDEX_CREATED_AT} mas criado sobre message_id e rejeitado",
+)
+check(
+    _INDEX_CREATED_AT in mensagem and "message_id" in mensagem,
+    f"6b. RuntimeError nomeia o indice errado e a coluna real indexada (mensagem={mensagem!r})",
 )
 
 
