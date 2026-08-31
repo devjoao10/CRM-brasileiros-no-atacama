@@ -145,8 +145,10 @@ def registrar_evento(
     tipo_validado = validar_tipo(tipo)
     resultado_validado = validar_resultado(result)
 
-    event_id_final = event_id or str(uuid.uuid4())
-    event_id_final = validar_event_id(event_id_final)
+    if event_id is None:
+        event_id_final = str(uuid.uuid4())
+    else:
+        event_id_final = validar_event_id(event_id)
 
     if whatsapp_msg_id is not None:
         validar_whatsapp_msg_id(whatsapp_msg_id)

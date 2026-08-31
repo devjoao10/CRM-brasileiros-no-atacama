@@ -86,6 +86,16 @@ _UNIQUE_EVENT_ID = "uq_conversation_events_event_id"
 _INDEX_CONVERSATION_ID = "ix_conversation_events_conversation_id"
 _INDEX_CREATED_AT = "ix_conversation_events_created_at"
 
+# Espelha as colunas de conversas/app/models/evento.py:ConversationEvent —
+# usado SO pelo gate pos-DDL para provar presenca (nao tipo: ver
+# _verificar_pos_ddl).
+_COLUNAS_OBRIGATORIAS = [
+    "id", "event_id", "event_type", "conversation_id", "lead_id", "message_id",
+    "whatsapp_msg_id", "state_before", "state_after", "action", "target_user_id",
+    "model", "model_attempt", "duration_ms", "result", "error_code", "payload",
+    "created_at",
+]
+
 # Mesmo padrao da m012: so o TIPO muda por dialeto, nunca a FORMA do DDL.
 _ID_TYPE_BY_DIALECT = {"postgresql": "SERIAL", "default": "INTEGER"}
 _TIMESTAMP_TYPE_BY_DIALECT = {"postgresql": "TIMESTAMP WITH TIME ZONE", "default": "TIMESTAMP"}
@@ -172,10 +182,40 @@ def run(engine=None, actions=None):
         ))
         actions.append(f"{_INDEX_CREATED_AT}:ensured")
 
-    # GATE pos-DDL: nao basta o CREATE nao ter levantado. Reinspeciona.
+    return _verificar_pos_ddl(engine, actions)
+
+
+def _verificar_pos_ddl(engine, actions):
+    """
+    Prova cada garantia que o docstring de `run()` promete — nunca engole
+    nada, nunca deixa `run()` imprimir OK sobre estado que nao verificou.
+
+    `CREATE TABLE IF NOT EXISTS` e `CREATE INDEX IF NOT EXISTS` sao NO-OP
+    silencioso contra uma tabela/indice PRE-EXISTENTE ou PARCIAL — so a
+    reinspecao pos-DDL (via `inspect()`, nunca lendo de volta o que o proprio
+    DDL declarou) pega essa lacuna. Checa so PRESENCA (colunas, UNIQUE,
+    indices) — nunca tenta provar equivalencia de TIPO entre SQLite e
+    PostgreSQL, o que exigiria logica fragil por dialeto e esta fora do
+    escopo desta funcao.
+
+    Extraida de `run()` para poder ser exercida sozinha (ex.: contra um banco
+    SQLite descartavel criado via `Base.metadata.create_all()`) sem nunca
+    chamar `run()`/`main()` — os dois continuam proibidos fora de uso humano
+    aprovado (ver docstring do modulo).
+    """
     insp_pos = inspect(engine)
     if _TABELA not in insp_pos.get_table_names():
         raise RuntimeError(f"{_TABELA} AUSENTE depois do DDL — migration abortada.")
+
+    colunas_pos = {c["name"] for c in insp_pos.get_columns(_TABELA)}
+    faltando = [c for c in _COLUNAS_OBRIGATORIAS if c not in colunas_pos]
+    if faltando:
+        raise RuntimeError(
+            f"colunas ausentes em {_TABELA} depois do DDL: {faltando} — tabela "
+            "pre-existente/parcial (CREATE TABLE IF NOT EXISTS foi NO-OP contra "
+            "ela). Migration abortada."
+        )
+    actions.append("colunas:verificadas")
 
     indices_pos = insp_pos.get_indexes(_TABELA)
     uniques_pos = insp_pos.get_unique_constraints(_TABELA)
@@ -188,6 +228,12 @@ def run(engine=None, actions=None):
             "seria bloqueada pelo banco. Migration abortada."
         )
     actions.append(f"{_UNIQUE_EVENT_ID}:verificado")
+
+    nomes_indices_pos = {ix.get("name") for ix in indices_pos}
+    for nome_indice in (_INDEX_CONVERSATION_ID, _INDEX_CREATED_AT):
+        if nome_indice not in nomes_indices_pos:
+            raise RuntimeError(f"{nome_indice} AUSENTE depois do DDL — migration abortada.")
+        actions.append(f"{nome_indice}:verificado")
 
     return actions
 

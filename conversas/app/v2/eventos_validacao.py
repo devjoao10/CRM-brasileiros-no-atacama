@@ -11,11 +11,11 @@ nunca o contrario. `TipoEvento` mora aqui (nao em `eventos.py`) por isso:
 do outro lado este modulo teria que importar DE la so pra validar `tipo` -
 a dependencia invertida que a regra acima proibe.
 
-`payload` e ALLOWLIST DE CHAVES TIPADA (2 chaves: bool ou StrEnum), nao
-filtro heuristico: nao existe regex confiavel para "isto e sensivel" - erra
-deixando passar formato imprevisto E mascarando dado legitimo (`lead_id`
-grande "parece" telefone) ao mesmo tempo. Defesa ESTRUTURAL: nao ha "valor
-livre" pra escapar de um vocabulario fechado.
+`payload` e ALLOWLIST DE CHAVES TIPADA (hoje 1 chave: `origem`, tipada como
+`OrigemEvento`), nao filtro heuristico: nao existe regex confiavel para
+"isto e sensivel" - erra deixando passar formato imprevisto E mascarando
+dado legitimo (`lead_id` grande "parece" telefone) ao mesmo tempo. Defesa
+ESTRUTURAL: nao ha "valor livre" pra escapar de um vocabulario fechado.
 
 `state_before/after`, `action`, `error_code`, `model` sao validados por
 FORMATO+TAMANHO - contrato SINTATICO, nao controle de PII (um JWT bate no
@@ -167,6 +167,8 @@ def _validar_token(valor: str, regex: re.Pattern, limite: int, campo: str) -> No
 
 def validar_model(valor: str) -> None:
     _validar_tamanho(valor, _LIMITE_MODEL, "model")
+    if valor == "":
+        raise CampoInvalido("model nao aceita string vazia (omita o campo com None)", campo="model")
     if _REGEX_MODEL_PROIBIDO.search(valor):
         raise CampoInvalido("model nao pode conter espaco ou caractere de controle", campo="model")
 
@@ -178,6 +180,10 @@ def validar_whatsapp_msg_id(valor: str) -> None:
     sem contrato ou evidencia documentada do formato real da Meta.
     """
     _validar_tamanho(valor, _LIMITE_WHATSAPP_MSG_ID, "whatsapp_msg_id")
+    if valor == "":
+        raise CampoInvalido(
+            "whatsapp_msg_id nao aceita string vazia (omita o campo com None)", campo="whatsapp_msg_id"
+        )
     if _REGEX_CONTROLE.search(valor):
         raise CampoInvalido(
             "whatsapp_msg_id nao pode conter NUL ou caractere de controle", campo="whatsapp_msg_id"
@@ -333,10 +339,10 @@ def _validar_payload_conteudo(payload: dict) -> None:
         _VALIDADORES_PAYLOAD[chave](valor)
 
     # Rede de seguranca de tamanho/serializacao POR ULTIMO: a esta altura
-    # todo valor ja passou por um validador tipado (bool ou StrEnum/string
-    # curta do vocabulario fechado), entao json.dumps nao deveria conseguir
-    # estourar aqui. O guarda continua amplo (ver validar_payload) para o
-    # dia em que a allowlist crescer com um tipo novo.
+    # todo valor ja passou pelo validador tipado do vocabulario fechado
+    # (`origem` -> enum `OrigemEvento`), entao json.dumps nao deveria
+    # conseguir estourar aqui. O guarda continua amplo (ver validar_payload)
+    # para o dia em que a allowlist crescer com um tipo novo.
     serializado = json.dumps(payload)
     if len(serializado) > _TAMANHO_MAX_PAYLOAD_JSON:
         raise PayloadInvalido(f"payload serializado excede {_TAMANHO_MAX_PAYLOAD_JSON} caracteres", chave=None)

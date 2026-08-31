@@ -76,7 +76,7 @@ from app.v2.eventos import (  # noqa: E402
     _persistir_ou_compensar,
     registrar_evento,
 )
-from app.v2.eventos_validacao import TipoEvento  # noqa: E402
+from app.v2.eventos_validacao import CampoInvalido, TipoEvento  # noqa: E402
 
 Base.metadata.create_all(bind=engine)
 db = SessionLocal()
@@ -269,6 +269,26 @@ assinatura = py_inspect.signature(registrar_evento)
 parametro_commit = assinatura.parameters["commit"]
 check(parametro_commit.default is py_inspect.Parameter.empty, "12. commit nao tem default (decisao explicita obrigatoria)")
 check(parametro_commit.kind is py_inspect.Parameter.KEYWORD_ONLY, "12b. commit e keyword-only")
+
+# --- 13. Contrato de event_id: None gera; qualquer outro valor falsy e invalido
+ev_id_none = registrar_evento(db, tipo=TipoEvento.MESSAGE_RECEIVED, commit=True, event_id=None)
+check(ev_id_none.event_id is not None, "13. event_id=None gera um UUID novo (omitido = None, nao falsy)")
+
+for valor_invalido in ("", 0, False):
+    antes_invalido = db.query(ConversationEvent).count()
+    levantou_campo_invalido = False
+    try:
+        registrar_evento(db, tipo=TipoEvento.MESSAGE_RECEIVED, commit=True, event_id=valor_invalido)
+    except CampoInvalido:
+        levantou_campo_invalido = True
+    check(
+        levantou_campo_invalido,
+        f"13b. event_id={valor_invalido!r} levanta CampoInvalido - NUNCA gera UUID por acidente",
+    )
+    check(
+        db.query(ConversationEvent).count() == antes_invalido,
+        f"13c. event_id={valor_invalido!r} invalido nao grava linha parcial",
+    )
 
 db.close()
 

@@ -193,6 +193,15 @@ check(not ok and isinstance(exc, CampoInvalido) and exc.campo == "whatsapp_msg_i
 ok, exc = _tenta_registrar(whatsapp_msg_id="wamid.TESTE\x01123")
 check(not ok and isinstance(exc, CampoInvalido) and exc.campo == "whatsapp_msg_id", "12b. whatsapp_msg_id com caractere de controle e rejeitado")
 
+# --- 12c. model/whatsapp_msg_id: string vazia carrega zero informacao -----
+# Ausente = None ("nao informado"); "" nao e um valor de dominio valido para
+# nenhum dos dois. Sem esta checagem, "" passava direto: nem o limite de
+# tamanho nem a regex de caractere proibido rejeitam string vazia.
+ok, exc = _tenta_registrar(model="")
+check(not ok and isinstance(exc, CampoInvalido) and exc.campo == "model", f"12c. model='' e rejeitado - ausente e None, nao string vazia (exc={exc!r})")
+ok, exc = _tenta_registrar(whatsapp_msg_id="")
+check(not ok and isinstance(exc, CampoInvalido) and exc.campo == "whatsapp_msg_id", f"12d. whatsapp_msg_id='' e rejeitado - ausente e None, nao string vazia (exc={exc!r})")
+
 # --- 13. Toda coluna string tem limite de tamanho validado em Python ------
 CASOS_LIMITE = [
     ("whatsapp_msg_id", "w" * 100, "w" * 101),
