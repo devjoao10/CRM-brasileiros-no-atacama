@@ -60,3 +60,44 @@ leaf module (e.g. registering the same event listeners on the shared `engine`
 from within `eventos.py` to avoid editing the "off-limits" `database.py`);
 that has the identical global blast radius as editing `database.py` directly,
 just harder to find later.
+
+**Second finding (Task 0.2, second follow-up): the SQLite symptom is itself
+order-dependent — a passing test here proves nothing about production.**
+Empirically isolated while splitting `test_v2_eventos.py`: whether the bug
+manifests for a given `begin_nested()` call depends on whether
+`db.in_transaction()` was already `True` going into it. A **prior**
+`begin_nested()` that raises (e.g. `IntegrityError` from a colliding
+`event_id`, caught as `EventoDuplicado`) leaves the session's own
+`in_transaction()` at `True` even after the exception is handled — SQLAlchemy's
+autobegin marks the session "in transaction" the moment `begin_nested()` runs,
+and catching the exception only rolls back to the savepoint, not the outer
+(autobegun) transaction. If nothing calls `db.commit()`/`db.rollback()`
+afterward, the **next** `begin_nested()` in the same session nests inside that
+still-open transaction instead of starting bare — and the bug's usual symptom
+(row visible to another connection before the outer commit) silently stops
+reproducing. Not fixed — masked by accidental leftover session state from an
+unrelated prior check.
+
+Concretely: `db.begin_nested()` → `IntegrityError` caught → **no** explicit
+`db.rollback()` → next `db.begin_nested()` in the same session → `RELEASE`
+does NOT commit early (looks correct). Insert one `db.rollback()` right after
+catching the duplicate, and the very same next `begin_nested()` goes back to
+committing early (the real, unfixed behavior). Verified by direct A/B repro
+against `conversas/app/database.py`'s actual `SessionLocal`/`engine`, not a
+throwaway engine.
+
+**Consequence for any test (or future Phase 6 code) that calls
+`registrar_evento`/`begin_nested()` more than once in the same session:**
+after catching `EventoDuplicado` (or any exception from a nested block) with
+no further action, call `db.rollback()` before relying on the session's
+transaction state again — otherwise a later `commit=False` check (or worse,
+real Phase 6 handoff logic composing multiple events in one transaction) is
+silently testing a different code path than the one that will run in
+isolation. `tests/test_v2_eventos.py` documents this inline where it matters
+(the `db.rollback()` between the UUID-canonicalization-collision check and
+the `commit=False` check exists *because of* this, not just for hygiene).
+
+This is also why R12's plan mitigation was rewritten to require proof against
+**real PostgreSQL** before Phase 6, rather than trusting any specific SQLite
+behavior (locked-in or not) to predict production — SQLite's behavior here
+isn't even stable against itself.
