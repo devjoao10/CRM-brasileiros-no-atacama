@@ -44,6 +44,11 @@ infraestrutura neutra de eventos. Volta na fase que define o fato.
 Sobra UMA chave: `origem`, que e vocabulario da propria infraestrutura de
 eventos (de onde o evento veio), nao de dominio nenhum.
 """
+# Debito de extracao conhecido: o bloco "Payload - allowlist tipada" mais
+# abaixo neste arquivo (~63 linhas, depende so de OrigemEvento/PayloadInvalido)
+# e a extracao natural quando este arquivo precisar de espaco - antes so
+# registrado em mensagem de commit (bafd40a), invisivel pra quem abre o
+# arquivo.
 import json
 import re
 import uuid
@@ -165,10 +170,24 @@ def _validar_token(valor: str, regex: re.Pattern, limite: int, campo: str) -> No
         raise CampoInvalido(f"{campo} nao bate com o formato exigido ({regex.pattern})", campo=campo)
 
 
+def _validar_nao_vazio(valor: str, campo: str) -> None:
+    """
+    Ausente e None; "" e " " carregam a MESMA zero informacao e sao
+    rejeitados aqui igualmente - por isso a checagem e por `.strip() == ""`,
+    nunca por `== ""` sozinho (que deixaria " " passar). NUNCA normaliza o
+    valor armazenado: isto e um gate de rejeicao, nao um trim silencioso -
+    um valor com espaco SO NO MEIO (ex.: "a b") nao bate aqui e segue para a
+    regra propria de cada campo chamador.
+    """
+    if valor.strip() == "":
+        raise CampoInvalido(
+            f"{campo} nao aceita string vazia ou so espaco (omita o campo com None)", campo=campo
+        )
+
+
 def validar_model(valor: str) -> None:
     _validar_tamanho(valor, _LIMITE_MODEL, "model")
-    if valor == "":
-        raise CampoInvalido("model nao aceita string vazia (omita o campo com None)", campo="model")
+    _validar_nao_vazio(valor, "model")
     if _REGEX_MODEL_PROIBIDO.search(valor):
         raise CampoInvalido("model nao pode conter espaco ou caractere de controle", campo="model")
 
@@ -176,14 +195,16 @@ def validar_model(valor: str) -> None:
 def validar_whatsapp_msg_id(valor: str) -> None:
     """
     Tamanho maximo (equivalencia com `Message.whatsapp_msg_id` ja confirmada)
-    + rejeicao de NUL/caractere de controle. NAO valida formato de WAMID -
-    sem contrato ou evidencia documentada do formato real da Meta.
+    + rejeicao de vazio/so-espaco + rejeicao de NUL/caractere de controle.
+    NAO valida formato de WAMID - sem contrato ou evidencia documentada do
+    formato real da Meta. `_REGEX_CONTROLE` continua sem incluir espaco de
+    proposito: nao ha evidencia de que espaco INTERNO seja invalido num
+    WAMID real, e a regra de vazio/so-espaco abaixo ja fecha a lacuna de
+    "zero informacao" sem precisar alargar o regex de controle para o dado
+    nunca documentado.
     """
     _validar_tamanho(valor, _LIMITE_WHATSAPP_MSG_ID, "whatsapp_msg_id")
-    if valor == "":
-        raise CampoInvalido(
-            "whatsapp_msg_id nao aceita string vazia (omita o campo com None)", campo="whatsapp_msg_id"
-        )
+    _validar_nao_vazio(valor, "whatsapp_msg_id")
     if _REGEX_CONTROLE.search(valor):
         raise CampoInvalido(
             "whatsapp_msg_id nao pode conter NUL ou caractere de controle", campo="whatsapp_msg_id"

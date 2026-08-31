@@ -202,6 +202,29 @@ check(not ok and isinstance(exc, CampoInvalido) and exc.campo == "model", f"12c.
 ok, exc = _tenta_registrar(whatsapp_msg_id="")
 check(not ok and isinstance(exc, CampoInvalido) and exc.campo == "whatsapp_msg_id", f"12d. whatsapp_msg_id='' e rejeitado - ausente e None, nao string vazia (exc={exc!r})")
 
+# --- 12e-12g. string SO-ESPACO e a MESMA zero informacao que "" -----------
+# Achado do reviewer: `" " == ""` e False, entao a checagem antiga (`== ""`)
+# deixava " "/"   " passarem. model=" " ja era barrado de raspao pelo regex
+# de formato (que proibe QUALQUER \s); whatsapp_msg_id=" " nao tinha regex
+# de formato nenhum e passava DIRETO ate virar linha gravada.
+ok, exc = _tenta_registrar(whatsapp_msg_id=" ")
+check(not ok and isinstance(exc, CampoInvalido) and exc.campo == "whatsapp_msg_id", f"12e. whatsapp_msg_id=' ' (so espaco) e rejeitado (exc={exc!r})")
+ok, exc = _tenta_registrar(whatsapp_msg_id="   ")
+check(not ok and isinstance(exc, CampoInvalido) and exc.campo == "whatsapp_msg_id", f"12f. whatsapp_msg_id='   ' (so espacos) e rejeitado (exc={exc!r})")
+ok, exc = _tenta_registrar(model=" ")
+check(not ok and isinstance(exc, CampoInvalido) and exc.campo == "model", f"12g. model=' ' (so espaco) e rejeitado (exc={exc!r})")
+
+# --- 12h-12i. espaco INTERNO (nao so-espaco) segue a regra PROPRIA de cada campo
+# model proibe QUALQUER espaco (regex de formato de identificador) - "a b"
+# continua rejeitado pela MESMA regra de sempre, nao pela regra nova de vazio.
+ok, exc = _tenta_registrar(model="gemini flash")
+check(not ok and isinstance(exc, CampoInvalido) and exc.campo == "model", f"12h. model com espaco interno continua rejeitado pelo regex de formato, nao pela regra de vazio (exc={exc!r})")
+# whatsapp_msg_id NAO tem regex de formato (so tamanho + vazio/so-espaco +
+# controle) - espaco interno num WAMID hipotetico e ACEITO, porque nao ha
+# contrato documentado que o proiba (ver docstring de validar_whatsapp_msg_id).
+ev_espaco_interno = registrar_evento(db, tipo=TipoEvento.MESSAGE_RECEIVED, commit=True, whatsapp_msg_id="wamid teste")
+check(ev_espaco_interno.whatsapp_msg_id == "wamid teste", "12i. whatsapp_msg_id com espaco interno e aceito - sem regex de formato para este campo")
+
 # --- 13. Toda coluna string tem limite de tamanho validado em Python ------
 CASOS_LIMITE = [
     ("whatsapp_msg_id", "w" * 100, "w" * 101),

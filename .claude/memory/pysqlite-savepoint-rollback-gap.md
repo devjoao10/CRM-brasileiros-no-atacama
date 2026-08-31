@@ -70,10 +70,15 @@ future session must not repeat "webhook.py holds a transaction open for
 session open across a slow `await` on the shared engine. Treat the eager-BEGIN
 risk itself as real (the mechanism above is provable independent of any
 single call site), but NOT yet pinned to a specific confirmed long-running
-instance — a fuller audit of Conversas' async call sites (whatsapp.py,
-meta_templates.py, crm.py all hold `db: Session` params alongside `httpx`
-calls and were not individually audited here) is still needed before
-Phase 6, not just of `begin_nested()` usages.
+instance — a fuller audit of Conversas' async call sites is still needed
+before Phase 6, not just of `begin_nested()` usages. Verified candidates:
+`whatsapp.py` and `meta_templates.py` DO combine a `db: Session` param with
+`httpx` calls and were not individually audited here. `crm.py` does NOT —
+`grep -in "httpx|requests" conversas/app/services/crm.py` returns zero hits
+in 780 lines, and its own module docstring states it queries the shared
+PostgreSQL directly "instead of making HTTP calls". An earlier revision of
+this file listed `crm.py` among the httpx call sites; that was false and is
+corrected here.
 
 **Consequence:** installing the fix requires its own review (HOTFIX-09), not
 a drive-by patch inside an unrelated feature, and it cannot be justified as
