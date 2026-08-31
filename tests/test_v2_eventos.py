@@ -12,16 +12,23 @@ DECISOES DE CONTRATO QUE ESTE TESTE TRAVA
 1. `event_id` tem UNIQUE de verdade no banco — nao "o codigo nao chama duas
    vezes". As docs do PostgreSQL sao explicitas: mesmo em Serializable a
    violacao ocorre sob concorrencia, e a constraint e a unica protecao real.
+   Alem disso, `event_id` e validado como UUID de verdade (RFC 4122), nao
+   "qualquer string de ate 36 caracteres".
 
 2. Duplicata levanta `EventoDuplicado`, NAO devolve a linha existente em
    silencio. Devolver seria conveniente para idempotencia, mas mascararia
    o caso em que dois eventos DIFERENTES colidem no mesmo id. Quem quer
    idempotencia (Fase 6, handoff) captura a excecao de proposito.
 
-3. `payload` tem ALLOWLIST DE CHAVES. Nao existe chave para conteudo de
+3. `payload` tem ALLOWLIST DE CHAVES TIPADA (4 chaves: bool, lista de um
+   vocabulario fixo, ou StrEnum). Nao existe chave para conteudo de
    mensagem, telefone, nome, e-mail ou token — logo nao ha como grava-los.
-   A defesa e estrutural, nao heuristica: pelo mesmo motivo do
-   DEPLOY-GATE-01, nao existe regex confiavel para "isto e sensivel".
+   A defesa e estrutural, nao heuristica.
+
+4. Todo campo fora do payload (event_id, event_type, whatsapp_msg_id,
+   state_before/after, action, model, result, error_code) e validado contra
+   tamanho maximo e, quando aplicavel, formato de token tecnico — SINTATICO,
+   nunca controle de PII (ver docstring de conversas/app/v2/eventos.py).
 
 Roda standalone:  python tests/test_v2_eventos.py
 """
@@ -57,20 +64,44 @@ def check(cond, msg):
         failures.append(msg)
 
 
+import uuid  # noqa: E402
+
 from sqlalchemy import inspect  # noqa: E402
+from sqlalchemy.exc import IntegrityError  # noqa: E402
 
 from app.database import IS_SQLITE, Base, SessionLocal, engine  # noqa: E402
 from app.models.evento import ConversationEvent  # noqa: E402
 from app.v2.eventos import (  # noqa: E402
+    CAMPOS_TRIAGEM,
     CHAVES_PAYLOAD_PERMITIDAS,
+    CampoInvalido,
     EventoDuplicado,
+    MotivoPrefiltro,
+    OrigemEvento,
     PayloadInvalido,
+    ResultadoEvento,
     TipoEvento,
+    _persistir_ou_compensar,
     registrar_evento,
 )
 
 Base.metadata.create_all(bind=engine)
 db = SessionLocal()
+
+# UUID fixo reutilizado pelos checks 3 e 6 (precisa ser o MESMO id para o
+# check 6 provar duplicata). `event_id` agora exige UUID de verdade — ver
+# secao 17 abaixo para a rejeicao de string nao-UUID.
+EVENT_ID_TESTE = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+
+
+def _tenta_registrar(tipo=TipoEvento.MESSAGE_RECEIVED, **kwargs):
+    """Chama registrar_evento e devolve (ok, excecao) em vez de deixar propagar."""
+    try:
+        registrar_evento(db, tipo=tipo, **kwargs)
+        return True, None
+    except Exception as exc:  # noqa: BLE001 - queremos inspecionar QUALQUER tipo levantado
+        return False, exc
+
 
 # --- 1. Os 18 tipos exigidos pelo WP existem ------------------------------
 TIPOS_EXIGIDOS = {
@@ -97,7 +128,7 @@ check(ev.created_at is not None, "2d. created_at preenchido")
 ev_completo = registrar_evento(
     db,
     tipo=TipoEvento.HANDOFF_COMPLETED,
-    event_id="evt-completo-001",
+    event_id=EVENT_ID_TESTE,
     conversation_id=42,
     lead_id=7,
     message_id=99,
@@ -111,7 +142,7 @@ ev_completo = registrar_evento(
     duration_ms=1234,
     result="sucesso",
     error_code=None,
-    payload={"motivo": "triagem_completa"},
+    payload={"origem": "webhook"},
 )
 campos = [
     "event_id", "event_type", "conversation_id", "lead_id", "message_id",
@@ -138,13 +169,13 @@ check(tem_unique, "5. event_id tem UNIQUE de verdade no schema do banco")
 levantou = False
 capturado = None
 try:
-    registrar_evento(db, tipo=TipoEvento.MESSAGE_RECEIVED, event_id="evt-completo-001")
+    registrar_evento(db, tipo=TipoEvento.MESSAGE_RECEIVED, event_id=EVENT_ID_TESTE)
 except EventoDuplicado as exc:
     levantou = True
     capturado = exc
 check(levantou, "6. event_id duplicado levanta EventoDuplicado")
 check(
-    capturado is not None and getattr(capturado, "event_id", None) == "evt-completo-001",
+    capturado is not None and getattr(capturado, "event_id", None) == EVENT_ID_TESTE,
     "6b. a excecao carrega o event_id, para o caller decidir",
 )
 
@@ -154,7 +185,7 @@ check(
 ev_pos = registrar_evento(db, tipo=TipoEvento.TRIAGE_COMPLETED, conversation_id=42)
 check(ev_pos.id is not None, "7. sessao continua utilizavel apos EventoDuplicado")
 
-# --- 8. Payload: allowlist de chaves -------------------------------------
+# --- 8. Payload: allowlist de chaves tipada -------------------------------
 check(len(CHAVES_PAYLOAD_PERMITIDAS) > 0, "8. existe allowlist de chaves de payload")
 proibidas = {"content", "mensagem", "texto", "whatsapp", "telefone", "nome", "email", "token"}
 check(
@@ -171,22 +202,40 @@ check(levantou, "9. chave fora da allowlist levanta PayloadInvalido")
 
 levantou = False
 try:
-    registrar_evento(db, tipo=TipoEvento.MESSAGE_RECEIVED, payload={"motivo": "x" * 5000})
+    # 21 itens validos (repete o vocabulario de 8 palavras 3x, corta em 21) —
+    # cada item individualmente valido, mas a LISTA excede o limite de 20.
+    lista_grande_demais = (list(CAMPOS_TRIAGEM) * 3)[:21]
+    registrar_evento(
+        db, tipo=TipoEvento.TRIAGE_DATA_UPDATED,
+        payload={"campos_faltantes": lista_grande_demais},
+    )
 except PayloadInvalido:
     levantou = True
-check(levantou, "10. valor acima do limite de tamanho levanta PayloadInvalido")
+check(levantou, "10. campos_faltantes acima do tamanho maximo de lista levanta PayloadInvalido")
 
 levantou = False
 try:
-    registrar_evento(db, tipo=TipoEvento.MESSAGE_RECEIVED, payload={"motivo": {"aninhado": True}})
+    registrar_evento(db, tipo=TipoEvento.MESSAGE_RECEIVED, payload={"explicit_human_request": {"aninhado": True}})
 except PayloadInvalido:
     levantou = True
-check(levantou, "11. valor nao-escalar levanta PayloadInvalido (payload nao e deposito de contexto)")
+check(levantou, "11. valor de tipo errado (dict onde se espera bool) levanta PayloadInvalido")
 
-ev_lista = registrar_evento(
-    db, tipo=TipoEvento.TRIAGE_DATA_UPDATED, payload={"campos_faltantes": ["email", "duracao"]}
+ev_payload_completo = registrar_evento(
+    db, tipo=TipoEvento.TRIAGE_DATA_UPDATED,
+    payload={
+        "campos_faltantes": ["email", "destinos"],
+        "explicit_human_request": False,
+        "prefiltro_motivo": MotivoPrefiltro.MENSAGEM_VAZIA,  # aceita membro do enum
+        "origem": "webhook",                                  # aceita string exata
+    },
 )
-check(ev_lista.payload["campos_faltantes"] == ["email", "duracao"], "12. lista de strings e aceita")
+check(
+    ev_payload_completo.payload["campos_faltantes"] == ["email", "destinos"]
+    and ev_payload_completo.payload["explicit_human_request"] is False
+    and ev_payload_completo.payload["prefiltro_motivo"] == "mensagem_vazia"
+    and ev_payload_completo.payload["origem"] == "webhook",
+    "12. as 4 chaves tipadas aceitam valor valido (enum por membro OU por string exata)",
+)
 
 # --- 13. Payload rejeitado nao deixa lixo no banco -----------------------
 antes = db.query(ConversationEvent).count()
@@ -267,7 +316,170 @@ finally:
     outra_sessao.close()
 check(visivel_pos_commit == 1, "14c. apos o commit do caller, a linha fica visivel")
 
+# --- 16. Toda coluna tem limite de tamanho validado em Python -------------
+# Pelo menos 3 campos, no limite exato (passa) e limite+1 (levanta) — aqui 5.
+CASOS_LIMITE = [
+    ("whatsapp_msg_id", "w" * 100, "w" * 101),
+    ("model", "m" * 64, "m" * 65),
+    ("state_before", "A" * 32, "A" * 33),
+    ("action", "a" * 64, "a" * 65),
+    ("error_code", "A" * 64, "A" * 65),
+]
+for campo, valor_no_limite, valor_acima in CASOS_LIMITE:
+    ok_no_limite, exc_no_limite = _tenta_registrar(**{campo: valor_no_limite})
+    check(ok_no_limite, f"16. {campo} no limite exato ({len(valor_no_limite)} chars) passa (exc={exc_no_limite!r})")
+
+    ok_acima, exc_acima = _tenta_registrar(**{campo: valor_acima})
+    check(
+        not ok_acima and isinstance(exc_acima, CampoInvalido) and exc_acima.campo == campo,
+        f"16. {campo} acima do limite ({len(valor_acima)} chars) levanta CampoInvalido (exc={exc_acima!r})",
+    )
+
+# --- 17. event_id precisa ser UUID de verdade, nao qualquer string de 36 chars
+ok, exc = _tenta_registrar(event_id="x" * 36)
+check(
+    not ok and isinstance(exc, CampoInvalido) and exc.campo == "event_id",
+    f"17a. event_id com 36 chars que NAO e UUID e rejeitado (exc={exc!r})",
+)
+
+ev_uuid_valido = registrar_evento(
+    db, tipo=TipoEvento.MESSAGE_RECEIVED, event_id="0f8fad5b-d9cb-469f-a165-70867728950e",
+)
+check(ev_uuid_valido.event_id == "0f8fad5b-d9cb-469f-a165-70867728950e", "17b. event_id UUID bem formado e aceito")
+
+# --- 18. tipo aceita TipoEvento ou string valida; result e enum fechado --
+ev_tipo_str = registrar_evento(db, tipo="MESSAGE_RECEIVED")
+check(ev_tipo_str.event_type == "MESSAGE_RECEIVED", "18a. tipo aceita string valida e converte")
+
+ok, exc = _tenta_registrar(tipo="NAO_EXISTE")
+check(
+    not ok and isinstance(exc, CampoInvalido) and not isinstance(exc, AttributeError),
+    f"18b. tipo com string invalida levanta CampoInvalido, nunca AttributeError/ValueError cru (exc={exc!r})",
+)
+
+ok, exc = _tenta_registrar(tipo=123)
+check(
+    not ok and isinstance(exc, CampoInvalido) and not isinstance(exc, AttributeError),
+    f"18c. tipo de tipo errado (int) levanta CampoInvalido, nunca AttributeError (exc={exc!r})",
+)
+
+ev_result_enum = registrar_evento(db, tipo=TipoEvento.MESSAGE_SENT, result=ResultadoEvento.FALHA)
+check(ev_result_enum.result == "falha", "18d. result aceita membro do enum ResultadoEvento")
+
+ok, exc = _tenta_registrar(result="parcial")
+check(
+    not ok and isinstance(exc, CampoInvalido) and exc.campo == "result",
+    f"18e. result fora do vocabulario sucesso/falha/ignorado levanta CampoInvalido (exc={exc!r})",
+)
+
+# --- 19. action/error_code: alem de tamanho, o FORMATO tambem e exigido --
+ok, exc = _tenta_registrar(action="Nao_Snake")
+check(
+    not ok and isinstance(exc, CampoInvalido) and exc.campo == "action",
+    f"19a. action fora do formato ^[a-z][a-z0-9_]*$ e rejeitado (exc={exc!r})",
+)
+ok, exc = _tenta_registrar(error_code="minusculo")
+check(
+    not ok and isinstance(exc, CampoInvalido) and exc.campo == "error_code",
+    f"19b. error_code fora do formato ^[A-Z][A-Z0-9_]*$ e rejeitado (exc={exc!r})",
+)
+
+# --- 20. Contrato tipado do payload rejeita PII/token/prosa nas 4 chaves --
+# O regex de token e SINTATICO (ver docstring do modulo) — quem barra PII no
+# payload e o vocabulario FECHADO destas 4 chaves, nao um filtro de conteudo.
+VALORES_MALICIOSOS = [
+    "5551999999999",                              # telefone
+    "cliente@gmail.com",                          # e-mail
+    "eyJhbGciOiJIUzI1NiJ9.abc",                   # token JWT
+    "quero viajar em janeiro com minha esposa",   # frase de cliente
+]
+
+
+def _todos_rejeitados(payloads_ruins):
+    rejeitados = 0
+    for p in payloads_ruins:
+        try:
+            registrar_evento(db, tipo=TipoEvento.MESSAGE_RECEIVED, payload=p)
+        except PayloadInvalido:
+            rejeitados += 1
+    return rejeitados == len(payloads_ruins)
+
+
+check(
+    _todos_rejeitados([{"prefiltro_motivo": v} for v in VALORES_MALICIOSOS]),
+    "20a. prefiltro_motivo rejeita telefone/e-mail/token/frase (vocabulario fechado)",
+)
+check(
+    _todos_rejeitados([{"origem": v} for v in VALORES_MALICIOSOS]),
+    "20b. origem rejeita telefone/e-mail/token/frase",
+)
+check(
+    _todos_rejeitados([{"campos_faltantes": [v]} for v in VALORES_MALICIOSOS]),
+    "20c. campos_faltantes rejeita item telefone/e-mail/token/frase",
+)
+check(
+    _todos_rejeitados([{"explicit_human_request": v} for v in VALORES_MALICIOSOS]),
+    "20d. explicit_human_request rejeita telefone/e-mail/token/frase (so aceita bool)",
+)
+
+for chave_removida in ("motivo", "intent", "tentativa"):
+    levantou = False
+    try:
+        registrar_evento(db, tipo=TipoEvento.MESSAGE_RECEIVED, payload={chave_removida: "qualquer coisa"})
+    except PayloadInvalido:
+        levantou = True
+    check(levantou, f"20e. chave removida {chave_removida!r} e rejeitada como fora da allowlist")
+
+# --- 21. json.dumps com int patologico vira PayloadInvalido, nao ValueError cru
+levantou_tipado = False
+vazou_cru = False
+try:
+    registrar_evento(db, tipo=TipoEvento.MESSAGE_RECEIVED, payload={"campos_faltantes": [10 ** 5000]})
+except PayloadInvalido:
+    levantou_tipado = True
+except ValueError:
+    vazou_cru = True
+check(
+    levantou_tipado and not vazou_cru,
+    "21. int com milhares de digitos (sys.get_int_max_str_digits) vira PayloadInvalido, nao ValueError cru",
+)
+
+# --- 22. IntegrityError que NAO e por event_id duplicado nao vira EventoDuplicado
+evento_sem_tipo = ConversationEvent(event_id=str(uuid.uuid4()), event_type=None, conversation_id=42)
+levantou_integrity = False
+levantou_duplicado_errado = False
+try:
+    _persistir_ou_compensar(db, evento_sem_tipo, evento_sem_tipo.event_id)
+except EventoDuplicado:
+    levantou_duplicado_errado = True
+except IntegrityError:
+    levantou_integrity = True
+check(
+    levantou_integrity and not levantou_duplicado_errado,
+    "22. IntegrityError por NOT NULL (event_type) nao vira EventoDuplicado - re-consulta prova que nao existe",
+)
+
+ev_pos_integrity = registrar_evento(db, tipo=TipoEvento.TRIAGE_COMPLETED, conversation_id=42)
+check(ev_pos_integrity.id is not None, "22b. sessao continua utilizavel apos IntegrityError nao-duplicado")
+
+# --- 23. NOT NULL sem server_default: INSERT sem event_type FALHA --------
+# Documenta a excecao ao Global Constraint (ver plano, secao Global Constraints).
+levantou_notnull = False
+try:
+    with db.begin_nested():
+        db.add(ConversationEvent(event_id=str(uuid.uuid4()), event_type=None))
+        db.flush()
+except IntegrityError:
+    levantou_notnull = True
+check(levantou_notnull, "23. ConversationEvent sem event_type (NOT NULL, sem server_default) falha no INSERT")
+
 # --- 15. V1 intacta: a tabela nova nao aparece no model da conversa ------
+# Import feito por ULTIMO de proposito: `Conversation.tags` referencia
+# `ConversationTag`/`conversation_tag_links` por string, e este arquivo nunca
+# importa esses modelos. Fora de ordem, o import registraria um mapper
+# incompleto e QUALQUER `ConversationEvent(...)` construido depois dispararia
+# `InvalidRequestError` ao tentar configurar TODOS os mappers pendentes —
+# nao e falha deste modulo, e reflexo do registry compartilhado do SQLAlchemy.
 from app.models.conversation import Conversation  # noqa: E402
 
 check(

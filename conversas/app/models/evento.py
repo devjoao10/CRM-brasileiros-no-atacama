@@ -33,7 +33,9 @@ class ConversationEvent(Base):
     conversation_id = Column(Integer, nullable=True)
     lead_id = Column(Integer, nullable=True)
     message_id = Column(Integer, nullable=True)
-    whatsapp_msg_id = Column(String(128), nullable=True)
+    # String(100) — mesmo tamanho de Message.whatsapp_msg_id (models/conversation.py):
+    # mesmo dado (wamid da Meta), mesma coluna origem em outbound.py/webhook.py.
+    whatsapp_msg_id = Column(String(100), nullable=True)
 
     state_before = Column(String(32), nullable=True)
     state_after = Column(String(32), nullable=True)

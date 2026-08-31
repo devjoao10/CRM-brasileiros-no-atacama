@@ -10,7 +10,7 @@ Cria (aditivo, sem destruir nada):
       conversation_id   INTEGER      (SEM ForeignKey — ver docstring do model)
       lead_id           INTEGER
       message_id        INTEGER
-      whatsapp_msg_id   VARCHAR(128)
+      whatsapp_msg_id   VARCHAR(100)
       state_before      VARCHAR(32)
       state_after       VARCHAR(32)
       action            VARCHAR(64)
@@ -138,7 +138,7 @@ def run(engine=None, actions=None):
             "    conversation_id INTEGER,"
             "    lead_id INTEGER,"
             "    message_id INTEGER,"
-            "    whatsapp_msg_id VARCHAR(128),"
+            "    whatsapp_msg_id VARCHAR(100),"
             "    state_before VARCHAR(32),"
             "    state_after VARCHAR(32),"
             "    action VARCHAR(64),"
