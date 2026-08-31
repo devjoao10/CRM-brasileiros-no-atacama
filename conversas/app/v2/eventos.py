@@ -43,8 +43,15 @@ class EventoDuplicado(Exception):
     """
 
     def __init__(self, event_id: str):
+        # A mensagem NAO ecoa o valor. Hoje `event_id` sempre chega canonizado
+        # por `validar_event_id` (unico ponto de construcao e
+        # `_persistir_ou_compensar`), mas isso e disciplina de call-site, nao
+        # garantia da classe: um caller futuro (Fase 6) pode construir esta
+        # excecao direto com valor nao validado, e o valor cru voltaria a
+        # aparecer em log ou num 500. O dado continua disponivel de forma
+        # estruturada em `.event_id`, para quem precisar dele de proposito.
         self.event_id = event_id
-        super().__init__(f"event_id duplicado: {event_id!r}")
+        super().__init__("event_id duplicado")
 
 
 def _persistir_ou_compensar(db: Session, evento: ConversationEvent, event_id_final: str) -> None:
