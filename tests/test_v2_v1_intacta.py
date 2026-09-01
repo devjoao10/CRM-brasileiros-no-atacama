@@ -1,8 +1,8 @@
 """
 BIA-V2 Fase 0 / Task 0.3 - guarda de regressao da V1.
 
-Familia A (IMPLEMENTADA): hash SHA-256 dos 8 arquivos que sao o caminho de
-producao da V1 e que o plano proibe alterar durante as Fases 0-10
+Familia A (IMPLEMENTADA): hash SHA-256 dos 8 arquivos V1 explicitamente
+enumerados pela Task 0.3 do plano como baseline imutavel
 (docs/superpowers/plans/2026-08-29-bia-v2.md, secao "Task 0.3"). Nenhum
 codigo de app e importado aqui - so leitura de arquivo e comparacao de hash.
 
@@ -45,8 +45,14 @@ def _sha256_normalizado(caminho: pathlib.Path) -> str:
 # ============================================================================
 # FAMILIA A - imutabilidade de arquivo (IMPLEMENTADA)
 # ----------------------------------------------------------------------------
-# Estes 8 arquivos sao o caminho de producao da V1. Nenhum pode mudar
-# enquanto a V2 for construida em paralelo (Global Constraints do plano).
+# Estes sao os 8 arquivos explicitamente protegidos por hash na Task 0.3.
+# Nenhum pode mudar enquanto a V2 for construida em paralelo.
+#
+# ESCOPO DESTA BASELINE - leia antes de concluir cobertura:
+# A Global Constraint e mais ampla que esta baseline de 8 arquivos. Nesta task,
+# mudancas V1 fora desta lista continuam proibidas e sao detectadas pelos gates
+# de diff/review; ampliar a guarda de hash exige auditoria propria do conjunto
+# completo, nao inclusao ad hoc de dependencias isoladas.
 #
 # POR QUE HASH NORMALIZADO (CRLF -> LF) EM VEZ DO BYTE CRU:
 # medido em HEAD 22f9fb24f117197bb59c7248ce88beb6acebcff7: os 8 blobs
