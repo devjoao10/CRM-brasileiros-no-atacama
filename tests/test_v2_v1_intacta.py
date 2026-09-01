@@ -50,9 +50,10 @@ def _sha256_normalizado(caminho: pathlib.Path) -> str:
 #
 # ESCOPO DESTA BASELINE - leia antes de concluir cobertura:
 # A Global Constraint e mais ampla que esta baseline de 8 arquivos. Nesta task,
-# mudancas V1 fora desta lista continuam proibidas e sao detectadas pelos gates
-# de diff/review; ampliar a guarda de hash exige auditoria propria do conjunto
-# completo, nao inclusao ad hoc de dependencias isoladas.
+# mudancas V1 fora desta lista continuam proibidas, mas NAO sao cobertas por
+# esta guarda de hash; sua deteccao depende dos demais gates de diff/review.
+# Ampliar a guarda de hash exige auditoria propria do conjunto completo, nao
+# inclusao ad hoc de dependencias isoladas.
 #
 # POR QUE HASH NORMALIZADO (CRLF -> LF) EM VEZ DO BYTE CRU:
 # medido em HEAD 22f9fb24f117197bb59c7248ce88beb6acebcff7: os 8 blobs
