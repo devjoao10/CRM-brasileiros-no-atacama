@@ -102,9 +102,9 @@ def _payload_valido(nome):
     raise AssertionError(f"modelo desconhecido: {nome}")
 
 
-# Fonte do modulo, lida uma unica vez - reusada pelos checks 18 (EmailStr /
-# email_validator), 21a (AST dos imports diretos) e 24 (ausencia de validator
-# de negocio).
+# Fonte do modulo, lida uma unica vez - reusada pelos checks 21a (AST dos
+# imports diretos) e 24a (ausencia de validator de negocio no texto, reforcada
+# por introspecao real em 24b).
 _CODIGO_FONTE = (CONVERSAS_DIR / "app" / "v2" / "contratos.py").read_text(encoding="utf-8")
 
 
@@ -318,28 +318,51 @@ levanta(
 )
 
 
-# --- 18. email aceita string plana; SEM dependencia de EmailStr ------------
+# --- 18. email e string plana; SEM dependencia de EmailStr -----------------
+# `email-validator` NAO esta em conversas/requirements.txt. Esta SIM no
+# requirements.txt da raiz (linha 21), que e do CRM — e os dois apps rodam em
+# ambientes SEPARADOS de proposito (os pins conflitam; ver CLAUDE.md). Entao
+# numa maquina onde alguem instalou o ambiente do CRM a lib esta presente por
+# motivo legitimo, e `EmailStr` funcionaria aqui — mas quebraria com
+# ImportError, na definicao da classe, no venv do Conversas e no CI. E o tipo
+# de dependencia que passa no laptop e falha no deploy; dai o cuidado.
+#
+# Tres propriedades garantem isso, e NENHUMA depende do ambiente:
+#   (a) o tipo REAL resolvido do campo `email` e string simples (aqui, 18b);
+#   (b) `import email_validator` DIRETO seria pego pelo check 21a (AST), que
+#       so admite as raizes `datetime` e `pydantic`;
+#   (c) `EmailStr` em QUALQUER campo — inclusive fora de `email`, onde 18b nao
+#       olha — e pego pelo check 21c, porque `email_validator` esta em
+#       `_SUSPEITOS_IMPORT`.
+#
+# (c) NAO e redundante com (b), e a distincao importa: `21a` PERMITE a raiz
+# `pydantic`, entao `from pydantic import EmailStr` passa por ele sem alarme.
+# O que dispara a dependencia nao e importar o nome, e USA-LO como tipo de
+# campo — ai o Pydantic chama `import_email_validator()` ao montar o schema,
+# na definicao da classe. Quem detecta esse caso e so o delta de runtime do
+# 21c. Se alguem concluir que a entrada `email_validator` em `_SUSPEITOS_IMPORT`
+# e redundante e remove-la, a lacuna reabre.
+#
+# Versoes anteriores deste bloco tinham mais tres checks, todos removidos por
+# medirem a coisa errada:
+#   - dois por TEXTO (`"EmailStr" not in _CODIGO_FONTE`): bastaria alguem
+#     escrever "decidimos nao usar EmailStr" num comentario para quebrar o
+#     teste sem nenhuma mudanca semantica - a mesma armadilha do check 22,
+#     onde "DomainEvent" aparece na docstring;
+#   - um por PRESENCA ABSOLUTA (`"email_validator" not in sys.modules`): se a
+#     lib vier pre-carregada por sitecustomize, plugin ou outra dependencia, o
+#     teste falha mesmo que contratos.py nunca a importe. E exatamente o
+#     defeito que o check 21 corrigiu, repetido aqui.
 _td_email = TriageData(email="nao-e-um-email-formatado-de-verdade")
 check(
     _td_email.email == "nao-e-um-email-formatado-de-verdade",
     "18a. TriageData.email aceita qualquer string, sem validar formato de e-mail",
 )
-check("EmailStr" not in _CODIGO_FONTE, "18b. codigo-fonte do modulo NAO referencia EmailStr")
-check("email_validator" not in _CODIGO_FONTE, "18c. codigo-fonte do modulo NAO referencia email_validator")
-# 18b/18c olham TEXTO, e texto e fragil: bastaria alguem escrever "decidimos nao
-# usar EmailStr" num comentario para o check virar falso-negativo silencioso. Os
-# dois abaixo olham o TIPO REAL resolvido pelo Pydantic e o estado do processo,
-# que nenhuma prosa altera. Mesma licao do check 22, onde "DomainEvent" aparece
-# na docstring do modulo.
 _anot_email = repr(TriageData.model_fields["email"].annotation)
 check(
     "EmailStr" not in _anot_email and "str" in _anot_email,
-    f"18d. tipo resolvido de TriageData.email e str simples, nao EmailStr "
+    f"18b. tipo resolvido de TriageData.email e str simples, nao EmailStr "
     f"(real={_anot_email})",
-)
-check(
-    "email_validator" not in sys.modules,
-    "18e. importar app.v2.contratos NAO carregou email_validator neste processo",
 )
 
 
@@ -412,6 +435,12 @@ _SUSPEITOS_IMPORT = [
     "requests",
     "fastapi",
     "app.v2.eventos",
+    # `email_validator` entra aqui pela lacuna que a revisao do check 18 expos:
+    # 18a/18b so inspecionam `TriageData.email`, e `21a` deixa passar
+    # `from pydantic import EmailStr` porque `pydantic` e raiz permitida. Sem
+    # esta linha, usar EmailStr em QUALQUER outro campo nao seria detectado —
+    # e o check 18e removido, apesar de fragil, cobria o modulo inteiro.
+    "email_validator",
 ]
 
 # PROVA A - imports DIRETOS, por AST. Nao depende de runtime nem de ambiente:
