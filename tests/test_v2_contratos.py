@@ -17,6 +17,7 @@ raiz da falha de producao que esta V2 existe para corrigir.
 
 Roda standalone:  python tests/test_v2_contratos.py
 """
+import ast
 import pathlib
 import subprocess
 import sys
@@ -102,7 +103,8 @@ def _payload_valido(nome):
 
 
 # Fonte do modulo, lida uma unica vez - reusada pelos checks 18 (EmailStr /
-# email_validator) e 24 (ausencia de validator de negocio).
+# email_validator), 21a (AST dos imports diretos) e 24 (ausencia de validator
+# de negocio).
 _CODIGO_FONTE = (CONVERSAS_DIR / "app" / "v2" / "contratos.py").read_text(encoding="utf-8")
 
 
@@ -387,10 +389,21 @@ for _nome, _instancia in _INSTANCIAS_RICAS.items():
     check(_recarregado == _instancia, f"20. {_nome}: model_dump() -> model_validate() preserva o contrato")
 
 
-# --- 21. inercia de import, verificada em subprocesso LIMPO ----------------
-# Precisa ser um processo novo: checar sys.modules no MESMO processo deste
-# arquivo de teste poderia ser mascarado por qualquer coisa que este arquivo
-# (ou um import anterior no mesmo processo) ja tenha carregado antes.
+# --- 21. inercia de import: DUAS provas complementares ---------------------
+# A versao anterior deste check media o ESTADO ABSOLUTO de `sys.modules` depois
+# de importar `contratos.py`, e exigia ausencia total dos suspeitos. Isso
+# confundia duas propriedades diferentes:
+#
+#   (A) acoplamento introduzido por `contratos.py`;
+#   (B) o que o proprio Pydantic / sitecustomize / ambiente ja carregam.
+#
+# Num ambiente onde importar `pydantic` ja traz `requests` para `sys.modules`,
+# o check acusava falha sem que `contratos.py` tivesse relacao nenhuma com
+# `requests`. Falso positivo: `requests in sys.modules` NAO prova acoplamento.
+# E teste que passa numa maquina e falha noutra por motivo alheio ao codigo
+# acaba desativado, que e o pior desfecho para uma guarda.
+#
+# As duas provas abaixo separam (A) de (B).
 _SUSPEITOS_IMPORT = [
     "sqlalchemy",
     "app.database",
@@ -400,13 +413,55 @@ _SUSPEITOS_IMPORT = [
     "fastapi",
     "app.v2.eventos",
 ]
+
+# PROVA A - imports DIRETOS, por AST. Nao depende de runtime nem de ambiente:
+# le a arvore sintatica do arquivo e exige que TODO import venha de
+# `datetime` ou `pydantic`. `ast.walk` percorre a arvore INTEIRA, entao pega
+# tambem import escondido dentro de funcao, `if` ou `try` — nao so os do topo.
+# A raiz vem de `alias.name`, nao de `asname`: `import requests as rq` nao
+# escapa. Pega mesmo que o modulo nunca seja executado.
+#
+# O que a PROVA A NAO pega: import dinamico (`__import__("requests")` e um
+# Call, nao um Import). Limitacao inerente a analise estatica; a PROVA B cobre
+# em runtime quando o alvo e um dos suspeitos.
+_MODULOS_RAIZ_PERMITIDOS = {"datetime", "pydantic"}
+
+
+def _raizes_importadas(codigo_fonte: str) -> set[str]:
+    """Modulos-raiz de todo import direto do arquivo (via AST)."""
+    raizes = set()
+    for no in ast.walk(ast.parse(codigo_fonte)):
+        if isinstance(no, ast.Import):
+            for alias in no.names:
+                raizes.add(alias.name.split(".")[0])
+        elif isinstance(no, ast.ImportFrom):
+            # `from . import x` tem module=None; guarda o ponto como raiz
+            # relativa, que tambem nao e permitida aqui.
+            raizes.add((no.module or ".").split(".")[0])
+    return raizes
+
+
+_RAIZES = _raizes_importadas(_CODIGO_FONTE)
+check(
+    _RAIZES <= _MODULOS_RAIZ_PERMITIDOS,
+    f"21a. (PROVA A/AST) imports diretos de contratos.py vem so de "
+    f"{sorted(_MODULOS_RAIZ_PERMITIDOS)} (encontrados={sorted(_RAIZES)})",
+)
+
+# PROVA B - DELTA de runtime. Tira snapshot de `sys.modules` DEPOIS de importar
+# `pydantic` e ANTES de importar o contrato; o que interessa e so o que entrou
+# entre os dois pontos. Se `requests` ja veio junto do Pydantic, esta no
+# baseline e nao conta. Se aparecer so depois, foi `contratos.py` que trouxe.
 _codigo_filho = (
     "import sys\n"
     f"sys.path.insert(0, {str(CONVERSAS_DIR)!r})\n"
+    "import pydantic  # baseline: tudo que o proprio Pydantic arrasta\n"
+    "baseline = set(sys.modules)\n"
     "import app.v2.contratos\n"
+    "delta = set(sys.modules) - baseline\n"
     f"suspeitos = {_SUSPEITOS_IMPORT!r}\n"
-    "presentes = [m for m in suspeitos if m in sys.modules]\n"
-    "print('PRESENTES:' + (','.join(presentes) if presentes else 'NENHUM'))\n"
+    "novos = sorted(m for m in suspeitos if m in delta)\n"
+    "print('NOVOS:' + (','.join(novos) if novos else 'NENHUM'))\n"
 )
 _resultado_subproc = subprocess.run(
     [sys.executable, "-c", _codigo_filho],
@@ -414,14 +469,16 @@ _resultado_subproc = subprocess.run(
 )
 check(
     _resultado_subproc.returncode == 0,
-    f"21a. subprocesso limpo importa app.v2.contratos sem erro "
+    f"21b. subprocesso limpo importa app.v2.contratos sem erro "
     f"(rc={_resultado_subproc.returncode}, stderr={_resultado_subproc.stderr!r})",
 )
 _saida_subproc = _resultado_subproc.stdout.strip()
 check(
-    _saida_subproc == "PRESENTES:NENHUM",
-    f"21b. NENHUM de {_SUSPEITOS_IMPORT} entra em sys.modules so por importar app.v2.contratos "
-    f"(saida={_saida_subproc!r}, stderr={_resultado_subproc.stderr!r})",
+    _saida_subproc == "NOVOS:NENHUM",
+    f"21c. (PROVA B/DELTA) nenhum suspeito NOVO alem do baseline do pydantic "
+    f"entra em sys.modules ao importar app.v2.contratos - mede o delta, nao a "
+    f"presenca absoluta (suspeitos={_SUSPEITOS_IMPORT}, saida={_saida_subproc!r}, "
+    f"stderr={_resultado_subproc.stderr!r})",
 )
 
 

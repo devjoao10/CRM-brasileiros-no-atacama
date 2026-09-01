@@ -23,14 +23,24 @@ inteira desta V2 existe porque decisao espalhada por camadas que nao a
 declaram foi exatamente o que quebrou na V1.
 
 INERCIA DE IMPORT — propriedade, nao coincidencia
-Importar este modulo carrega `pydantic` e `datetime`, e nada mais. Sem
+Este modulo importa diretamente apenas `datetime` e `pydantic`, e nao possui
+imports de infraestrutura da aplicacao nem de integracoes externas: sem
 SQLAlchemy, sem `app.database`, sem `app.models`, sem httpx, sem CRM, sem
 n8n. Em particular NAO importa `app.v2.eventos`, que arrasta o model, o
 `database` e o `config` (este ultimo levanta `RuntimeError` sem `SECRET_KEY`
 fora de development). Os enums de evento tambem nao sao importados: nenhum
 dos 6 modelos os usa, e import nao utilizado e acoplamento antecipado. Se um
 dia forem precisos, vem de `app.v2.eventos_validacao` — stdlib puro, sem
-ciclo —, nunca de `eventos.py`. Travado por teste.
+ciclo —, nunca de `eventos.py`.
+
+A afirmacao acima e sobre os imports DESTE arquivo, deliberadamente: o que o
+proprio Pydantic carrega por baixo e problema dele e varia por ambiente.
+Dizer "importar este modulo carrega pydantic e datetime, e NADA MAIS" seria
+afirmar algo sobre dependencia transitiva de terceiro que este modulo nao
+controla — e um teste escrito sobre essa afirmacao acusaria falha em maquina
+onde o Pydantic puxa outra coisa, sem que nada aqui tivesse mudado. Travado
+por teste em duas frentes: AST dos imports diretos, e delta de `sys.modules`
+medido a partir do baseline do proprio Pydantic.
 
 TIPOS ESTRITOS
 `StrictStr`/`StrictInt`/`StrictBool` sao deliberados: sem eles o Pydantic
