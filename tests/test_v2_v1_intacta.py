@@ -6,10 +6,9 @@ enumerados pela Task 0.3 do plano como baseline imutavel
 (docs/superpowers/plans/2026-08-29-bia-v2.md, secao "Task 0.3"). Nenhum
 codigo de app e importado aqui - so leitura de arquivo e comparacao de hash.
 
-Familia B (DIFERIDA ate a Fase 4): ver o bloco proprio mais abaixo. Este
-arquivo NAO implementa as 5 provas de independencia semantica agora - so
-um tripwire que falha no instante em que a Fase 4 tornar essas provas
-possiveis, para que a ausencia de Familia B nunca passe despercebida.
+Familia B (ATIVADA na Fase 4): ver o bloco proprio mais abaixo. Implementa
+as 5 provas de independencia semantica (B.1 a B.5) que substituem os dois
+tripwires originais - nunca os silencia.
 
 CONVERSAS_DIR presente de proposito (marcador de job do CI, ver
 .github/workflows/test.yml, que separa os dois jobs por grep -l CONVERSAS_DIR).
@@ -20,6 +19,7 @@ import hashlib
 import pathlib
 import re
 import sys
+from datetime import datetime, timezone
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CONVERSAS_DIR = ROOT / "conversas"
@@ -107,101 +107,330 @@ for caminho, esperado in _PROTEGIDOS:
 
 
 # ============================================================================
-# FAMILIA B - DIFERIDA ate a Fase 4 (ver Task 0.3 do plano)
+# FAMILIA B - independencia semantica das colunas V2 (ATIVADA na Fase 4)
 # ----------------------------------------------------------------------------
-# As 5 provas abaixo SO fazem sentido depois que `state`, `state_version` e
-# `closed_at` existirem em algum lugar (Fase 4). Escreve-las agora daria
-# PASS falso: passariam so porque as colunas nao existem em lugar nenhum,
-# nao porque a independencia semantica foi provada. NAO IMPLEMENTADO aqui
-# de proposito - so um tripwire que verifica as duas pre-condicoes validas
-# na Fase 0-3 e FALHA no instante em que a Fase 4 chegar.
+# Ate a Fase 3 este bloco era um TRIPWIRE: falhava de proposito no instante em
+# que `state`/`state_version`/`closed_at` aparecessem, para que a ausencia das
+# provas nunca passasse despercebida. A Fase 4 criou as colunas, o tripwire
+# disparou, e as cinco provas abaixo o SUBSTITUEM - nunca o silenciam.
 #
-# As 5 provas que a Fase 4 exige (NAO implementadas neste arquivo, apenas
-# documentadas para quem for ativa-las):
-#   B.1 grep por state / state_version / closed_at nos 8 arquivos da
-#       Familia A: zero ocorrencias fora de comentario (regex de palavra
-#       inteira - status e _STATUS_ABERTOS nao contam).
-#   B.2 GET /api/conversations/{id} sobre conversa com state='AI_TRIAGE',
-#       state_version=7, closed_at preenchido NAO expoe essas 3 chaves no
-#       JSON. Ao implementar, mire a classe que esta de fato no @router.get:
-#       o response_model dessa rota e ConversationDetailWithWindow, declarada
-#       no proprio router (conversas/app/routers/conversations.py:110), e nao
-#       ConversationResponse de schemas/conversation.py - aquela e a base da
-#       cadeia. Nenhuma classe da cadeia declara os 3 campos hoje, entao a
-#       conclusao vale; so o alvo do teste precisa ser a subclasse certa.
-#   B.3 a V1 opera normalmente (listar, claim, assign, release, enviar
-#       mensagem, encerrar) sobre uma linha state='AI_TRIAGE', com o mesmo
-#       resultado de uma linha LEGACY.
-#   B.4 apos claim+assign+release+envio pela V1, state_version permanece
-#       INALTERADO (prova do risco R8 - deve falhar se alguem "resolver"
-#       R8 sem novo desenho).
-#   B.5 uma linha state='LEGACY' com atendente_id != responsavel_id,
-#       is_bot_active=True e queued_at=NULL e aceita pelo banco (CHECK
-#       inerte para LEGACY).
-_MODEL_CONVERSATION = CONVERSAS_DIR / "app/models/conversation.py"
-_MIGRATIONS_DIR = ROOT / "migrations"
+# O que se prova aqui NAO e invisibilidade: o model `Conversation` e UNICO e
+# compartilhado, entao o ORM da V1 passa a CARREGAR as tres colunas em todo
+# SELECT. A garantia correta e que nenhum fluxo da V1 LE, ESCREVE ou RAMIFICA
+# sobre elas.
+# ============================================================================
+
+# --- B.1 - nenhum fluxo V1 referencia as colunas novas ----------------------
+# Duas provas sobre os mesmos 8 arquivos, porque uma sozinha e fraca:
+#   (a) AST - pega `conversation.state`, `getattr(x, "state")`, `c["state"]` e
+#       atribuicao, que e o que "ler/escrever/ramificar" realmente significa;
+#   (b) grep de palavra inteira fora de comentario, como a Task 0.3 especifica.
+# `state` exige `\b` dos dois lados: `status` e `_STATUS_ABERTOS` nao contam.
+import ast as _ast
+import tokenize as _tokenize
+
 _COLUNAS_V2 = ("state", "state_version", "closed_at")
-# Aceita os dois estilos de declaracao do SQLAlchemy: o classico
-# `state = Column(...)`, unico usado no projeto hoje, e o 2.0
-# `state: Mapped[str] = mapped_column(...)`. Reconhecer so o primeiro deixaria
-# o tripwire MUDO se a Fase 4 mudasse de convencao - reportando "nenhuma
-# coluna V2 declarada" com as colunas ja existindo, que e exatamente o falso
-# PASS que este bloco existe para impedir. O `\b` depois do grupo garante que
-# `status = Column(...)` (campo real da V1) nunca casa.
-_PADRAO_COLUNA_V2 = re.compile(
-    r"(?m)^\s*\b(" + "|".join(_COLUNAS_V2) + r")\b\s*(?::[^=\n]+)?=\s*"
-    r"(?:mapped_column|Column)\("
-)
+_RE_PALAVRA = re.compile(r"\b(" + "|".join(_COLUNAS_V2) + r")\b")
 
-# Qualquer migration numerada acima da m013 - nao so m014/m015. Travar nos dois
-# numeros que o plano preve hoje deixaria o tripwire mudo se a Fase 4 saisse com
-# outra numeracao, ou se outra migration tomasse esses numeros antes dela.
-aviso_fase4 = (
-    "FASE 4 CHEGOU: Familia B (B.1-B.5, ver comentario acima) precisa ser "
-    "IMPLEMENTADA e ATIVADA agora - nunca silenciada nem apagada deste arquivo."
-)
 
-# Ausencia do model e FAIL proprio, e NAO um "nenhuma coluna declarada": sem o
-# arquivo o tripwire nao foi avaliado, e dizer OK aqui seria afirmar uma leitura
-# que nao aconteceu.
-if not _MODEL_CONVERSATION.is_file():
-    check(False, f"ARQUIVO AUSENTE (tripwire de colunas nao pode ser avaliado): {_MODEL_CONVERSATION}")
-else:
-    texto_model = _MODEL_CONVERSATION.read_text(encoding="utf-8")
-    colunas_v2_ja_declaradas = sorted(set(_PADRAO_COLUNA_V2.findall(texto_model)))
-    if colunas_v2_ja_declaradas:
-        msg_tripwire_colunas = f"{aviso_fase4} colunas ja declaradas: {colunas_v2_ja_declaradas}"
-    else:
-        msg_tripwire_colunas = (
-            f"tripwire Familia B: nenhuma coluna V2 declarada ainda em "
-            f"{_MODEL_CONVERSATION.name} - B.1-B.5 seguem DIFERIDOS (nao verificados)"
-        )
-    check(not colunas_v2_ja_declaradas, msg_tripwire_colunas)
-
-# Mesma razao do bloco de colunas acima, com um gotcha proprio:
-# `Path("inexistente").glob(...)` devolve lista vazia SEM levantar.
-#
-# A mensagem de disparo NAO reusa `aviso_fase4`: uma migration acima da m013
-# prova que o SCHEMA se moveu, nao que a Fase 4 chegou. As duas coisas coincidem
-# no caminho planejado (m014/m015 sao dela), mas uma migration nao relacionada
-# tomando esse numero faria a mensagem afirmar uma fase que nao chegou.
-if not _MIGRATIONS_DIR.is_dir():
-    check(False, f"DIRETORIO AUSENTE (tripwire de migrations nao pode ser avaliado): {_MIGRATIONS_DIR}")
-else:
-    migracoes_alem_da_m013 = sorted(
-        p.name for p in _MIGRATIONS_DIR.glob("m[0-9][0-9][0-9]_*.py")
-        if int(p.name[1:4]) > 13
+def _sem_comentarios(caminho):
+    """Fonte com os tokens COMMENT removidos - a Task 0.3 exige 'fora de comentario'."""
+    with open(caminho, "rb") as fh:
+        try:
+            toks = list(_tokenize.tokenize(fh.readline))
+        except (_tokenize.TokenError, SyntaxError, IndentationError, TabError):
+            return caminho.read_text(encoding="utf-8")
+    # t[:2] descarta a posicao original de cada token, entao untokenize() cai no
+    # modo "compat": renumera linhas contando NEWLINE/NL, nao pela posicao real do
+    # source. Inofensivo para os 8 arquivos protegidos (nenhum usa continuacao de
+    # linha "\"); se algum passar a usar, so o NUMERO DE LINHA de uma falha futura
+    # ficaria incorreto - o resultado do check em si continuaria correto.
+    return _tokenize.untokenize(
+        [t[:2] for t in toks if t.type not in (_tokenize.COMMENT, _tokenize.ENCODING)]
     )
-    if migracoes_alem_da_m013:
-        msg_tripwire_migrations = (
-            f"SCHEMA MUDOU: migration nova alem da m013 ({migracoes_alem_da_m013}). "
-            f"Se sao as colunas da Fase 4, a Familia B (B.1-B.5, ver comentario acima) "
-            f"precisa ser IMPLEMENTADA e ATIVADA agora - nunca silenciada. Se e outra "
-            f"coisa, reavalie a Familia B e atualize este tripwire por decisao humana."
-        )
-    else:
-        msg_tripwire_migrations = "tripwire Familia B: nenhuma migration alem da m013 existe ainda"
-    check(not migracoes_alem_da_m013, msg_tripwire_migrations)
+
+
+def _referencias_ast(caminho):
+    """Toda referencia sintatica as tres colunas: atributo, getattr, subscript, nome."""
+    arvore = _ast.parse(caminho.read_text(encoding="utf-8"))
+    achados = []
+    for no in _ast.walk(arvore):
+        if isinstance(no, _ast.Attribute) and no.attr in _COLUNAS_V2:
+            achados.append(f"{caminho.name}:{no.lineno} .{no.attr}")
+        elif isinstance(no, _ast.Name) and no.id in _COLUNAS_V2:
+            achados.append(f"{caminho.name}:{no.lineno} nome {no.id}")
+        elif isinstance(no, _ast.Constant) and no.value in _COLUNAS_V2:
+            achados.append(f"{caminho.name}:{no.lineno} literal {no.value!r}")
+    return achados
+
+
+# --- B.1 (prova direta) - _sem_comentarios() remove SO o comentario --------
+# Achado da revisao independente: nenhum dos 8 arquivos protegidos contem a
+# palavra "state" (dentro ou fora de comentario) - o loop abaixo passaria hoje
+# mesmo se _sem_comentarios() estivesse quebrado. Prova o helper isolado, com
+# uma fonte sintetica, sem depender do conteudo real dos 8 arquivos.
+_fonte_sintetica = (
+    "x = 1  # state usado so em comentario\n"
+    "state = 1\n"
+)
+_arq_sintetico = ROOT / "scratch" / "v2_v1_intacta_sem_comentarios.py"
+_arq_sintetico.parent.mkdir(exist_ok=True)
+_arq_sintetico.write_text(_fonte_sintetica, encoding="utf-8")
+try:
+    _linhas_sinteticas = _sem_comentarios(_arq_sintetico).splitlines()
+finally:
+    _arq_sintetico.unlink()
+
+check(
+    len(_linhas_sinteticas) == 2 and not _RE_PALAVRA.search(_linhas_sinteticas[0]),
+    f"B.1 direto: 'state' SO em comentario e removido por _sem_comentarios() ({_linhas_sinteticas!r})",
+)
+check(
+    len(_linhas_sinteticas) == 2 and bool(_RE_PALAVRA.search(_linhas_sinteticas[1])),
+    f"B.1 direto: 'state' em codigo real continua presente - helper nao e tolerante demais ({_linhas_sinteticas!r})",
+)
+
+
+for _caminho, _ in _PROTEGIDOS:
+    if not _caminho.is_file():
+        continue
+    _ast_hits = _referencias_ast(_caminho)
+    check(not _ast_hits, f"B.1 AST: {_caminho.name} nao referencia as colunas V2 ({_ast_hits[:3]})")
+
+    _grep_hits = []
+    for _n, _linha in enumerate(_sem_comentarios(_caminho).splitlines(), 1):
+        if _RE_PALAVRA.search(_linha):
+            _grep_hits.append(f"{_caminho.name}:{_n}")
+    check(not _grep_hits, f"B.1 grep: {_caminho.name} sem ocorrencia fora de comentario ({_grep_hits[:3]})")
+
+
+# --- bootstrap do app, so a partir daqui (B.2 a B.5 precisam da V1 rodando) --
+import os  # noqa: E402
+
+_DB = ROOT / "scratch" / "v2_v1_intacta_famB.db"
+_DB.parent.mkdir(exist_ok=True)
+if _DB.exists():
+    _DB.unlink()
+
+os.environ["ENVIRONMENT"] = "development"
+os.environ["DATABASE_URL"] = f"sqlite:///{_DB.as_posix()}"
+os.environ["SECRET_KEY"] = "test-secret-key"
+os.environ["CONVERSAS_SEED_DEV_DATA"] = "false"
+os.environ["META_APP_SECRET"] = ""
+os.environ["N8N_AGENT_ENABLED"] = "false"
+
+sys.path.insert(0, str(CONVERSAS_DIR))
+
+from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import text as _sa_text  # noqa: E402
+import sqlalchemy.exc  # noqa: E402
+
+import app.main as _main  # noqa: E402
+from app.auth import User as _User, get_current_user  # noqa: E402
+from app.database import Base as _Base, SessionLocal as _Session, engine as _engine  # noqa: E402
+from app.models.conversation import Conversation as _Conversation  # noqa: E402
+
+_Base.metadata.create_all(bind=_engine)
+
+_db = _Session()
+_u1 = _User(nome="Um", email="b1@x.com", hashed_password="x", is_active=True)
+_u2 = _User(nome="Dois", email="b2@x.com", hashed_password="x", is_active=True)
+_db.add_all([_u1, _u2])
+_db.commit()
+_U1, _U2 = _u1.id, _u2.id
+
+
+def _cria(wa, state):
+    """Conversa V1 comum, com `state` escrito DIRETO no banco (a V1 nunca o escreve).
+    `last_customer_msg_at` recebe o instante atual para que a janela de 24h
+    (CONV-WINDOW-01) esteja aberta - sem isso, o passo 'mensagem' do ciclo V1
+    seria rejeitado com 409 para as duas conversas por igual, o que provaria
+    equivalencia mas nao o efeito real que a Task 0.3 pede."""
+    conv = _Conversation(lead_id=1, whatsapp=wa, status="aberta", unread_count=0, is_bot_active=True)
+    _db.add(conv)
+    _db.commit()
+    _db.execute(
+        _sa_text("UPDATE conversations SET state=:s, state_version=7, closed_at=:c,"
+                  " last_customer_msg_at=:lc WHERE id=:i"),
+        {"s": state, "c": "2026-01-01 00:00:00",
+         "lc": datetime.now(timezone.utc).isoformat(), "i": conv.id},
+    )
+    _db.commit()
+    return conv.id
+
+
+_main.app.dependency_overrides[get_current_user] = lambda: _u1
+_client = TestClient(_main.app)
+
+_OPERACIONAIS = ("is_bot_active", "atendente_id", "responsavel_id", "queued_at",
+                 "primeira_resposta_humana_at", "status", "unread_count")
+
+
+def _estado_operacional(cid):
+    _db.expire_all()
+    linha = _db.execute(
+        _sa_text("SELECT " + ", ".join(_OPERACIONAIS) + " FROM conversations WHERE id=:i"),
+        {"i": cid},
+    ).fetchone()
+    return dict(zip(_OPERACIONAIS, linha))
+
+
+def _colunas_v2(cid):
+    _db.expire_all()
+    linha = _db.execute(
+        _sa_text("SELECT state, state_version, closed_at FROM conversations WHERE id=:i"),
+        {"i": cid},
+    ).fetchone()
+    return dict(zip(("state", "state_version", "closed_at"), linha))
+
+
+def _ciclo_v1(cid):
+    """A MESMA sequencia V1, na mesma ordem, para as duas linhas -
+    listar, detalhe, claim, assign, release, enviar mensagem, encerrar (Task 0.3)."""
+    passos = []
+    passos.append(("listar", _client.get("/api/conversations").status_code))
+    passos.append(("detalhe", _client.get(f"/api/conversations/{cid}").status_code))
+    passos.append(("claim", _client.post(f"/api/conversations/{cid}/claim").status_code))
+    passos.append(("assign", _client.post(f"/api/conversations/{cid}/assign",
+                                          json={"user_id": _U2}).status_code))
+    passos.append(("release", _client.post(f"/api/conversations/{cid}/release").status_code))
+    passos.append(("mensagem", _client.post(f"/api/conversations/{cid}/messages",
+                                            json={"content": "oi"}).status_code))
+    passos.append(("encerrar", _client.put(f"/api/conversations/{cid}",
+                                           json={"status": "encerrada"}).status_code))
+    return passos
+
+
+import datetime as _datetime_module  # noqa: E402
+from unittest.mock import patch  # noqa: E402
+
+_NOW_CONGELADO = datetime.now(timezone.utc)
+
+
+class _RelogioCongelado(_datetime_module.datetime):
+    """Subclasse real de datetime - so `.now()` e fixo; isoformat, aritmetica,
+    comparacao e timezone continuam herdados e corretos."""
+
+    @classmethod
+    def now(cls, tz=None):
+        return _NOW_CONGELADO if tz is not None else _NOW_CONGELADO.replace(tzinfo=None)
+
+
+# --- B.2 - a API da V1 nao expoe os tres campos -----------------------------
+# O alvo e o response_model REAL da rota: ConversationDetailWithWindow, declarada
+# no proprio router. Mirar a classe-base provaria a propriedade sobre um objeto
+# que a rota nao devolve.
+_cid_b2 = _cria("5511900000002", "AI_TRIAGE")
+_resp = _client.get(f"/api/conversations/{_cid_b2}")
+check(_resp.status_code == 200, f"B.2 GET /{{id}} responde 200 (obteve {_resp.status_code})")
+_json = _resp.json() if _resp.status_code == 200 else {}
+for _campo in _COLUNAS_V2:
+    check(_campo not in _json, f"B.2 o JSON da V1 NAO expoe a chave {_campo!r}")
+check(
+    _colunas_v2(_cid_b2)["state"] == "AI_TRIAGE",
+    "B.2 pre-condicao real: a linha consultada TINHA state='AI_TRIAGE' (senao a prova e vazia)",
+)
+
+from app.routers.conversations import ConversationDetailWithWindow as _RespModel  # noqa: E402
+
+check(
+    not any(c in _RespModel.model_fields for c in _COLUNAS_V2),
+    "B.2 o response_model da rota nao DECLARA nenhuma das tres colunas",
+)
+
+# --- B.3 - equivalencia operacional entre LEGACY e AI_TRIAGE ----------------
+# Nao basta "nao quebrou": a V1 tem de produzir o MESMO resultado nas duas.
+_cid_legacy = _cria("5511900000003", "LEGACY")
+_cid_v2 = _cria("5511900000004", "AI_TRIAGE")
+
+with patch("app.services.atendimento.datetime", _RelogioCongelado):
+    _passos_legacy = _ciclo_v1(_cid_legacy)
+    _passos_v2 = _ciclo_v1(_cid_v2)
+check(_passos_legacy == _passos_v2,
+      f"B.3 a mesma sequencia V1 devolve os MESMOS status HTTP ({_passos_legacy} vs {_passos_v2})")
+check(all(200 <= c < 300 for _, c in _passos_legacy),
+      f"B.3 pre-condicao: o ciclo V1 realmente rodou, sem erro ({_passos_legacy})")
+
+_op_legacy = _estado_operacional(_cid_legacy)
+_op_v2 = _estado_operacional(_cid_v2)
+check(_op_legacy == _op_v2,
+      f"B.3 os campos OPERACIONAIS terminam identicos ({_op_legacy} vs {_op_v2})")
+
+# Os unicos campos autorizados a divergir sao os tres da V2.
+check(_colunas_v2(_cid_legacy)["state"] == "LEGACY" and _colunas_v2(_cid_v2)["state"] == "AI_TRIAGE",
+      "B.3 e `state` continua diferente entre as duas - a divergencia autorizada")
+
+# --- B.4 - a V1 NUNCA incrementa state_version ------------------------------
+# Prova executavel do risco R8. Falha de proposito se alguem "resolver" R8 sem
+# desenho novo - nao e verificacao de saude, e trava.
+_antes_v2 = _colunas_v2(_cid_v2)
+check(_antes_v2["state_version"] == 7,
+      f"B.4 pre-condicao: state_version era 7 antes do ciclo (obteve {_antes_v2['state_version']})")
+_cid_b4 = _cria("5511900000005", "AI_TRIAGE")
+_ciclo_v1(_cid_b4)
+_depois = _colunas_v2(_cid_b4)
+check(_depois["state_version"] == 7,
+      f"B.4 claim+assign+release+mensagem+encerrar NAO incrementou state_version (R8) - obteve {_depois['state_version']}")
+# Segundo envio, independente do que ja ocorreu dentro de _ciclo_v1 - reforca R8
+# sobre uma mensagem adicional, nao repete a mesma prova.
+_msg = _client.post(f"/api/conversations/{_cid_b4}/messages", json={"content": "oi"})
+check(_colunas_v2(_cid_b4)["state_version"] == 7,
+      "B.4 uma segunda mensagem pela V1 tambem nao incrementa state_version")
+
+# --- B.5 - o CHECK e inerte para LEGACY -------------------------------------
+_erro_legacy = None
+try:
+    _db.execute(_sa_text(
+        "INSERT INTO conversations (lead_id, whatsapp, status, unread_count, is_bot_active,"
+        " atendente_id, responsavel_id, queued_at, state)"
+        " VALUES (1, '5511900000006', 'aberta', 0, 1, 1, 2, NULL, 'LEGACY')"))
+    _db.commit()
+except sqlalchemy.exc.IntegrityError as _exc:
+    _db.rollback()
+    _erro_legacy = str(_exc)
+check(_erro_legacy is None,
+      f"B.5 CHECK INERTE para LEGACY: at!=resp, bot ON, queued_at NULL e aceito ({_erro_legacy})")
+
+# PROVA SEPARADA, e nao a mesma: o storage tolera `state` NULL por
+# compatibilidade aditiva, e a MAQUINA V2 recusa essa linha. Sao duas
+# propriedades diferentes - o banco nao sabe da regra, e B.5 nao prova a
+# semantica de NULL (decisao 10 do subgate da Fase 4).
+_erro_null = None
+try:
+    _db.execute(_sa_text(
+        "INSERT INTO conversations (lead_id, whatsapp, status, unread_count, is_bot_active,"
+        " atendente_id, responsavel_id, queued_at, state)"
+        " VALUES (1, '5511900000007', 'aberta', 0, 1, 1, 2, NULL, NULL)"))
+    _db.commit()
+except sqlalchemy.exc.IntegrityError as _exc:
+    _db.rollback()
+    _erro_null = str(_exc)
+check(_erro_null is None, f"B.5b o STORAGE aceita state NULL ({_erro_null})")
+
+from app.v2.estados import Estado as _Estado, TransicaoInvalida as _TI, aplicar_transicao as _apl  # noqa: E402
+
+
+class _Fake:
+    state = None
+    state_version = 0
+    closed_at = None
+    is_bot_active = True
+    atendente_id = None
+    responsavel_id = None
+    queued_at = None
+    primeira_resposta_humana_at = None
+    status = "aberta"
+
+
+_recusou = False
+try:
+    _apl(_Fake(), _Estado.AI_TRIAGE, motivo="prova_null")
+except _TI as _exc:
+    _recusou = "estado_atual_invalido" in str(_exc)
+check(_recusou, "B.5c mas a MAQUINA V2 RECUSA state NULL (fail closed, decisao 10)")
+
+_main.app.dependency_overrides.clear()
+_db.close()
 
 
 print()
