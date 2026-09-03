@@ -72,6 +72,24 @@ N8N_AGENT_ENABLED = os.getenv("N8N_AGENT_ENABLED", "false").lower() == "true"
 N8N_WEBHOOK_AUTH_HEADER = os.getenv("N8N_WEBHOOK_AUTH_HEADER", "").strip()
 N8N_WEBHOOK_AUTH_VALUE = os.getenv("N8N_WEBHOOK_AUTH_VALUE", "").strip()
 
+# ─── IA Gemini (BIA-V2 Fases 8 e 9) ───────────────
+# Mesmo nome de env var do CRM (app/config.py) — a chave e a MESMA credencial
+# Gemini; o SDK que a consome diverge do CRM (google-genai aqui, nao
+# google.generativeai — ver o docstring de app/v2/interpretador.py para o
+# motivo). Vazio por default, sem RuntimeError: mesmo padrao lazy-check do
+# CRM — ausencia so falha na hora de chamar a IA, nunca no boot.
+#
+# UNICA definicao para os DOIS consumidores V2: app/v2/interpretador.py
+# (Fase 8, `_chamar_llm`) e app/v2/comunicador.py (Fase 9, `_chamar_gemini`).
+# As duas fases originalmente declaravam esta variavel em blocos separados —
+# a Fase 9 tambem tinha decidido usar google.generativeai para espelhar
+# app/routers/ai.py (CRM); uma reconciliacao pos-implementacao padronizou os
+# dois consumidores V2 em google-genai (o SDK ja verificado pela Fase 8) e
+# uniu a declaracao aqui. Cada consumidor cria seu proprio
+# `genai.Client(api_key=GEMINI_API_KEY)` — sem estado compartilhado alem da
+# leitura desta constante.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
 # ─── Media storage (CONV-02) ─────────────────────
 # Espelho local dos binarios de midia (media_assets.local_path e RELATIVO a este dir).
 # Default fica sob conversas/uploads/ (ja coberto pelo .gitignore). Em producao:
