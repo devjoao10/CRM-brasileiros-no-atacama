@@ -19,6 +19,16 @@ dependencia transitiva do fastapi. Ou seja, o ambiente do job crm cobre os dois
 lados; o do job conversas nao cobriria o do CRM (faltariam slowapi, passlib,
 bcrypt, google-generativeai e outros sete).
 
+BIA-V2 Fase 10 acrescentou uma excecao a essa cobertura: `conversas/app/main.py`
+passou a importar (transitivamente, via `routers/v2_agent.py` ->
+`v2/pipeline.py`) `v2/comunicador.py` e `v2/interpretador.py`, que importam
+`google.genai` no TOPO do modulo — dependencia exclusiva de
+conversas/requirements.txt, ausente aqui de proposito. Por isso `cria_banco()`
+abaixo NAO faz `import app.main` para o lado Conversas: importa direto os
+mesmos modulos de model que `main.py` registra com `# noqa: F401`, o
+suficiente para `Base.metadata` conhecer `conversations` sem passar pela
+aplicacao FastAPI (e os routers da V2) inteira.
+
 Por que isto existe: `RELEASE_READINESS.md` afirma que a m011 "detecta
 duplicatas e se recusa a continuar, sem apagar nada". Essa afirmacao vale zero
 se vier de ter LIDO o script. A migration e a unica peca desta entrega feita
@@ -61,6 +71,31 @@ def check(cond, msg):
         falhas.append(msg)
 
 
+# Mesma lista de imports que conversas/app/main.py faz com `# noqa: F401`
+# (conversas/app/models/__init__.py esta vazio — nao ha agregador pronto pra
+# reusar), MENOS o `import app.main` em si: so precisamos que cada modulo de
+# model tenha sido importado uma vez para `Base.metadata` conhecer as tabelas
+# antes do create_all(). Ver o comentario no topo do arquivo sobre a Fase 10.
+_SCRIPT_SCHEMA_CONVERSAS = (
+    "from app.database import Base, engine; "
+    "from app.auth import User; "
+    "from app.models.conversation import Conversation, Message; "
+    "from app.models.quick_reply import QuickReply; "
+    "from app.models.template import MessageTemplate, ServiceTemplate; "
+    "from app.models.auto_reply import AutoReply, BusinessHours; "
+    "from app.models.api_config import ApiConfig; "
+    "from app.models.message_variable import MessageVariable; "
+    "from app.models.evento import ConversationEvent; "
+    "from app.models.handoff_op import HandoffOperation; "
+    "Base.metadata.create_all(bind=engine); print('ok')"
+)
+
+_SCRIPT_SCHEMA_CRM = (
+    "import app.main; from app.database import Base, engine; "
+    "Base.metadata.create_all(bind=engine); print('ok')"
+)
+
+
 def cria_banco(caminho, com_duplicata, dupe_funnel=False):
     """Sobe o schema real dos DOIS servicos e semeia dados."""
     env = dict(os.environ)
@@ -69,10 +104,9 @@ def cria_banco(caminho, com_duplicata, dupe_funnel=False):
                DATABASE_URL=f"sqlite:///{caminho.as_posix()}",
                PYTHONIOENCODING="utf-8")
     for cwd in (REPO, REPO / "conversas"):
+        script = _SCRIPT_SCHEMA_CRM if cwd == REPO else _SCRIPT_SCHEMA_CONVERSAS
         r = subprocess.run(
-            [sys.executable, "-c",
-             "import app.main; from app.database import Base, engine; "
-             "Base.metadata.create_all(bind=engine); print('ok')"],
+            [sys.executable, "-c", script],
             cwd=str(cwd), env=env, capture_output=True, text=True,
             encoding="utf-8", errors="replace")
         if r.returncode != 0:
