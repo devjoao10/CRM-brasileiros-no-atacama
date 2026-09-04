@@ -355,6 +355,14 @@ def run_m011(url, *args):
         env.pop("DATABASE_URL", None)
     else:
         env["DATABASE_URL"] = url
+    # Sem isto o m011 herda o codec padrao da plataforma (cp1252 no Windows) para
+    # o PROPRIO stdout — e "alvo: sqlite:///C:/Users/<usuario com acento>/..."
+    # sai em bytes cp1252. O `encoding="utf-8"` abaixo so controla como o PAI
+    # decodifica; sem o filho tambem falar utf-8, byte invalido vira \ufffd
+    # literal na string, e o print do check() (linha 65) explode ao tentar
+    # codificar \ufffd de volta em cp1252. Mesmo padrao de tests/test_migration_m011.py,
+    # tests/test_migration_m010.py e tests/test_migration_m009.py.
+    env["PYTHONIOENCODING"] = "utf-8"
     return subprocess.run(
         [sys.executable, str(M011), *args],
         cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,

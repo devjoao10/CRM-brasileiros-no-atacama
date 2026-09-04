@@ -43,9 +43,9 @@ sintaxe IDENTICA em SQLite e PostgreSQL — confirmado nesta base pela m009
 dialetos). Aqui so o TIPO de `id` e de `created_at` muda por dialeto (mesmo
 padrao de `_TYPE_BY_DIALECT` da m012) — o restante do DDL e uma unica string.
 
-ROLLBACK: `DROP TABLE conversation_events` — a V1 nunca referencia esta
-tabela (ver tests/test_v2_v1_intacta.py, Task 0.3), entao a reversao e total
-e sem efeito colateral em nenhum fluxo existente.
+REVERSAO: remover a tabela `conversation_events` — a V1 nunca a referencia
+(ver tests/test_v2_v1_intacta.py, Task 0.3), entao a reversao e total e sem
+efeito colateral em nenhum fluxo existente.
 
 Migration MANUAL e IDEMPOTENTE — **nao roda no startup**. Bancos novos ja
 nascem completos via `Base.metadata.create_all()` no lifespan do Conversas.

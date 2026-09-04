@@ -898,6 +898,7 @@ _codigo_filho = (
 _resultado_subproc = subprocess.run(
     [sys.executable, "-c", _codigo_filho],
     capture_output=True, text=True, timeout=60, cwd=tempfile.gettempdir(),
+    encoding="utf-8", errors="replace",
 )
 check(
     _resultado_subproc.returncode == 0,

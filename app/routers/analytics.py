@@ -1,5 +1,5 @@
 from typing import Optional
-from datetime import datetime, date, time, timedelta
+from datetime import datetime, date, time, timedelta, timezone
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
@@ -30,17 +30,22 @@ def get_dashboard_analytics(
     Retorna métricas chave e os dados pro gráfico agrupados por data.
     Por padrão retorna os últimos 30 dias se nenhuma data for passada.
     """
+    # `Lead.created_at` é gravado em UTC (server_default=func.now()). "hoje" é
+    # calculado em UTC, não na hora local do servidor — perto da virada do dia
+    # local (Brasil = UTC-3), date.today() ainda seria o dia de ontem em UTC e
+    # excluiria leads recém-criados da janela padrão.
     if not end_date:
-        end_date = date.today()
+        end_date = datetime.now(timezone.utc).date()
     if not start_date:
         start_date = end_date - timedelta(days=29)
 
     if start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date não pode ser maior que end_date.")
 
-    # Convertendo para datetime cobrindo da 00:00 até 23:59:59
-    start_dt = datetime.combine(start_date, time.min)
-    end_dt = datetime.combine(end_date, time.max)
+    # Convertendo para datetime cobrindo da 00:00 até 23:59:59, em UTC — mesmo
+    # padrão usado em app/routers/tasks.py para Task.data_vencimento.
+    start_dt = datetime.combine(start_date, time.min, tzinfo=timezone.utc)
+    end_dt = datetime.combine(end_date, time.max, tzinfo=timezone.utc)
 
     # KPIs via SQL (sem carregar todos os leads em memória)
     total_leads = db.query(func.count(Lead.id)).filter(
@@ -56,8 +61,9 @@ def get_dashboard_analytics(
     if total_leads > 0:
         conversao = round((vendas_fechadas / total_leads) * 100, 1)
 
-    # Tarefas pendentes/atrasadas
-    hoje_end = datetime.combine(date.today(), time.max)
+    # Tarefas pendentes/atrasadas — mesmo cuidado de UTC: Task.data_vencimento
+    # também é DateTime(timezone=True).
+    hoje_end = datetime.combine(datetime.now(timezone.utc).date(), time.max, tzinfo=timezone.utc)
     tarefas_query = db.query(func.count(Task.id)).filter(
         Task.status.in_(["pendente", "em_andamento"]),
         Task.data_vencimento <= hoje_end
@@ -137,8 +143,11 @@ def get_detailed_reports(
     todas as outras requisições do worker enquanto durasse. Como `def` puro, o
     FastAPI o joga na threadpool (mesmo padrão já usado em leads/pipeline).
     """
+    # `Lead.created_at` é gravado em UTC (server_default=func.now()). "hoje" é
+    # calculado em UTC, não na hora local do servidor — mesmo cuidado do
+    # endpoint irmão /dashboard, ver comentário lá.
     if not end_date:
-        end_date = date.today()
+        end_date = datetime.now(timezone.utc).date()
     if not start_date:
         start_date = end_date - timedelta(days=29)
 
@@ -152,8 +161,8 @@ def get_detailed_reports(
             detail=f"Período muito longo: máximo de {MAX_REPORT_DAYS} dias por relatório.",
         )
 
-    start_dt = datetime.combine(start_date, time.min)
-    end_dt = datetime.combine(end_date, time.max)
+    start_dt = datetime.combine(start_date, time.min, tzinfo=timezone.utc)
+    end_dt = datetime.combine(end_date, time.max, tzinfo=timezone.utc)
     
     all_leads = (
         db.query(Lead)
