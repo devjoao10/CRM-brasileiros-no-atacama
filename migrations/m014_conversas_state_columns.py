@@ -52,9 +52,14 @@ Aplicacao em PRODUCAO e acao humana com backup + aprovacao (ver
 """
 import logging
 import os
+import pathlib
 import sys
 
-from sqlalchemy import create_engine, inspect, text
+# `app.*` deve resolver para conversas/app — ver docstring.
+_CONVERSAS_DIR = pathlib.Path(__file__).resolve().parent.parent / "conversas"
+sys.path.insert(0, str(_CONVERSAS_DIR))
+
+from sqlalchemy import create_engine, inspect, text  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

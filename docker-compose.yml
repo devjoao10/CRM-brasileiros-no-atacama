@@ -177,6 +177,20 @@ services:
       # workflow n8n "Notificação WhatsApp", que usa o mesmo nome para uma
       # credencial DIFERENTE.
       - BIA_V2_CRM_API_KEY=${BIA_V2_CRM_API_KEY:?Defina BIA_V2_CRM_API_KEY no .env}
+      # Fase 10 (BIA V2): credencial do POST /webhook/agent-bia-v2. Sem o `:?`,
+      # a variavel resolveria para "" dentro do container (Compose so repassa
+      # o que esta listado aqui) e o endpoint ficaria permanentemente 401 —
+      # fail-closed, mas silenciosamente inoperante, o tipo de lacuna que
+      # convida a um bypass apressado no primeiro deploy real.
+      - V2_AGENT_WEBHOOK_AUTH_VALUE=${V2_AGENT_WEBHOOK_AUTH_VALUE:?Defina V2_AGENT_WEBHOOK_AUTH_VALUE no .env}
+      # Mesma credencial do bloco `crm` acima (Fases 8/9 do BIA V2) — os dois
+      # apps chamam a IA Interpretadora/Comunicadora. Sem esta linha o
+      # container do Conversas nunca recebe a chave, so o do CRM.
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # BIA V2: dry_run e o unico modo exercitado ate a Fase 11+ (shadow/canary,
+      # fora deste plano). Default explicito (nao `:?`) de proposito — a
+      # ausencia da variavel deve continuar segura, nao travar a subida.
+      - V2_MODE=${V2_MODE:-dry_run}
       # AUDIT-2026-08-W1E (F4): agente de auto-resposta e OPT-IN. O default era
       # `true` aqui e `false` no codigo/.env.example — esquecer a variavel LIGAVA
       # o bot sozinho na conta de WhatsApp do cliente.

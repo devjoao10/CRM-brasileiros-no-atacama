@@ -71,6 +71,10 @@ app = FastAPI(
     description=DESCRIPTION,
     docs_url="/docs" if ENVIRONMENT == "development" else None,
     redoc_url="/redoc" if ENVIRONMENT == "development" else None,
+    # Mesmo gate que docs_url/redoc_url acima: sem isto, /openapi.json (schema
+    # completo, incluindo o header de auth e os contratos de /webhook/agent-bia-v2)
+    # continuaria publico em producao mesmo com os dois acima desligados.
+    openapi_url="/openapi.json" if ENVIRONMENT == "development" else None,
     lifespan=lifespan,
 )
 

@@ -108,10 +108,12 @@ CONCORRENCIA NO MESMO `event_id` — DUAS CORRIDAS DIFERENTES, DOIS FECHOS
 --------------------------------------------------------------------------
 (1) PRIMEIRA TENTATIVA (a linha ainda nao existe): duas chamadas simultaneas
     com o mesmo `event_id` NOVO sao resolvidas pelo UNIQUE de
-    `handoff_operations.event_id`: uma insere, a outra recebe `IntegrityError`
-    no flush (dentro de `_abrir_tentativa`) e nao aplica nada. A excecao sobe
-    crua de proposito — mapea-la para HTTP e da Fase 10 (mesmo tratamento
-    deliberado que `EventoDuplicado` recebe la).
+    `handoff_operations.event_id`: uma insere (dentro de um SAVEPOINT, mesmo
+    padrao de `eventos.py::_persistir_ou_compensar`), a outra recebe
+    `IntegrityError` no flush (dentro de `_abrir_tentativa`) e nao aplica nada.
+    A excecao e mapeada para `EventoDuplicado` — mesmo tratamento deliberado
+    que `EventoDuplicado` ja recebe em `main.py` (409), reaproveitado aqui em
+    vez de inventar um vocabulario novo so para este segundo UNIQUE.
 
 (2) RETOMADA/RETRY (a linha JA EXISTE, em `REQUESTED`) — achado F2 da revisao
     da Fase 6, corrigido aqui. O UNIQUE do item (1) so protege o INSERT; NAO
@@ -176,7 +178,7 @@ from app.models.handoff_op import HandoffOperation, StatusHandoff
 from app.services.atendimento import aplicar_estado_humano
 from app.v2.contratos import HandoffResult
 from app.v2.estados import Estado, TransicaoInvalida, aplicar_transicao
-from app.v2.eventos import registrar_evento
+from app.v2.eventos import EventoDuplicado, registrar_evento
 from app.v2.eventos_validacao import (
     ResultadoEvento,
     TipoEvento,
@@ -279,6 +281,15 @@ def _abrir_tentativa(
     dois casos emite `HANDOFF_REQUESTED`: uma segunda tentativa e um novo
     pedido, e a trilha ficaria incompreensivel se o `COMPLETED` de uma retomada
     aparecesse sem um `REQUESTED` correspondente.
+
+    O INSERT (primeira tentativa) roda dentro de um SAVEPOINT
+    (`db.begin_nested()`), mesmo padrao de `eventos.py::_persistir_ou_compensar`:
+    duas chamadas simultaneas com o mesmo `event_id` NOVO colidem no UNIQUE de
+    `handoff_operations.event_id`, e so o SAVEPOINT desfaz o INSERT que perdeu
+    sem derrubar a transacao inteira do caller. Em `IntegrityError`, RE-CONSULTA
+    por `event_id` - so vira `EventoDuplicado` se a linha REALMENTE existir
+    (mesma disciplina: nao mascarar uma violacao diferente). Ver "CONCORRENCIA
+    NO MESMO event_id" no docstring do modulo.
     """
     if operacao is None:
         operacao = HandoffOperation(
@@ -287,12 +298,20 @@ def _abrir_tentativa(
             target_user_id=target_user_id,
             status=StatusHandoff.REQUESTED.value,
         )
-        db.add(operacao)
+        try:
+            with db.begin_nested():
+                db.add(operacao)
+                db.flush()
+        except IntegrityError as exc:
+            existe = db.query(HandoffOperation).filter_by(event_id=event_id).first()
+            if existe is None:
+                raise
+            raise EventoDuplicado(event_id=event_id) from exc
     else:
         operacao.status = StatusHandoff.REQUESTED.value
         operacao.error_code = None
+        db.flush()  # ANTES de registrar_evento — ver "db.flush() EXPLICITO" no topo.
 
-    db.flush()  # ANTES de registrar_evento — ver "db.flush() EXPLICITO" no topo.
     registrar_evento(
         db,
         tipo=TipoEvento.HANDOFF_REQUESTED,

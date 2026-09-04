@@ -88,6 +88,7 @@ from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.models.conversation import Conversation, Message  # noqa: E402
 from app.models.evento import ConversationEvent  # noqa: E402
 from app.models.handoff_op import HandoffOperation  # noqa: E402
+from app.v2.comunicador import ComunicadorIndisponivel  # noqa: E402
 from app.v2.contratos import HandoffResult  # noqa: E402
 from app.v2.eventos import EventoDuplicado  # noqa: E402
 from app.v2.eventos_validacao import OrigemEvento, TipoEvento  # noqa: E402
@@ -122,6 +123,7 @@ _estado_ia = {
     "interpretador_chamadas": 0,
     "interpretador_gancho": None,
     "comunicador_resposta": "Oi! Recebi sua mensagem.",
+    "comunicador_excecao": None,
     "comunicador_chamadas": 0,
 }
 
@@ -137,6 +139,8 @@ def _fake_chamar_llm(mensagem):
 
 def _fake_chamar_gemini(prompt):
     _estado_ia["comunicador_chamadas"] += 1
+    if _estado_ia["comunicador_excecao"] is not None:
+        raise _estado_ia["comunicador_excecao"]
     return _estado_ia["comunicador_resposta"]
 
 
@@ -145,12 +149,14 @@ comunicador_mod._chamar_gemini = _fake_chamar_gemini
 
 
 def _configurar_ia(*, resposta_interpretador=None, excecao_interpretador=None,
-                    gancho_interpretador=None, resposta_comunicador="Oi! Recebi sua mensagem."):
+                    gancho_interpretador=None, resposta_comunicador="Oi! Recebi sua mensagem.",
+                    excecao_comunicador=None):
     _estado_ia["interpretador_resposta"] = resposta_interpretador
     _estado_ia["interpretador_excecao"] = excecao_interpretador
     _estado_ia["interpretador_gancho"] = gancho_interpretador
     _estado_ia["interpretador_chamadas"] = 0
     _estado_ia["comunicador_resposta"] = resposta_comunicador
+    _estado_ia["comunicador_excecao"] = excecao_comunicador
     _estado_ia["comunicador_chamadas"] = 0
 
 
@@ -762,6 +768,42 @@ check(
     f"16. ZERO linhas em handoff_operations mesmo apos os Cenarios 14-15 "
     f"(obteve {db.query(HandoffOperation).count()})",
 )
+
+
+# ===========================================================================
+# 17. FIX 1 (mega review pos-Fase-10) - ComunicadorIndisponivel (Gemini
+#     indisponivel na hora de redigir a resposta final) tem que virar
+#     COMUNICADOR_INDISPONIVEL, nunca escapar como excecao nao mapeada. Antes
+#     desta correcao, `executar_pipeline` nao tinha nenhum try/except ao redor
+#     de `redigir_resposta`, e nem v2_agent.py nem os handlers globais de
+#     main.py cobrem RuntimeError - qualquer instabilidade do Gemini virava
+#     500 generico do Starlette.
+# ===========================================================================
+_configurar_ia(
+    resposta_interpretador=_resposta_ia(explicit_human_request=False),
+    excecao_comunicador=ComunicadorIndisponivel("chamada_llm_falhou"),
+)
+cid17 = criar_conversa()
+snap17_antes = snapshot_conversa(cid17)
+res17 = executar_pipeline(db, _entrada(cid17))
+
+check(
+    res17.etapa_final == EtapaFinal.COMUNICADOR_INDISPONIVEL,
+    f"17a. desfecho COMUNICADOR_INDISPONIVEL, excecao nunca escapou (obteve {res17.etapa_final})",
+)
+check(
+    res17.detalhe == "chamada_llm_falhou",
+    f"17b. detalhe carrega o token da excecao (obteve {res17.detalhe!r})",
+)
+check(
+    trilha_tipos(cid17) == [
+        TipoEvento.MESSAGE_RECEIVED.value, TipoEvento.AI_INTERPRETATION_STARTED.value,
+        TipoEvento.AI_INTERPRETATION_COMPLETED.value, TipoEvento.TRIAGE_DATA_UPDATED.value,
+    ],
+    f"17c. trilha para exatamente onde a falha aconteceu, sem nenhum AI_RESPONSE_* "
+    f"(obteve {trilha_tipos(cid17)})",
+)
+check(snapshot_conversa(cid17) == snap17_antes, "17d. NENHUMA coluna de conversations mudou")
 
 
 print()

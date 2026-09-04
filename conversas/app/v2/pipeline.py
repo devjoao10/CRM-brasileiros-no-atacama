@@ -106,7 +106,12 @@ posição:
       `permitido=False` -> `AI_RESPONSE_DISCARDED`, com
       `error_code=motivo.upper()` (os dois motivos de `output_guard.py`,
       `acao_nao_autorizada`/`valor_monetario_detectado`, já batem o formato
-      `^[A-Z][A-Z0-9_]*$` depois de maiusculizados).
+      `^[A-Z][A-Z0-9_]*$` depois de maiusculizados). `ComunicadorIndisponivel`
+      (Gemini indisponível - chave ausente ou chamada falhou) é convertida em
+      `ResultadoPipeline` com `EtapaFinal.COMUNICADOR_INDISPONIVEL` — mesmo
+      espírito do passo 7 (`InterpretacaoFalhou`): falha de infraestrutura é
+      desfecho de negócio esperado, nunca exceção não mapeada escapando para
+      um 500 genérico (achado da mega review pós-Fase 10).
 
   Nenhum envio real (WhatsApp) acontece em NENHUM ramo — não implementado
   nesta fase, fora do escopo do contrato da Fase 10 (endpoint + pipeline,
@@ -196,7 +201,7 @@ from sqlalchemy.orm import Session
 
 from app.config import V2_MODE
 from app.models.conversation import Conversation
-from app.v2.comunicador import EntradaComunicador, redigir_resposta
+from app.v2.comunicador import ComunicadorIndisponivel, EntradaComunicador, redigir_resposta
 from app.v2.estados import Estado
 from app.v2.eventos import registrar_evento
 from app.v2.eventos_validacao import OrigemEvento, ResultadoEvento, TipoEvento
@@ -246,11 +251,11 @@ class EtapaFinal(StrEnum):
     BOT_INATIVO = "bot_inativo"
     MENSAGEM_IGNORADA = "mensagem_ignorada"
     INTERPRETACAO_FALHOU = "interpretacao_falhou"
-    HANDOFF_SEM_ATENDENTE = "handoff_sem_atendente"
     HANDOFF_SIMULADO_DRY_RUN = "handoff_simulado_dry_run"
     HANDOFF_CONCLUIDO = "handoff_concluido"
     HANDOFF_INCONSISTENTE = "handoff_inconsistente"
     RESPOSTA_DESCARTADA_GATE = "resposta_descartada_gate"
+    COMUNICADOR_INDISPONIVEL = "comunicador_indisponivel"
     RESPOSTA_BLOQUEADA_GUARD = "resposta_bloqueada_guard"
     RESPOSTA_GERADA = "resposta_gerada"
 
@@ -443,14 +448,19 @@ def executar_pipeline(db: Session, entrada: InboundContextV2) -> ResultadoPipeli
     if not autorizado:
         return ResultadoPipeline(EtapaFinal.RESPOSTA_DESCARTADA_GATE, conversation.id)
 
-    resultado_guard = redigir_resposta(
-        EntradaComunicador(
-            acao=_acao_comunicador(resultado_triagem.campos_faltantes),
-            fatos_confirmados=resultado_ia.extracted,
-            campos_faltantes=resultado_triagem.campos_faltantes,
-            duvidas=resultado_ia.duvidas,
+    try:
+        resultado_guard = redigir_resposta(
+            EntradaComunicador(
+                acao=_acao_comunicador(resultado_triagem.campos_faltantes),
+                fatos_confirmados=resultado_ia.extracted,
+                campos_faltantes=resultado_triagem.campos_faltantes,
+                duvidas=resultado_ia.duvidas,
+            )
         )
-    )
+    except ComunicadorIndisponivel as exc:
+        return ResultadoPipeline(
+            EtapaFinal.COMUNICADOR_INDISPONIVEL, conversation.id, detalhe=str(exc)
+        )
 
     if not resultado_guard.permitido:
         registrar_evento(
