@@ -1,9 +1,11 @@
 """
 BIA-V2 Fase 1 - contratos Pydantic puros de conversas/app/v2/contratos.py.
 
-Cobre SO FORMA: os 6 modelos (`DestinoTriagem`, `TriageData`,
+Cobre SO FORMA: os 6 modelos da Fase 1 (`DestinoTriagem`, `TriageData`,
 `AIInterpretationResult`, `ResultadoTriagem`, `DecisaoPrefiltro`,
-`ResultadoGuard`), o `extra="forbid"` herdado de `_ContratoV2` em cada um,
+`ResultadoGuard`) mais `HandoffResult`, trazido pela Fase 6 (a fase que o
+consome) e submetido aos MESMOS checks genericos que os outros seis, o
+`extra="forbid"` herdado de `_ContratoV2` em cada um,
 os tipos estritos (`StrictStr`/`StrictInt`/`StrictBool`), e a inercia de
 import do modulo (zero SQLAlchemy/app.database/httpx/app.v2.eventos).
 Regra de negocio - completude de triagem, vocabulario do pre-filtro,
@@ -47,6 +49,7 @@ from app.v2.contratos import (  # noqa: E402
     AIInterpretationResult,
     DecisaoPrefiltro,
     DestinoTriagem,
+    HandoffResult,
     ResultadoGuard,
     ResultadoTriagem,
     TriageData,
@@ -77,11 +80,13 @@ MODELOS = {
     "ResultadoTriagem": ResultadoTriagem,
     "DecisaoPrefiltro": DecisaoPrefiltro,
     "ResultadoGuard": ResultadoGuard,
+    # Fase 6 - primeiro dos contratos diferidos a chegar (ver check 23).
+    "HandoffResult": HandoffResult,
 }
 
 
 def _payload_valido(nome):
-    """Kwargs minimos validos para construir cada um dos 6 modelos."""
+    """Kwargs minimos validos para construir cada modelo."""
     if nome == "DestinoTriagem":
         return {"destino": "Atacama"}
     if nome == "TriageData":
@@ -99,6 +104,12 @@ def _payload_valido(nome):
         return {"ignorar": False, "motivo": None}
     if nome == "ResultadoGuard":
         return {"permitido": True, "motivo": None, "texto_final": "ok"}
+    if nome == "HandoffResult":
+        return {
+            "sucesso": True, "replayed": False, "conversation_id": 1,
+            "target_user_id": 2, "event_id": "0e2b5f1a-0000-4000-8000-000000000001",
+            "error_code": None,
+        }
     raise AssertionError(f"modelo desconhecido: {nome}")
 
 
@@ -142,6 +153,9 @@ _CAMPOS_OBRIGATORIOS = {
     "ResultadoTriagem": ["completa", "campos_faltantes"],
     "DecisaoPrefiltro": ["ignorar", "motivo"],
     "ResultadoGuard": ["permitido", "motivo", "texto_final"],
+    "HandoffResult": [
+        "sucesso", "replayed", "conversation_id", "target_user_id", "event_id", "error_code",
+    ],
 }
 for _nome, _campos in _CAMPOS_OBRIGATORIOS.items():
     _cls = MODELOS[_nome]
@@ -269,6 +283,25 @@ _CAMPOS_STRICT_INT = [
     ("TriageData", {}, "adultos"),
     ("TriageData", {}, "criancas"),
     ("TriageData", {}, "quantidade_dias_pretendida"),
+    # HandoffResult: bool passando por id de usuario viraria um handoff para o
+    # usuario 1 sem ninguem perceber - exatamente o que StrictInt existe para
+    # impedir. O `_base` traz os demais campos obrigatorios (sem defaults).
+    (
+        "HandoffResult",
+        {
+            "sucesso": True, "replayed": False, "conversation_id": 1,
+            "event_id": "0e2b5f1a-0000-4000-8000-000000000001", "error_code": None,
+        },
+        "target_user_id",
+    ),
+    (
+        "HandoffResult",
+        {
+            "sucesso": True, "replayed": False, "target_user_id": 2,
+            "event_id": "0e2b5f1a-0000-4000-8000-000000000001", "error_code": None,
+        },
+        "conversation_id",
+    ),
 ]
 for _nome, _base, _campo in _CAMPOS_STRICT_INT:
     _cls = MODELOS[_nome]
@@ -287,6 +320,14 @@ _CAMPOS_STRICT_BOOL = [
     ("ResultadoTriagem", {"campos_faltantes": []}, "completa"),
     ("DecisaoPrefiltro", {"motivo": None}, "ignorar"),
     ("ResultadoGuard", {"motivo": None, "texto_final": "ok"}, "permitido"),
+    (
+        "HandoffResult",
+        {
+            "replayed": False, "conversation_id": 1, "target_user_id": 2,
+            "event_id": "0e2b5f1a-0000-4000-8000-000000000001", "error_code": None,
+        },
+        "sucesso",
+    ),
 ]
 for _nome, _base, _campo in _CAMPOS_STRICT_BOOL:
     _cls = MODELOS[_nome]
@@ -404,6 +445,10 @@ _INSTANCIAS_RICAS = {
     "ResultadoTriagem": ResultadoTriagem(completa=False, campos_faltantes=["email", "destinos"]),
     "DecisaoPrefiltro": DecisaoPrefiltro(ignorar=True, motivo="fora do horario comercial"),
     "ResultadoGuard": ResultadoGuard(permitido=False, motivo="valor monetario", texto_final="texto seguro"),
+    "HandoffResult": HandoffResult(
+        sucesso=False, replayed=False, conversation_id=7, target_user_id=3,
+        event_id="0e2b5f1a-0000-4000-8000-000000000009", error_code="CRM_INDISPONIVEL",
+    ),
 }
 for _nome, _instancia in _INSTANCIAS_RICAS.items():
     _cls = MODELOS[_nome]
@@ -495,6 +540,7 @@ _codigo_filho = (
 _resultado_subproc = subprocess.run(
     [sys.executable, "-c", _codigo_filho],
     capture_output=True, text=True, timeout=30,
+    encoding="utf-8", errors="replace",
 )
 check(
     _resultado_subproc.returncode == 0,
@@ -519,10 +565,16 @@ check(
 
 
 # --- 23. nenhum contrato diferido para fases futuras existe ainda ---------
+# `HandoffResult` SAIU desta lista na Fase 6, que e a fase que o consome: e o
+# retorno declarado de `handoff_to_human()` e agora esta nos MODELOS acima,
+# submetido aos mesmos checks genericos. `HandoffRequest` CONTINUA aqui de
+# proposito - a entrada daquela funcao e keyword-only, ninguem monta um objeto
+# de requisicao, e um DTO seria uma segunda representacao sem consumidor (ver
+# o docstring de `HandoffResult` em conversas/app/v2/contratos.py).
 _DEFERIDOS = [
     "InboundContextV2", "AIInterpretationRequest", "RuleEngineInput",
     "RuleEngineDecision", "AuthorizedResponse", "HandoffRequest",
-    "HandoffResult", "MensagemLote",
+    "MensagemLote",
 ]
 for _nome in _DEFERIDOS:
     check(

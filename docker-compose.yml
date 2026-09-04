@@ -5,6 +5,11 @@ services:
     image: postgres:16-alpine
     container_name: crm_postgres
     restart: always
+    # NAO defina TZ/PGTZ aqui (ex.: copiando o padrao do servico n8n abaixo):
+    # app/routers/analytics.py agrupa "dia" via func.date()/strftime() assumindo
+    # sessao Postgres em UTC (default de imagem, sem override). Mudar isso desalinha
+    # silenciosamente os totais por dia do dashboard/reports do filtro WHERE, que e
+    # UTC explicito e imune ao TimeZone de sessao.
     environment:
       POSTGRES_DB: crm_atacama
       POSTGRES_USER: ${POSTGRES_USER:-crm_user}
@@ -68,6 +73,14 @@ services:
       - INTERNAL_AI_AUTH_SECRET=${INTERNAL_AI_AUTH_SECRET:-}
       - CONVERSAS_BASE_URL=http://conversas:8001
       - CONVERSAS_API_KEY=${CONVERSAS_API_KEY:?Defina CONVERSAS_API_KEY no .env}
+      # BIA-V2 Fase 6 (achado de seguranca da revisao) — so este usuario pode
+      # chamar POST /api/v2/lead-domain/handoff (ver a secao AUTORIZACAO do
+      # docstring de app/routers/v2_lead_domain.py). DEVE ser o id do MESMO
+      # usuario cuja API key vira BIA_V2_CRM_API_KEY do lado Conversas — outro
+      # id faz o handoff levar 403 sempre. Sem default aqui de proposito, mesmo
+      # `:?` de CONVERSAS_API_KEY acima: melhor recusar subir do que abrir a
+      # rota travada em None (todo chamador levaria 403 silenciosamente).
+      - V2_LEAD_DOMAIN_SERVICE_USER_ID=${V2_LEAD_DOMAIN_SERVICE_USER_ID:?Defina V2_LEAD_DOMAIN_SERVICE_USER_ID no .env (id do usuario cuja API key vira BIA_V2_CRM_API_KEY no Conversas)}
       # AUDIT-2026-08-W1E (F5): sem estas linhas o container ignorava o .env e
       # rodava com os defaults de app/config.py — APP_DOMAIN=127.0.0.1 (links de
       # reset de senha quebrados) e MAIL_PASSWORD com o placeholder do exemplo.
@@ -153,6 +166,17 @@ services:
       - SECRET_KEY=${SECRET_KEY:?Defina SECRET_KEY no .env}
       - CRM_BASE_URL=http://crm:8000
       - N8N_BASE_URL=http://n8n:5678
+      # BIA-V2 Fase 6 (achado #2 da revisao) — sem esta linha o Conversas subia
+      # com a credencial da ponte Conversas->CRM resolvendo para "" e TODO
+      # handoff falharia em runtime com CRM_SEM_CREDENCIAL, em vez de o
+      # `docker compose up` recusar a subida com uma mensagem legivel. Mesmo
+      # padrao `:?` ja usado por CONVERSAS_API_KEY (a ponte irma, linha ~70) e
+      # por SECRET_KEY/META_APP_SECRET acima. Nome com prefixo `BIA_V2_` (nao
+      # `CRM_API_KEY`) de proposito — ver o comentario em
+      # conversas/app/config.py sobre a colisao com a variavel de ambiente do
+      # workflow n8n "Notificação WhatsApp", que usa o mesmo nome para uma
+      # credencial DIFERENTE.
+      - BIA_V2_CRM_API_KEY=${BIA_V2_CRM_API_KEY:?Defina BIA_V2_CRM_API_KEY no .env}
       # AUDIT-2026-08-W1E (F4): agente de auto-resposta e OPT-IN. O default era
       # `true` aqui e `false` no codigo/.env.example — esquecer a variavel LIGAVA
       # o bot sozinho na conta de WhatsApp do cliente.

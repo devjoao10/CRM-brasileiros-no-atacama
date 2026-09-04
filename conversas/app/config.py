@@ -40,6 +40,34 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"
 
 # ─── CRM Integration ────────────────────────────
 CRM_BASE_URL = os.getenv("CRM_BASE_URL", "http://127.0.0.1:8000")
+# BIA-V2 Fase 6 — credencial da ponte Conversas -> CRM (direcao INVERSA da
+# `CONVERSAS_API_KEY` de app/config.py, que e a ponte CRM -> Conversas).
+# Deve ser a API key de um usuario real da tabela `users` compartilhada, nunca
+# um segredo novo — o CRM autentica esta chamada com a mesma dependency de API
+# key que ja usa para as demais rotas /api/.
+#
+# NOME `BIA_V2_CRM_API_KEY`, NAO `CRM_API_KEY` (achado #2 da revisao da Fase 6)
+# `CRM_API_KEY` colide com uma variavel de AMBIENTE N8N do workflow
+# "Notificação WhatsApp" (n8n/workflows/Notificação WhatsApp.json), que e uma
+# credencial DIFERENTE — a API key que o N8N usa para chamar o Conversas
+# (direcao N8N -> Conversas), nao a que o Conversas usa para chamar o CRM
+# (direcao Conversas -> CRM, esta aqui). Dois sistemas diferentes (n8n e este
+# `.env`), dois significados diferentes, mesmo nome literal: um operador que
+# visse "CRM_API_KEY" num painel do n8n e copiasse o valor para o `.env` deste
+# app (ou vice-versa) configuraria a credencial ERRADA sem nenhum sinal de
+# erro imediato — o guard `if not` abaixo so pega AUSENCIA, nao valor trocado.
+# O prefixo `BIA_V2_` torna as duas variaveis inconfundiveis pelo nome.
+#
+# Vazia (default) = ponte DESLIGADA. Diferente da ponte irma, aqui o desligamento
+# NAO e no-op silencioso: `app/v2/handoff.py` registra a operacao como FAILED
+# com `CRM_SEM_CREDENCIAL` e emite `HANDOFF_FAILED`. Handoff que "some" deixaria
+# o cliente esperando com o bot ligado — exatamente a falha que a V2 corrige.
+#
+# `.strip()` (mesmo padrao de `N8N_WEBHOOK_AUTH_VALUE` abaixo): sem ele, um
+# valor `" "` (espaco) passaria pelo guard `if not BIA_V2_CRM_API_KEY` do
+# `app/v2/handoff.py` — que so recusa string VAZIA — e viraria um header
+# `X-API-Key` invalido em vez do diagnostico correto de "credencial ausente".
+BIA_V2_CRM_API_KEY = os.getenv("BIA_V2_CRM_API_KEY", "").strip()
 
 # ─── Meta Cloud API (WhatsApp) ───────────────────
 META_VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN", "")

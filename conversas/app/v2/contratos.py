@@ -1,13 +1,18 @@
 """
 Contratos Pydantic da V2 — BIA-V2, Fase 1.
 
-ESCOPO: 6 modelos, nao 15
+ESCOPO: 6 modelos na Fase 1, nao 15 — mais os que cada fase consumidora trouxer
 A lista original da Fase 1 tinha 15. O subgate de reconciliacao levantou a
 provenance de cada um e achou shape aprovado para poucos: a maioria aparecia
 UMA UNICA VEZ no corpus, na propria lista, sem campo, tipo ou operacao que os
 fixasse. Os outros 9 ficaram com a fase que realmente os consome, cada uma
 abrindo com subgate de contrato — ver a tabela na Fase 1 do plano
 (docs/superpowers/plans/2026-08-29-bia-v2.md).
+
+`HandoffResult` (ultimo do arquivo) e o primeiro desses diferidos a chegar:
+entrou na Fase 6, que e a fase que o consome, com a forma que aquela operacao
+de fato devolve. Os outros 8 continuam ausentes, guardados pelo check 23 de
+`tests/test_v2_contratos.py`.
 
 `DomainEvent` foi REMOVIDO, nao diferido: a Task 0.2 ja criou a fonte de
 verdade de eventos (`ConversationEvent` ORM, `registrar_evento()`,
@@ -196,3 +201,45 @@ class ResultadoGuard(_ContratoV2):
     permitido: StrictBool
     motivo: StrictStr | None
     texto_final: StrictStr
+
+
+class HandoffResult(_ContratoV2):
+    """Retorno de `handoff_to_human()` (Fase 6). Aqui so a forma.
+
+    A OPERACAO — log de intencao, chamada ao CRM, estado local, eventos,
+    reconciliacao — e de `app/v2/handoff.py`. Este modulo continua sem decidir
+    nada: nenhum campo abaixo e derivado por regra, todos sao preenchidos
+    explicitamente por quem executou a operacao.
+
+    `HandoffRequest` NAO foi criado junto, e a assimetria e deliberada. A
+    entrada de `handoff_to_human` e fixada pelo plano como parametros
+    keyword-only (`conversation_id`, `target_user_id`, `reason`, `event_id`);
+    nenhum chamador monta um objeto de requisicao, e o corpo enviado ao CRM e
+    um dicionario de tres chaves construido dentro da funcao de infraestrutura.
+    Um DTO aqui seria uma SEGUNDA representacao dos mesmos argumentos, sem
+    consumidor — e continua listado como ausente no check 23 de
+    `tests/test_v2_contratos.py`, que segue guardando isso.
+
+    `sucesso=False` sempre vem com `error_code` preenchido (vocabulario FECHADO
+    definido em `handoff.py`); `sucesso=True` sempre com `error_code=None`. A
+    correspondencia e responsabilidade de quem constroi — declarar forma nao e
+    decidir regra (ver o docstring do modulo).
+
+    `replayed=True` significa "esta chamada nao aplicou NADA": a operacao ja
+    estava `COMPLETED` e o resultado devolvido e o que ja estava registrado. A
+    RETOMADA de uma operacao `REQUESTED` (o processo morreu antes do commit
+    local) devolve `replayed=False`, porque ela de fato aplica o estado local
+    agora — mesmo que o CRM, do lado dele, tenha respondido que ja conhecia
+    aquele `event_id`.
+
+    Sem defaults, como nos demais retornos: um default aqui daria a uma
+    implementacao futura a chance de devolver o objeto sem ter decidido o
+    desfecho.
+    """
+
+    sucesso: StrictBool
+    replayed: StrictBool
+    conversation_id: StrictInt
+    target_user_id: StrictInt
+    event_id: StrictStr
+    error_code: StrictStr | None
