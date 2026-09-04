@@ -118,6 +118,39 @@ N8N_WEBHOOK_AUTH_VALUE = os.getenv("N8N_WEBHOOK_AUTH_VALUE", "").strip()
 # leitura desta constante.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
+# ─── BIA-V2 Fase 10 — modo de execucao do pipeline V2 ────────────
+# "dry_run" (default) nao aplica NENHUM efeito real: app/v2/pipeline.py nunca
+# chama handoff_to_human() de verdade (a UNICA funcao de todo o pipeline V2
+# com efeito irreversivel — grava em `conversations`/`handoff_operations` e
+# fala com o CRM), e nenhum envio real ao WhatsApp acontece (nao implementado
+# nesta fase). "live" e o UNICO outro valor reconhecido, e habilita o handoff
+# de verdade. Fail-closed (contrato da Fase 10): qualquer valor que NAO seja
+# exatamente "live" e tratado como dry_run — nunca o inverso. Cobre typo,
+# string vazia, e qualquer modo hipotetico futuro ainda nao desenhado.
+V2_MODE = os.getenv("V2_MODE", "dry_run")
+
+# ─── BIA-V2 Fase 10 (achado de seguranca pos-implementacao) — credencial do
+# webhook do agente ───────────────────────────────────────────────────────
+# `POST /webhook/agent-bia-v2` (app/routers/v2_agent.py) e alcancavel
+# publicamente (mesmo Traefik que expoe o webhook da Meta) e, mesmo em
+# V2_MODE=dry_run, ja escreve `conversation_events` reais e chama o Gemini
+# (I/O pago) para qualquer `conversation_id` existente — sem credencial,
+# alcancavel por qualquer chamador que descubra a URL.
+#
+# Nem BIA_V2_CRM_API_KEY (Fase 6) nem N8N_WEBHOOK_AUTH_HEADER/VALUE (acima)
+# servem prontas aqui: as duas sao OUTBOUND (a credencial que o CONVERSAS
+# apresenta AO CRM, e o cabecalho que o CONVERSAS manda AO n8n,
+# respectivamente) — nenhuma protege uma rota INBOUND deste proprio app.
+# Mecanismo dedicado: o router compara o cabecalho `X-Webhook-Auth` contra
+# este valor, em tempo constante.
+#
+# Vazio (default) = a dependency recusa TODA chamada com 401 — mesma
+# disciplina fail-closed de V2_LEAD_DOMAIN_SERVICE_USER_ID/BIA_V2_CRM_API_KEY
+# (Fase 6): nunca permissivo por omissao. `.strip()` pelo mesmo motivo de
+# BIA_V2_CRM_API_KEY acima (um valor so-espaco nao deveria virar credencial
+# "configurada").
+V2_AGENT_WEBHOOK_AUTH_VALUE = os.getenv("V2_AGENT_WEBHOOK_AUTH_VALUE", "").strip()
+
 # ─── Media storage (CONV-02) ─────────────────────
 # Espelho local dos binarios de midia (media_assets.local_path e RELATIVO a este dir).
 # Default fica sob conversas/uploads/ (ja coberto pelo .gitignore). Em producao:
