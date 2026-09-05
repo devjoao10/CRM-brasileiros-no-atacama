@@ -159,3 +159,12 @@ MEDIA_STORAGE_DIR = os.getenv(
     "CONVERSAS_MEDIA_DIR",
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads", "media"),
 )
+
+# ─── BIA-V2 R13 — retencao de `conversation_events` ──────────────
+# Quantos dias de `conversation_events` (trilha de auditoria append-only —
+# ver conversas/app/models/evento.py) sao mantidos antes de ficarem
+# elegiveis para limpeza por scripts/cleanup_conversation_events.py. 180 dias
+# e um DEFAULT CONSERVADOR de partida, pendente de uma decisao explicita de
+# compliance/juridico sobre o prazo real de retencao — nao inventar essa
+# decisao aqui.
+CONVERSATION_EVENTS_RETENTION_DAYS = int(os.getenv("CONVERSATION_EVENTS_RETENTION_DAYS", "180"))
