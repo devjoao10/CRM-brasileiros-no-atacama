@@ -237,6 +237,25 @@ jobs:
       - name: Instalar dependencias
         run: python -m pip install -r conversas/requirements.txt
 
+      - name: Criar segundo banco no mesmo servico Postgres (gate de schema, bloco D)
+        # O bloco D (opcional, gated por DATABASE_URL_CHECK_BIA_V2_SCHEMA_PROOF)
+        # de test_check_bia_v2_schema.py faz `DROP SCHEMA public CASCADE` para
+        # garantir uma folha em branco antes de provar NULLS FIRST no catalogo
+        # real (pg_indexes.indexdef) — unica forma de distinguir a forma
+        # corrigida da m020 da forma superada da m019 (SQLite nao representa
+        # NULLS FIRST/LAST em CREATE INDEX). Rodar esse DROP no MESMO banco de
+        # DATABASE_URL_WORKERS_PROOF apagaria, na mesma passada, a tabela
+        # `handoff_operations` que o check 3e precisa — os dois arquivos rodam
+        # em SEQUENCIA dentro do loop do proximo step (glob + `grep -l`, sem
+        # ordem explicita garantida), e nao ha necessidade de depender disso.
+        # Banco SEPARADO no MESMO servico resolve de vez: bases diferentes sao
+        # namespaces inteiramente isolados no PostgreSQL, entao o DROP SCHEMA
+        # de uma nunca alcanca a outra. psycopg2 ja e dependencia obrigatoria
+        # deste bloco (ver docstring do teste) — reusa-lo aqui evita depender
+        # de `psql` estar instalado no runner.
+        run: |
+          python -c "import psycopg2; conn = psycopg2.connect('postgresql://proof:proof@localhost:5432/workersproof'); conn.autocommit = True; cur = conn.cursor(); cur.execute('CREATE DATABASE schemaproof'); cur.close(); conn.close()"
+
       - name: Rodar suite Conversas
         env:
           ENVIRONMENT: development
@@ -244,6 +263,13 @@ jobs:
           # DESCARTAVEL do servico deste job: o teste DROPA e recria
           # `handoff_operations` a cada execucao.
           DATABASE_URL_WORKERS_PROOF: postgresql://proof:proof@localhost:5432/workersproof
+          # Liga o bloco D (opcional) de test_check_bia_v2_schema.py — prova
+          # NULLS FIRST contra o catalogo REAL do PostgreSQL, gate que ate
+          # aqui nunca tinha rodado contra um banco de verdade no CI deste
+          # projeto. Banco PROPRIO (`schemaproof`, criado no step acima) no
+          # MESMO servico deste job — nunca `workersproof`, que o DROP SCHEMA
+          # CASCADE deste bloco apagaria.
+          DATABASE_URL_CHECK_BIA_V2_SCHEMA_PROOF: postgresql://proof:proof@localhost:5432/schemaproof
         run: |
           python --version
           # Ver o comentario equivalente no job crm.
