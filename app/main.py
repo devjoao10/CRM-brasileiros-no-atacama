@@ -126,10 +126,33 @@ app.add_middleware(SlowAPIMiddleware)
 async def _handoff_indeterminado_handler(
     request: StarletteRequest, exc: v2_lead_domain.HandoffIndeterminado
 ):
-    # `exc_info=exc` e nao `logger.exception`: fora de um bloco `except` nao ha
-    # excecao "atual", e `.exception()` registraria "NoneType: None" no lugar
-    # do traceback que este log existe para carregar.
-    logger.error("Handoff V2 indeterminado em %s: %s", request.url.path, exc, exc_info=exc)
+    # WP-R11-PII-02 — este log NAO carrega mais nem `str(exc)` nem o traceback.
+    #
+    # `HandoffIndeterminado` e construida em `v2_lead_domain.py` interpolando
+    # `{exc}` da excecao original do SQLAlchemy, cuja `str()` embute o SQL
+    # completo E os parametros ligados. Uma auditoria desta rodada percorreu
+    # todo statement por onde este endpoint pode falhar e confirmou que os
+    # parametros de hoje sao so ids — ou seja, NAO ha vazamento ativo. Mas o
+    # log ficava dependendo dessa propriedade se manter verdadeira a cada
+    # query nova, e isso nao e uma garantia: e uma coincidencia auditada. O
+    # resto da trilha V2 (`gate.py`, `estados.py`, `handoff.py`) ja registra
+    # so token fechado e id, e este handler era a excecao.
+    #
+    # O que sobra e o que diagnostica sem carregar dado: a rota, o tipo da
+    # excecao de dominio e o tipo da causa original (OperationalError x
+    # IntegrityError x outra) — que e o sinal de verdade para decidir se foi
+    # `lock_timeout`, conexao caida ou violacao de restricao. O `event_id` da
+    # requisicao ja esta na trilha de `handoff_operations`/`conversation_events`,
+    # que e por onde se correlaciona o caso concreto.
+    causa = exc.__cause__
+    logger.error(
+        "Handoff V2 indeterminado em %s: %s%s. Detalhe da excecao SUPRIMIDO "
+        "deliberadamente (a mensagem embute SQL e parametros ligados); "
+        "correlacione pelo event_id na trilha de handoff_operations.",
+        request.url.path,
+        type(exc).__name__,
+        f" causada por {type(causa).__name__}" if causa is not None else "",
+    )
     return JSONResponse(
         status_code=500,
         content={
