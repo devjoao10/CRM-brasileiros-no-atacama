@@ -91,8 +91,11 @@ class Conversation(Base):
     last_customer_msg_at = Column(DateTime(timezone=True), nullable=True)  # Janela 24h Meta
     # PACOTE-A: momento em que a conversa ENTROU na fila de atendimento humano.
     # NAO e atividade do cliente (last_customer_msg_at), nem updated_at/created_at.
-    # Preenchido no handoff BIA->humano e no release; zerado na PRIMEIRA RESPOSTA
-    # HUMANA (nao mais ao atribuir — ver a coluna abaixo).
+    # Preenchido no handoff BIA->humano e no release; PRESERVADO na PRIMEIRA
+    # RESPOSTA HUMANA (HOTFIX-01 — deixou de ser zerado ali, para que "tempo em
+    # fila" e "tempo ate a 1a resposta" continuem calculaveis depois do fluxo;
+    # ver conversas/app/services/atendimento.py). So volta a NULL quando o
+    # release devolve a conversa a fila de proposito.
     queued_at = Column(DateTime(timezone=True), nullable=True, index=True)
     # AUDIT-2026-08-WA — ATRIBUIDO != ATENDIDO.
     # Ate aqui o inbox classificava por `atendente_id IS NULL`, o que fazia de

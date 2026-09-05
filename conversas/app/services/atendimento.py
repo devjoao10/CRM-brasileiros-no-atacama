@@ -143,15 +143,30 @@ def aplicar_estado_humano(
     """
     Tira a conversa do universo da BIA e define quem e o dono.
 
-    INVARIANTE NOVO (AUDIT-2026-08-WA) — atribuir NAO tira da fila:
+    INVARIANTE (AUDIT-2026-08-WA, revisada pelo HOTFIX-01) — atribuir NAO tira
+    da fila, e responder tambem NAO apaga o instante em que ela entrou:
 
         primeira_resposta_humana_at IS NULL -> a conversa ESPERA (queued_at set)
-        primeira_resposta_humana_at NOT NULL -> alguem ja atendeu (queued_at NULL)
+        primeira_resposta_humana_at NOT NULL -> alguem ja atendeu (queued_at
+            PRESERVADO — nao mais zerado aqui, ver HOTFIX-01 abaixo)
 
     Antes, `queued_at` era zerado assim que um `atendente_id` era definido. Isso
     fazia o handoff que atribui um dono remover a conversa da FILA DE ESPERA
     antes de qualquer humano falar com o cliente — e a fila ficava vazia
     enquanto a Bia dizia ao cliente que ele estava nela.
+
+    HOTFIX-01 (pre-autorizada pelo dono do projeto — preservar queued_at na 1a
+    resposta humana): esta funcao TAMBEM zerava `queued_at` sempre que
+    `primeira_resposta_humana_at` ja nao era NULL — ou seja, qualquer
+    claim/assign/release/handoff/PUT rodado DEPOIS da primeira resposta humana
+    apagava de novo o instante de entrada na fila, tornando "tempo em fila" e
+    "tempo ate a 1a resposta" para sempre incalculaveis. Isso tambem
+    contradizia `app/v2/estados.py`, que ja EXIGE `queued_at IS NOT NULL` para
+    os estados WAITING_HUMAN e HUMAN_ACTIVE (mesma regra do CHECK
+    `ck_conversations_estado_humano`, m015). Agora, uma vez respondida,
+    `queued_at` e so PRESERVADO por este ramo (nunca mais escrito aqui); quem
+    o zera de novo e SOMENTE o `resetar_atendimento=True` do release, que
+    devolve a conversa a fila de proposito.
 
     `is_bot_active` vira False em TODOS os casos: chegar aqui significa handoff,
     claim, assign, release ou initiate. A unica volta para a BIA e a REABERTURA
@@ -174,7 +189,9 @@ def aplicar_estado_humano(
         conversation.primeira_resposta_humana_at = None
 
     if conversation.primeira_resposta_humana_at is not None:
-        conversation.queued_at = None
+        # HOTFIX-01: queued_at e PRESERVADO aqui — nao mais zerado (ver
+        # docstring). Nada a fazer neste ramo.
+        pass
     elif not (keep_queue_position and conversation.queued_at):
         conversation.queued_at = datetime.now(timezone.utc)
 
@@ -190,11 +207,26 @@ def marcar_atendimento_humano(conversation: Conversation, autor_user_id: int) ->
 
     Efeitos, todos na primeira vez apenas:
       - primeira_resposta_humana_at = agora  (sai da FILA, entra em MEUS)
-      - queued_at = NULL                     (nao espera mais)
+      - queued_at PRESERVADO                 (HOTFIX-01 — nao mais zerado
+        aqui; ver nota abaixo)
       - atendente_id = quem respondeu, se ainda estava vazio (quem responde
         assume; nao existe atendimento sem dono)
       - is_bot_active = False                (defensivo: se a Bia ainda estava
         ligada por qualquer caminho, um humano falando encerra isso)
+
+    HOTFIX-01 (pre-autorizada pelo dono do projeto — preservar queued_at na 1a
+    resposta humana): ate aqui esta funcao zerava `queued_at` na MESMA escrita
+    que grava `primeira_resposta_humana_at` — apagando o instante em que a
+    conversa ENTROU na fila exatamente no momento em que ele passa a ter valor
+    de metrica ("tempo em fila" e "tempo ate a 1a resposta" =
+    primeira_resposta_humana_at - queued_at). Isso tambem contradizia
+    `app/v2/estados.py`, que ja EXIGE `queued_at IS NOT NULL` para os estados
+    WAITING_HUMAN e HUMAN_ACTIVE (mesma regra do CHECK
+    `ck_conversations_estado_humano`, m015) — uma conversa V2 recebendo a 1a
+    resposta humana antes de transicionar para HUMAN_ACTIVE violava esse CHECK
+    no commit. Agora `queued_at` so e escrito por quem carimba a entrada na
+    fila (`aplicar_estado_humano`) ou por quem devolve a conversa a ela
+    (release); esta funcao nunca mais o apaga.
 
     AUDIT-2026-08-WF2 — RETOMADA: outbound humano em conversa ENCERRADA REABRE.
 
@@ -231,7 +263,9 @@ def marcar_atendimento_humano(conversation: Conversation, autor_user_id: int) ->
         return False
 
     conversation.primeira_resposta_humana_at = datetime.now(timezone.utc)
-    conversation.queued_at = None
+    # HOTFIX-01: queued_at NAO e mais zerado aqui — preservado para que
+    # "tempo em fila" e "tempo ate a 1a resposta" continuem calculaveis depois
+    # do fluxo (ver docstring acima).
     conversation.is_bot_active = False
     if conversation.atendente_id is None:
         conversation.atendente_id = autor_user_id

@@ -6,7 +6,7 @@ Fonte unica: is_bot_active + atendente_id + queued_at + primeira_resposta_humana
   BIA               -> bot=True,  atendente=NULL, queued=NULL,        prh=NULL
   Fila (sem dono)    -> bot=False, atendente=NULL, queued=<timestamp>, prh=NULL
   Fila (com dono)    -> bot=False, atendente=<id>, queued=<timestamp>, prh=NULL   <- ATRIBUIDA != ATENDIDA
-  Atendendo (meus)   -> bot=False, atendente=<id>, queued=NULL,        prh=<timestamp>
+  Atendendo (meus)   -> bot=False, atendente=<id>, queued=<timestamp>, prh=<timestamp>  <- queued PRESERVADO (HOTFIX-01)
 
 AUDIT-2026-08-WA — mudanca de regra de negocio (nao e regressao): antes
 `_apply_human_state` zerava queued_at assim que um atendente era definido, o que
@@ -14,6 +14,18 @@ fazia *atribuir* sinonimo de *atender* — a FILA DE ESPERA ficava vazia enquant
 Bia dizia ao cliente que ele estava nela. Agora o eixo fila vs atendimento e
 `primeira_resposta_humana_at`: NULL = ainda esperando (mesmo com dono), NOT NULL =
 alguem respondeu de fato. Ver conversas/app/services/atendimento.py.
+
+HOTFIX-01 — segunda correcao (esta tambem NAO e regressao): ate aqui, a
+PRIMEIRA resposta humana bem-sucedida (`marcar_atendimento_humano`) e qualquer
+operacao de fila rodada DEPOIS dela (`_apply_human_state`, quando
+`primeira_resposta_humana_at` ja nao era NULL) zeravam `queued_at`. Isso
+apagava o instante de entrada na fila assim que ele passava a ter valor de
+metrica ("tempo em fila" / "tempo ate a 1a resposta"), e contradizia
+app/v2/estados.py (que ja exige queued_at IS NOT NULL para
+WAITING_HUMAN/HUMAN_ACTIVE). Agora queued_at e PRESERVADO a partir da 1a
+resposta humana; so o release (`resetar_atendimento=True`) volta a zera-lo,
+de proposito, ao devolver a conversa para o FIM da fila. A secao 18e abaixo
+prova a mudanca.
 
 Prova que:
   1. Inbound novo nasce em BIA (bot ligado, sem atendente, sem fila, sem prh).
@@ -647,7 +659,11 @@ r = client.post(f"/api/conversations/{cNovo}/messages",
 check(r.status_code == 200, f"primeiro envio humano responde 200 (got {r.status_code})")
 bot2, at2, q2, prh2, st2 = state(cNovo)
 check(prh2 is not None, "primeira resposta humana: primeira_resposta_humana_at preenchido")
-check(q2 is None, "primeira resposta humana: sai da fila (queued_at=NULL)")
+# HOTFIX-01 (era `check(q2 is None, ...)` — "sai da fila (queued_at=NULL)"):
+# a classificacao fila/meus continua sendo por primeira_resposta_humana_at (ver
+# _inbox_predicates); queued_at agora e PRESERVADO, nao apagado, para que o
+# instante de entrada na fila sobreviva a 1a resposta humana.
+check(q2 == q_h, "primeira resposta humana: queued_at PRESERVADO (HOTFIX-01, nao apaga mais o instante de entrada na fila)")
 check(at2 == at, "primeira resposta humana: mantem o mesmo atendente")
 check(bot2 is False, "primeira resposta humana: bot continua desligado")
 
@@ -784,6 +800,7 @@ r = client.post(f"/api/conversations/{cRet}/messages",
                 json={"content": "Bom dia, aqui e a Julia", "msg_type": "text"})
 check(r.status_code == 200, f"20 — primeiro atendimento responde 200 (got {r.status_code})")
 prh_antes = state(cRet)[3]
+q_antes = state(cRet)[2]  # HOTFIX-01: baseline para provar que a retomada preserva queued_at
 
 r = client.put(f"/api/conversations/{cRet}", json={"status": "encerrada"})
 check(r.status_code == 200, "20 — PUT status=encerrada responde 200")
@@ -800,7 +817,12 @@ bot_r, at_r, q_r, prh_r, st_r = state(cRet)
 check(st_r == "aberta", f"20a — status volta para 'aberta' (got {st_r!r})")
 check(at_r == 1, f"20a — atendente_id preservado (got {at_r!r})")
 check(prh_r == prh_antes, "20a — primeira_resposta_humana_at do ciclo NAO e reescrita")
-check(q_r is None, "20a — nao volta para a fila (queued_at continua NULL)")
+# HOTFIX-01 (era `check(q_r is None, ...)` — "nao volta para a fila"): a
+# conversa ja tinha primeira_resposta_humana_at != NULL ANTES de encerrar, entao
+# marcar_atendimento_humano so reabre o status (early-return antes de tocar
+# queued_at) — o valor sobrevive intacto, nao "continua NULL".
+check(q_r == q_antes, "20a — queued_at PRESERVADO (HOTFIX-01): retomada nao apaga o "
+                      "instante de entrada na fila original")
 check(bot_r is False, "20a — BIA continua desligada")
 
 print("20b — a conversa retomada volta a ser VISIVEL para quem escreveu")
