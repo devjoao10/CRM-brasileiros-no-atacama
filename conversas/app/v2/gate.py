@@ -15,9 +15,9 @@ gerar" e "a mensagem sai para o WhatsApp" - decide se a resposta ainda pode
 ser enviada, relendo o estado ATUAL da conversa nesse instante.
 
 R-INTENT (ver Fase 1 e Fase 7 no plano): este modulo nao recebe nem le
-`AIInterpretationResult` - as cinco checagens abaixo sao inteiramente sobre
+`AIInterpretationResult` - as seis checagens abaixo sao inteiramente sobre
 COLUNAS operacionais da conversa (state, state_version, is_bot_active,
-atendente_id, last_customer_msg_at), nunca sobre texto livre de intent.
+atendente_id, status, last_customer_msg_at), nunca sobre texto livre de intent.
 
 "RELE SOB LOCK" SEM FOR UPDATE
 -------------------------------
@@ -47,9 +47,9 @@ commita noutra) - nao so dentro da mesma sessao, onde `expire_on_commit`
 (default do SQLAlchemy) ja mascara a diferenca. Ver `tests/test_v2_gate.py`,
 teste do briefing, que prova isto com duas sessoes de verdade.
 
-AS CINCO CONDICOES DE RECUSA, CHECADAS EM ORDEM
--------------------------------------------------
-A primeira que falhar decide o `error_code` do evento; nunca uma sexta:
+AS SEIS CONDICOES DE RECUSA, CHECADAS EM ORDEM
+------------------------------------------------
+A primeira que falhar decide o `error_code` do evento; nunca uma setima:
 
   1. `state_version` atual != `version_esperada`.
   2. `state` atual != `state_esperado` - independente de 1: `state_version`
@@ -58,9 +58,32 @@ A primeira que falhar decide o `error_code` do evento; nunca uma sexta:
      assumida como prova da outra).
   3. `is_bot_active is False` - bot nao pode mais falar.
   4. `atendente_id is not None` - um humano assumiu (ver nota abaixo).
-  5. `not service_window_open(last_customer_msg_at)` - janela Meta fechada.
+  5. `status != 'aberta'` - a conversa foi encerrada (ver "O FURO DO STATUS").
+  6. `not service_window_open(last_customer_msg_at)` - janela Meta fechada.
      REUSA `service_window_open` (FONTE UNICA da regra de 24h, ja definida
      em `conversas/app/models/conversation.py`); nunca reimplementada aqui.
+
+O FURO DO STATUS (R8/R10, inventario secao 0.5) - POR QUE A 5a EXISTE
+-----------------------------------------------------------------------
+Um `PUT /api/conversations/{id}` com `{"status":"encerrada"}` ISOLADO (sem
+claim antes) encerra a conversa e NAO desliga o bot: `update_conversation` so
+escreve `conversation.status` nesse ramo. Numa conversa `AI_TRIAGE` com o bot
+ligado, as condicoes 1-4 e 6 passavam todas, e o gate AUTORIZAVA a IA a
+responder numa conversa que um humano acabava de encerrar. Nenhuma das outras
+cinco releituras enxerga esse caso, porque nenhuma delas le `status`.
+
+A checagem entra ANTES da janela de 24h de proposito: "o humano encerrou" e um
+fato do NOSSO sistema e diz mais a quem investiga do que "a janela da Meta
+expirou", que e a consequencia mais provavel de a conversa estar parada. Entra
+DEPOIS de 3 e 4 para nao mudar o `error_code` de nenhum caso que ja era
+recusado por bot desligado ou humano dono - o vocabulario cresce, a prioridade
+existente nao se mexe.
+
+'aberta' e o unico status aberto que se escreve: 'aguardando' e LEGADO e
+DERIVADO (a whitelist do `PUT /{id}` o recusa explicitamente) e sobrevive so em
+`LEGACY_OPEN_STATUSES`, por tolerancia a linhas antigas. Uma conversa em
+'aguardando' e uma linha legada que a IA nao deve estar processando - recusar e
+o comportamento fail-closed correto, coerente com a decisao 10 da maquina.
 
 "UM HUMANO ASSUMIU" = `atendente_id IS NOT NULL`, e nao
 `primeira_resposta_humana_at IS NOT NULL`. Escolha deliberada: `atendente_id`
@@ -78,7 +101,7 @@ conversa.
 Toda recusa emite EXATAMENTE UM `AI_RESPONSE_DISCARDED` (a ordem acima
 decide qual `error_code` e reportado, mesmo quando mais de uma condicao e
 verdadeira ao mesmo tempo). O evento carrega `conversation_id` +
-`error_code` (vocabulario FECHADO de cinco tokens) + `result=IGNORADO` -
+`error_code` (vocabulario FECHADO de seis tokens) + `result=IGNORADO` -
 nunca `state_before`/`state_after`: este gate nao executa transicao
 nenhuma (so recusa ou libera o envio), e esses dois campos tem formato
 restrito (`eventos_validacao.validar_state`) que uma linha corrompida
@@ -87,9 +110,9 @@ Nenhum dado de cliente (telefone, nome, conteudo de mensagem) entra em
 `error_code` nem em qualquer outro campo do evento - mesmo cuidado que
 `estados.py` ja aplica a `TransicaoInvalida`.
 
-Sucesso (nenhuma das cinco condicoes) NAO emite evento.
+Sucesso (nenhuma das seis condicoes) NAO emite evento.
 
-`conversation_id` QUE NAO RESOLVE A NENHUMA LINHA NAO E UMA DAS CINCO
+`conversation_id` QUE NAO RESOLVE A NENHUMA LINHA NAO E UMA DAS SEIS
 CONDICOES DE RECUSA - e erro de chamador (a IA nao deveria estar
 processando uma conversa que nao existe mais), entao levanta `ValueError`
 em vez de devolver `False` em silencio ou de emitir um evento de
@@ -108,13 +131,17 @@ _ERRO_STATE_VERSION_DIVERGENTE = "STATE_VERSION_DIVERGENTE"
 _ERRO_STATE_DIVERGENTE = "STATE_DIVERGENTE"
 _ERRO_BOT_INATIVO = "BOT_INATIVO"
 _ERRO_HUMANO_ASSUMIU = "HUMANO_ASSUMIU"
+_ERRO_CONVERSA_ENCERRADA = "CONVERSA_ENCERRADA"
 _ERRO_JANELA_FECHADA = "JANELA_FECHADA"
+
+# O unico status em que a IA pode falar. Ver "O FURO DO STATUS" no docstring.
+_STATUS_ABERTA = "aberta"
 
 
 def _recusar(db: Session, conversation_id: int, error_code: str) -> bool:
     """
     Emite `AI_RESPONSE_DISCARDED` com o motivo e devolve `False`. Unico
-    ponto de saida negativa de `autorizar_envio` - as cinco checagens nunca
+    ponto de saida negativa de `autorizar_envio` - as seis checagens nunca
     duplicam a chamada de `registrar_evento`.
     """
     registrar_evento(
@@ -140,7 +167,7 @@ def autorizar_envio(
 
     Rele o estado ATUAL da conversa (descartando cache da sessao - ver
     "RELE SOB LOCK" no docstring do modulo) e recusa se qualquer uma das
-    cinco condicoes documentadas ali for verdadeira - devolve `False` e
+    seis condicoes documentadas ali for verdadeira - devolve `False` e
     emite `AI_RESPONSE_DISCARDED`. Se nenhuma for verdadeira, devolve `True`
     sem emitir evento.
 
@@ -151,7 +178,7 @@ def autorizar_envio(
     igualdade funciona identica nos dois casos, sem precisar coagir tipo.
 
     Levanta `ValueError` se `conversation_id` nao corresponder a nenhuma
-    linha - nao e uma das cinco condicoes de recusa, e erro de chamador.
+    linha - nao e uma das seis condicoes de recusa, e erro de chamador.
     """
     conversation = db.get(Conversation, conversation_id, populate_existing=True)
     if conversation is None:
@@ -165,6 +192,8 @@ def autorizar_envio(
         return _recusar(db, conversation_id, _ERRO_BOT_INATIVO)
     if conversation.atendente_id is not None:
         return _recusar(db, conversation_id, _ERRO_HUMANO_ASSUMIU)
+    if conversation.status != _STATUS_ABERTA:
+        return _recusar(db, conversation_id, _ERRO_CONVERSA_ENCERRADA)
     if not service_window_open(conversation.last_customer_msg_at):
         return _recusar(db, conversation_id, _ERRO_JANELA_FECHADA)
 

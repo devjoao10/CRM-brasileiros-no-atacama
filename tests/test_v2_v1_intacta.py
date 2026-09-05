@@ -81,17 +81,35 @@ def _sha256_normalizado(caminho: pathlib.Path) -> str:
 # transformaria a guarda em um no-op disfarcado.
 _PROTEGIDOS = (
     (CONVERSAS_DIR / "app/services/atendimento.py",
-     "e7031041d8d302184e1a161b68bef861e34f3e28f1ddd85e37802929aaf95360"),
+     "1c4b4746dfcc73856f23063c6e5298436fc258367a5e567c254850b258cfad9b"),
     (CONVERSAS_DIR / "app/services/outbound.py",
      "02ad2c4e2f4c07e5a4933adb333a02ddc516d197e01106b1d4710fe0caf6dd77"),
     (CONVERSAS_DIR / "app/routers/webhook.py",
      "5b5c23184a28ab293247dff4371675fc0e73ea31603e22db39755b92c7d95f90"),
+    # HOTFIX desta rodada (R8/R10), aprovado pelo dono; hash recalculado A MAO
+    # com a formula de `_sha256_normalizado` acima. CONV-HOTFIX-R10-01 (o
+    # read-repair do responsavel deixa de derrubar o inbox quando o banco o
+    # recusa) + CONV-HOTFIX-LOCK-01 (`PUT /{id}` passa a usar `_lock_conversation`,
+    # a mesma trava que claim/assign/release/handoff ja usavam). As duas mudancas
+    # sao tratamento de erro e trava de linha: nenhuma delas introduz referencia
+    # as colunas da V2 — a Familia B.1 continua verde por AST e por grep.
+    # HOTFIX ADICIONAL desta rodada (revisao de performance, hash recalculado de
+    # novo): `_reparar_responsavel_tolerando_recusa` desliga `expire_on_commit`
+    # em volta do seu proprio `db.commit()` para nao expirar (e reintroduzir o
+    # N+1 de `tags`) as OUTRAS conversas da mesma pagina — puro timing de
+    # commit/expire, mesma ausencia de referencia as colunas da V2.
     (CONVERSAS_DIR / "app/routers/conversations.py",
-     "0d7463e2128862cc5260481b9826e29c56b8e8294895cca5ef5b8555636d8e6f"),
+     "d3ed64dd61ba1982b5529ecb3ad33b1d9351159453ff8e96f0cfe900a924e369"),
+    # HOTFIX desta rodada: CONV-HOTFIX-LOCK-03 — o SELECT de `sync_responsavel_to_crm`
+    # passa a tomar `FOR UPDATE` (ramo IS_SQLITE), fechando a escrita cross-app
+    # em `leads` que rodava sem trava nem CAS.
     (CONVERSAS_DIR / "app/services/crm.py",
-     "2d96421cd1421bb73f2dbd6ced73e188f4b2df9cd8a9f496791f71db14316ac5"),
+     "fbdb05a6afa68eaee6816d443ff42a3b43307a7be73f88b54778da5680bfc87d"),
+    # HOTFIX desta rodada: HOTFIX-LOCK-02 — `update_lead_responsavel` passa a
+    # chamar o `_lock_lead()` que ja existia no proprio arquivo. So fecha a
+    # corrida; nenhuma recusa, nenhum redirecionamento, nenhuma nocao de handoff.
     (ROOT / "app/routers/leads.py",
-     "2c64ba21f835dbf0ff69850de236c282b355afd90e3822cd927b3863a9a1bce4"),
+     "4c3ec4188d431ebf0a4bb7892d7d6977c62f322836554cbffc0fb39c478f3732"),
     (ROOT / "app/services/lead_creation.py",
      "cad719206f354a51c3273c6995f0d2832b3d58e1629b6b19d8b4f56abc2a4b58"),
     (ROOT / "app/services/conversas_bridge.py",

@@ -90,6 +90,11 @@ from app.database import SessionLocal
 from app.models.handoff_op import HandoffOperation, StatusHandoff
 from app.v2 import worker_fila
 from app.v2.handoff import ClasseErroCrm, TokenErroCrm, handoff_to_human
+# BIA-V2 R8/R10 — importar REGISTRA o listener `before_flush` da barreira de
+# escrita operacional (o modulo se auto-registra na `SessionLocal`). E por isso
+# que o import existe sem uso aparente: nenhum dos oito arquivos protegidos
+# chama nada daqui, e nem deve — ver o docstring de `app/v2/compat.py`.
+from app.v2 import compat  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

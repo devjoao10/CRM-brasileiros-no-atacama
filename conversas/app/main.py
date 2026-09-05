@@ -24,6 +24,11 @@ from app.seed import seed_dev_user, seed_quick_replies, seed_templates, seed_aut
 from app.logging_config import configurar_logging
 from app.v2.eventos import EventoDuplicado
 from app.v2.eventos_validacao import CampoInvalido, PayloadInvalido
+# BIA-V2 R8/R10 — importar REGISTRA o listener `before_flush` da barreira de
+# escrita operacional (o modulo se auto-registra na `SessionLocal`). E por isso
+# que o import existe sem uso aparente: nenhum dos oito arquivos protegidos
+# chama nada daqui, e nem deve — ver o docstring de `app/v2/compat.py`.
+from app.v2 import compat  # noqa: F401
 
 # BIA-V2 Fase 0 — sem isto o root logger fica em WARNING sem handler, e toda a
 # trilha `.info` que este servico ja escreve morre dentro do processo.

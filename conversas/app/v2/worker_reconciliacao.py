@@ -82,6 +82,11 @@ from app.services.crm import get_leads_responsaveis
 from app.v2 import worker_fila
 from app.v2.contratos import HandoffResult
 from app.v2.handoff import _ERRO_ESTADO_LOCAL, ClasseErroCrm, TokenErroCrm, handoff_to_human
+# BIA-V2 R8/R10 — importar REGISTRA o listener `before_flush` da barreira de
+# escrita operacional (o modulo se auto-registra na `SessionLocal`). E por isso
+# que o import existe sem uso aparente: nenhum dos oito arquivos protegidos
+# chama nada daqui, e nem deve — ver o docstring de `app/v2/compat.py`.
+from app.v2 import compat  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -392,10 +397,18 @@ def _corrigir_crm_para_conversas(
     DIRECAO B — o humano local ja esta atendendo; o CRM adota essa realidade.
 
     Premissa da direcao (secao 4): `atendente_id != target_user_id`. Quando ela
-    NAO vale, nao ha o que corrigir:
-      - `atendente_id == target_user_id` -> as duas pontas ja concordam com o
-        alvo original (o CRM aplicou antes da recusa local, e o local depois
-        chegou no mesmo valor). Fecha a linha, sem chamada nenhuma.
+    NAO vale, nao ha o que corrigir por HANDOFF:
+      - `atendente_id == target_user_id` -> as duas pontas concordam com o alvo
+        original NA LEITURA LOCAL — mas fechar so por isso e o MESMO erro que o
+        docstring de `_confirmar_convergencia` documenta para o outro ramo
+        (achado do fechamento desta revisao): entre a reclamacao desta linha e
+        este ciclo, um terceiro escritor (ex.: `PUT /api/leads/{id}/responsavel`,
+        o endpoint legado) pode ter movido `lead.responsavel_id` no CRM para um
+        valor diferente. Por isso este caso TAMBEM passa por
+        `_confirmar_convergencia` — releitura FRESCA do CRM, nunca a suposicao
+        de que "a premissa nao bateu" ja implica "o CRM tem o valor certo". Sem
+        isso, `reconciled_at` fecharia a linha para sempre com a divergencia
+        real ainda de pe.
       - `atendente_id is None` -> a recusa local nao foi por troca de humano, e
         nao existe alvo local para o qual convergir o CRM ("handoff para
         ninguem" nao e expressavel por este endpoint). Ticket; a linha volta a
@@ -403,8 +416,9 @@ def _corrigir_crm_para_conversas(
 
     Os dois saem com `tentou_rede=False` (o default), como todo early-return:
     nenhum entrega a operacao a `handoff_to_human`, entao nenhum consome
-    orcamento de tentativas — inclusive o primeiro, que fecha a linha e nao
-    precisaria de contador nenhum. Ver o docstring de `_Passo`.
+    orcamento de tentativas — inclusive o primeiro, que so LE o CRM por
+    `_confirmar_convergencia` e nunca entrega nada a `handoff_to_human`. Ver o
+    docstring de `_Passo`.
 
     SUCESSO NAO E `resultado.sucesso`, E O ESTADO DO CRM. O alvo declarado da
     Direcao B e `lead.responsavel_id = conversation.atendente_id` — nada alem
@@ -420,13 +434,18 @@ def _corrigir_crm_para_conversas(
     """
     alvo_local = conversation.atendente_id
     if alvo_local == operacao.target_user_id:
-        logger.info(
-            "reconciliacao (Direcao B) sem divergencia: o atendente local ja e o alvo "
-            "original. operacao_id=%s alvo=%s",
-            operacao.id, alvo_local,
+        # NAO fecha so pela leitura local (achado do fechamento desta revisao):
+        # entre a reclamacao desta linha e este ponto, um terceiro escritor pode
+        # ter movido `lead.responsavel_id` no CRM. A mesma comparacao de
+        # `_confirmar_convergencia` decide se a convergencia e REAL agora.
+        # `tentou_rede` fica no default (False): nenhuma entrega a
+        # `handoff_to_human` foi feita aqui, so a leitura que a funcao ja faz.
+        return _Passo(
+            _confirmar_convergencia(
+                db, operacao, conversation,
+                alvo_local=alvo_local, origem="SEM_DIVERGENCIA_LOCAL",
+            )
         )
-        marcar_reconciliado(db, operacao)
-        return _Passo(Desfecho.CONVERGIU)
     if alvo_local is None:
         logger.error(
             "TICKET: reconciliacao (Direcao B) sem alvo local — a conversa nao tem "

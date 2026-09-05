@@ -81,7 +81,7 @@ _contador_wa = iter(range(1, 1000))
 
 
 def _criar_conversa(*, state, state_version, is_bot_active=True, atendente_id=None,
-                     last_customer_msg_at=None, session=None):
+                     last_customer_msg_at=None, session=None, status="aberta"):
     """Conversa V2 minima, com os campos que `autorizar_envio` le definidos
     diretamente (nao via `aplicar_transicao` - a maioria dos casos aqui testa
     UMA condicao isolada, nao uma transicao valida de verdade)."""
@@ -89,7 +89,7 @@ def _criar_conversa(*, state, state_version, is_bot_active=True, atendente_id=No
     conv = Conversation(
         lead_id=1,
         whatsapp=f"5511900{next(_contador_wa):06d}",
-        status="aberta",
+        status=status,
         unread_count=0,
         is_bot_active=is_bot_active,
         atendente_id=atendente_id,
@@ -185,6 +185,61 @@ eventos = _eventos_discard(cid_at)
 check(
     len(eventos) == 1 and eventos[0].error_code == "HUMANO_ASSUMIU",
     f"5b. error_code=HUMANO_ASSUMIU (achou {[e.error_code for e in eventos]})",
+)
+
+# ---------------------------------------------------------------------------
+# 5.1 conversa ENCERRADA (R8/R10 - o furo do `status`, inventario secao 0.5)
+#
+# O cenario EXATO, e nao uma aproximacao: um humano manda
+# `PUT /api/conversations/{id}` com {"status":"encerrada"} ISOLADO, sem claim
+# antes. `update_conversation` so escreve `conversation.status` nesse ramo -
+# NAO desliga o bot, NAO define atendente_id, NAO toca state/state_version
+# (a V1 nunca os toca, R8). Entao as cinco condicoes ANTIGAS passavam todas e a
+# IA era autorizada a falar numa conversa que o humano acabara de encerrar.
+#
+# Este e o caso em que a resposta em voo precisa ser invalidada por INTERVENCAO
+# HUMANA, e o unico sinal que a V1 deixa e o proprio `status`.
+# ---------------------------------------------------------------------------
+cid_encerrada = _criar_conversa(state="AI_TRIAGE", state_version=5, is_bot_active=True,
+                                 atendente_id=None, last_customer_msg_at=_AGORA)
+# A IA le o estado e "comeca a gerar".
+_state_lido, _versao_lida = "AI_TRIAGE", 5
+# O humano encerra pela V1 - a MESMA escrita que `update_conversation` faz.
+_conv_encerrada = db.query(Conversation).filter(Conversation.id == cid_encerrada).first()
+_conv_encerrada.status = "encerrada"
+db.commit()
+check(
+    (_conv_encerrada.state, _conv_encerrada.state_version, _conv_encerrada.is_bot_active)
+    == ("AI_TRIAGE", 5, True),
+    f"5.1a pre-condicao REAL: o encerramento V1 nao mexeu em state/state_version "
+    f"nem desligou o bot (state={_conv_encerrada.state!r}, "
+    f"v={_conv_encerrada.state_version}, bot={_conv_encerrada.is_bot_active}) - "
+    f"sem isso a prova seria vazia, porque outra condicao pegaria o caso",
+)
+resultado = autorizar_envio(
+    db, conversation_id=cid_encerrada, state_esperado=_state_lido, version_esperada=_versao_lida
+)
+check(
+    resultado is False,
+    f"5.1b (prop.7) a resposta em voo e INVALIDADA depois de o humano encerrar "
+    f"(obteve {resultado})",
+)
+eventos = _eventos_discard(cid_encerrada)
+check(
+    len(eventos) == 1 and eventos[0].error_code == "CONVERSA_ENCERRADA",
+    f"5.1c error_code=CONVERSA_ENCERRADA (achou {[e.error_code for e in eventos]})",
+)
+
+# 'aguardando' (status LEGADO e derivado) tambem nao autoriza - fail closed.
+cid_aguardando = _criar_conversa(state="AI_TRIAGE", state_version=5, is_bot_active=True,
+                                  atendente_id=None, last_customer_msg_at=_AGORA,
+                                  status="aguardando")
+resultado = autorizar_envio(db, conversation_id=cid_aguardando, state_esperado="AI_TRIAGE",
+                            version_esperada=5)
+check(
+    resultado is False and _eventos_discard(cid_aguardando)[0].error_code == "CONVERSA_ENCERRADA",
+    f"5.1d o status LEGADO 'aguardando' tambem recusa (fail closed) - so 'aberta' "
+    f"autoriza (obteve {resultado})",
 )
 
 # ---------------------------------------------------------------------------

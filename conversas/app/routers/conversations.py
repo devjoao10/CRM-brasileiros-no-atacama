@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFil
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import set_committed_value
 from sqlalchemy import and_, case, desc, func, or_, update as sa_update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db, IS_SQLITE
@@ -451,6 +452,119 @@ def _repair_responsavel_cache(db: Session, conversation: Conversation, lead_resp
     return True
 
 
+# CONV-HOTFIX-R10-01 (correcao aprovada nesta rodada; ver bia-v2-r8-r10-inventory.md
+# secao 2.3) — nome da CHECK constraint criada por migrations/m015. Constante
+# nomeada em vez de literal solto porque ela e comparada contra o texto do erro
+# do driver, e um erro de digitacao aqui viraria "engoliu tudo em silencio".
+_CHECK_ATENDIMENTO_HUMANO = "ck_conversations_estado_humano"
+
+
+def _reparar_responsavel_tolerando_recusa(
+    db: Session, conversation: Conversation, lead_resp: dict
+) -> bool:
+    """
+    CONV-HOTFIX-R10-01 — `_repair_responsavel_cache` que sobrevive a uma recusa
+    do banco. Mesmo retorno da funcao que envolve: True se houve reparo.
+
+    O PROBLEMA (mecanico, nao hipotetico). `_repair_responsavel_cache` alinha o
+    responsavel da conversa ao do lead (o CRM e a fonte de verdade) SEM tocar
+    `atendente_id`. Quando alguem reatribui o lead pelo CRM
+    (`PUT /api/leads/{id}/responsavel` — a ferramenta do n8n faz exatamente isso)
+    enquanto a conversa esta em atendimento humano, os dois passam a divergir, e
+    a CHECK constraint de m015 recusa o UPDATE. O erro derrubava A LISTAGEM
+    INTEIRA do inbox — nao so aquela conversa — e voltava a cada ciclo de
+    polling enquanto a divergencia existisse.
+
+    ONDE O ERRO ESTOURA (medido, nao suposto): no `db.execute()` de dentro de
+    `_repair_responsavel_cache`, NAO no `db.commit()` seguinte. `sa_update` sobre
+    uma entidade mapeada e um UPDATE ORM-enabled, que o SQLAlchemy 2.0 executa
+    NA HORA. Envolver o commit nao pegaria nada — por isso a guarda esta aqui,
+    em volta da chamada.
+
+    Uma rota de LEITURA nao pode devolver 500 porque um reparo OPORTUNISTA de
+    cache foi recusado. Aqui o reparo e desfeito, o incidente vira log, e a
+    resposta segue com o cache como estava. Convergir de fato e trabalho do
+    worker de reconciliacao, nao de um GET.
+
+    O `db.rollback()` e obrigatorio, nao cosmetico: depois de um erro de
+    statement a transacao fica invalidada e qualquer query seguinte na mesma
+    sessao levantaria `PendingRollbackError` — o 500 voltaria pela porta dos
+    fundos, na proxima linha da pagina.
+
+    ESCOPO ESTREITO DE PROPOSITO: so esta CHECK e engolida. Qualquer outro
+    `IntegrityError` (FK, UNIQUE, NOT NULL) volta a subir intacto — engolir
+    IntegrityError generico aqui esconderia defeito de verdade.
+
+    LOG SEM DADO DE CLIENTE: so ids e o nome da constraint. Nenhum telefone,
+    nome ou conteudo de mensagem — mesma disciplina do resto do caminho V2.
+
+    POR QUE CADA REPARO COMMITA O SEU PROPRIO (achado do teste de regressao, nao
+    do desenho): o `db.rollback()` obrigatorio acima desfaz a transacao INTEIRA,
+    e nao so o UPDATE recusado. Com um commit unico no fim da pagina, UMA
+    conversa recusada descartava os reparos JA aplicados de TODAS as outras
+    conversas da mesma pagina — e, como a recusa se repete a cada polling,
+    aquelas outras nunca convergiam enquanto a conversa problematica estivesse
+    na pagina. Uma linha ruim contaminava a pagina inteira; era um defeito pior
+    e mais silencioso do que o 500 que este hotfix veio corrigir.
+
+    O SAVEPOINT seria a resposta idiomatica e esta PROIBIDO neste repositorio:
+    `.claude/memory/pysqlite-savepoint-rollback-gap.md` documenta que
+    `db.begin_nested()` no SQLite daqui nao desfaz num `db.rollback()` posterior.
+
+    O custo era zero no caminho comum: `_repair_responsavel_cache` faz early-return
+    quando o cache ja bate com o CRM, que e o caso da esmagadora maioria das
+    linhas, e este commit so acontece quando um reparo REALMENTE foi emitido.
+
+    ACHADO DESTA RODADA (revisao de performance, nao hipotetico): numa pagina
+    que TEM divergencia, o preco descrito acima como "aceitavel" era maior do
+    que parecia. `SessionLocal` (`app/database.py`) usa o default
+    `expire_on_commit=True` — este commit nao expira so a linha reparada,
+    expira TODOS os objetos da identity map da sessao, inclusive a colecao
+    `tags` de TODAS as outras conversas da pagina, carregada em lote por
+    `selectinload(Conversation.tags)` em `list_conversations` EXATAMENTE para
+    evitar 1 SELECT de tags por linha. Expirada, `tags` volta ao lazy-load
+    default do relationship (`models/conversation.py`) na hora de serializar —
+    reintroduzindo, em qualquer pagina com PELO MENOS UMA divergencia, o mesmo
+    N+1 que aquele eager load existe para evitar. Isto na rota que este proprio
+    arquivo trata como a mais quente do app (poll de 5s por aba aberta, ate
+    200 linhas por pagina).
+
+    A CORRECAO (ver o commit logo abaixo): desligar `expire_on_commit` nesta
+    sessao SO em volta deste commit, e religar logo depois. E seguro porque
+    `set_committed_value` (dentro de `_repair_responsavel_cache`, acima) ja
+    deixou os dois campos reparados corretos no `__dict__` do objeto ANTES do
+    commit — nao ha nada que um SELECT novo pos-commit resolveria para a linha
+    reparada em si. O unico efeito do expire aqui seria invalidar objetos que
+    ESTE commit nao tem nenhum motivo de invalidar. Ligar/desligar por commit
+    (em vez de mudar o default da sessao inteira) nao muda nada para o resto
+    do request: o unico outro commit deste endpoint (`list_conversations`, ao
+    final, apos a serializacao) ja roda DEPOIS de tudo ler o que precisava —
+    o expire dele continua gratis, como o comentario de la ja descrevia.
+    """
+    try:
+        if not _repair_responsavel_cache(db, conversation, lead_resp):
+            return False
+        # Ver "A CORRECAO" no docstring acima: liga/desliga escopado a ESTE
+        # commit, nunca ao default da sessao inteira.
+        expire_on_commit_original = db.expire_on_commit
+        db.expire_on_commit = False
+        try:
+            db.commit()
+        finally:
+            db.expire_on_commit = expire_on_commit_original
+        return True
+    except IntegrityError as exc:
+        if _CHECK_ATENDIMENTO_HUMANO not in str(getattr(exc, "orig", exc)):
+            raise
+        db.rollback()
+        logger.warning(
+            "Read-repair do responsavel recusado por %s: o cache NAO foi alinhado ao "
+            "CRM e a resposta segue com o valor anterior. conversation_id=%s lead_id=%s",
+            _CHECK_ATENDIMENTO_HUMANO, conversation.id, conversation.lead_id,
+        )
+        return False
+
+
 # ─── N8N Integration: Send Notification ──────────────────────────────
 
 @router.post("/send-notification", summary="Enviar notificação via WhatsApp")
@@ -726,7 +840,9 @@ async def list_conversations(
             for conv in conversations:
                 info = responsaveis.get(conv.lead_id)
                 if info is not None:
-                    repaired = _repair_responsavel_cache(db, conv, info) or repaired
+                    # CONV-HOTFIX-R10-01: um reparo recusado pelo banco desfaz a si
+                    # mesmo e a pagina segue — antes, derrubava a listagem inteira.
+                    repaired = _reparar_responsavel_tolerando_recusa(db, conv, info) or repaired
 
     _preencher_atendente_nome(db, conversations)
 
@@ -1035,7 +1151,10 @@ async def get_conversation(
             if responsaveis:
                 info = responsaveis.get(conversation.lead_id)
                 if info is not None:
-                    _repair_responsavel_cache(db, conversation, info)
+                    # CONV-HOTFIX-R10-01: mesmo tratamento do call site da listagem
+                    # — abrir uma conversa nao pode devolver 500 porque o reparo
+                    # oportunista de cache foi recusado pelo banco.
+                    _reparar_responsavel_tolerando_recusa(db, conversation, info)
         dirty = True
 
     # Mark as read
@@ -1095,13 +1214,18 @@ async def update_conversation(
     Agora os dois campos operacionais passam por `_apply_human_state`, o alvo e
     validado como `/assign` valida, e o PUT inteiro (status + estado operacional
     + responsavel + sync no CRM) commita UMA vez.
-    """
-    conversation = db.query(Conversation).filter(
-        Conversation.id == conversation_id
-    ).first()
 
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+    CONV-HOTFIX-LOCK-01 (correcao aprovada nesta rodada) — ESTA rota era a UNICA
+    escrita de conversa do arquivo sem trava de linha: um `.first()` puro,
+    enquanto claim/assign/release/handoff ja usavam `_lock_conversation`. E ela e
+    a mais destrutiva das cinco: o ramo "religar a BIA" abaixo zera QUATRO campos
+    operacionais de uma vez. Duas requisicoes simultaneas (o toggle do bot e uma
+    troca de responsavel, ou dois operadores na mesma conversa) liam as duas o
+    mesmo retrato e a ultima a commitar apagava a decisao da outra em silencio.
+    Nenhum comportamento novo: a MESMA trava, do MESMO helper, que as outras
+    quatro rotas deste arquivo ja usam ha tempo — inclusive o ramo IS_SQLITE.
+    """
+    conversation = _lock_conversation(db, conversation_id)
 
     old_status = conversation.status
 

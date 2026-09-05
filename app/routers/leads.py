@@ -1101,8 +1101,24 @@ async def update_lead_responsavel(
     """
     Altera o responsável de um lead.
     Envie `responsavel_id=null` para atribuir ao Agente IA.
+
+    HOTFIX-LOCK-02 (correção aprovada nesta rodada) — esta é a escrita mais
+    disputada do CRM e era a única sem trava: `.first()` puro, sem
+    `with_for_update`, sem CAS. O `_lock_lead()` que ela passa a usar já existe
+    NESTE arquivo (mesmo padrão de `_lock_conversation` no Conversas) e até aqui
+    só `append_anotacao` o chamava — a trava estava a uma função de distância.
+
+    O caso real: a `Tool Alterar Responsavel` do n8n dispara ao fim de TODO
+    processamento do Gerenciador e colide de verdade com o seletor da UI do CRM
+    sobre o mesmo lead. Sem trava, as duas requisições liam o mesmo
+    `old_responsavel` e gravavam dois `LeadHistory` partindo do mesmo valor —
+    um deles descrevendo uma transição que nunca aconteceu.
+
+    ESCOPO: isto fecha a CORRIDA, e só ela. Não introduz recusa, redirecionamento
+    nem qualquer consciência de handoff em andamento — decisão de produto,
+    deliberadamente fora desta correção.
     """
-    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    lead = _lock_lead(db, lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead não encontrado")
 

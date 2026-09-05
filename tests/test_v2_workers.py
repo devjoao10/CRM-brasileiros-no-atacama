@@ -34,7 +34,10 @@ GRUPOS COBERTOS (um teste real por item, nunca prosa):
   6  R15 Direcao A converge o Conversas para o dono que o CRM ja tem
   7  R15 Direcao B corrige o CRM para o atendente local - inclusive o caso em
      que `handoff_to_human` reporta FALHA (estado local recusado) e a
-     divergencia esta, ainda assim, RESOLVIDA
+     divergencia esta, ainda assim, RESOLVIDA; e o caso em que a premissa
+     (`atendente_id == target_user_id`) parece dispensar toda chamada - a
+     linha so fecha se o CRM CONFIRMAR isso na releitura, nunca pela leitura
+     local sozinha (achado do fechamento desta revisao)
   8  a comparacao `current_responsavel_id` x `atendente_id` decide certo nos
      DOIS sentidos (achado HIGH: 409 nao significa "resolvido" sozinho)
   9  nenhum dos tres modulos importa ou menciona `sync_responsavel_to_crm`
@@ -1016,6 +1019,7 @@ cid7b, lead7b = criar_conversa(
     is_bot_active=False, atendente_id=7, responsavel_id=None,
     queued_at=datetime.now(timezone.utc),
 )
+CRM.donos[lead7b] = 7  # o CRM CONFIRMA na releitura - a convergencia e REAL
 op7b = criar_operacao(
     status=StatusHandoff.FAILED.value, error_code="ESTADO_LOCAL_RECUSADO",
     conversation_id=cid7b, target_user_id=7,
@@ -1025,8 +1029,8 @@ r15_mod.processar_ciclo(sessao)
 sessao.close()
 check(
     ler_operacao(op7b).reconciled_at is not None and not CRM.chamadas,
-    "7e. sem divergencia (atendente local == alvo original), a linha fecha sem "
-    "nenhuma chamada ao CRM",
+    "7e. atendente local == alvo original E o CRM confirma na releitura: a linha "
+    "fecha, e so por LEITURA (nenhuma chamada de ESCRITA ao CRM)",
 )
 
 # O caso que `resultado.sucesso` sozinho classificaria errado: o humano JA
@@ -1207,6 +1211,49 @@ check(
     _chave_da_tentativa_perdida[0]
     == str(uuid.uuid5(r15_mod.NS_RECONCILIACAO, f"correcao:{ev7m}:55")),
     "7o. e a chave e a formula documentada, nao um valor qualquer estavel por acaso",
+)
+
+
+print(
+    "\n--- GRUPO 7c: a leitura LOCAL sozinha nao fecha mais a linha (achado do "
+    "fechamento desta revisao - mesmo risco que 8a/8d ja cobrem para o outro ramo) ---"
+)
+limpar_fila()
+CRM.limpar()
+COLETOR.limpar()
+
+# Mesma premissa de 7e (`atendente_id == target_user_id`), mas um terceiro
+# escritor moveu o CRM para OUTRO dono entre a reclamacao desta linha e este
+# ciclo. Fechar so pela leitura local perderia essa divergencia PARA SEMPRE -
+# exatamente o bug que este fix fecha.
+cid7p, lead7p = criar_conversa(
+    is_bot_active=False, atendente_id=7, responsavel_id=None,
+    queued_at=datetime.now(timezone.utc),
+)
+CRM.donos[lead7p] = 99  # terceiro escritor: nem 7 (alvo), nem o dono antigo
+op7p = criar_operacao(
+    status=StatusHandoff.FAILED.value, error_code="ESTADO_LOCAL_RECUSADO",
+    conversation_id=cid7p, target_user_id=7,
+)
+sessao = SessionLocal()
+r15_mod.processar_ciclo(sessao)
+sessao.close()
+
+check(
+    ler_operacao(op7p).reconciled_at is None,
+    "7p. atendente local == alvo original NAO fecha mais sozinho: a releitura do "
+    "CRM achou um terceiro escritor, a linha continua pendente",
+)
+_erros_7p = COLETOR.textos(logging.ERROR)
+check(
+    any("divergencia NOVA" in t for t in _erros_7p),
+    f"7q. e a divergencia nova vira TICKET, a mesma garantia de 8e para este ramo "
+    f"[{_erros_7p}]",
+)
+check(
+    not CRM.chamadas,
+    "7r. nenhuma chamada de ESCRITA foi feita ao CRM - a releitura e so LEITURA "
+    "(get_leads_responsaveis), o mesmo caminho que _confirmar_convergencia ja usa",
 )
 
 

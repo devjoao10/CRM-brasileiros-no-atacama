@@ -696,14 +696,22 @@ def _aplicar_estado_local(
     termina em `TransicaoInvalida` -> `ESTADO_LOCAL_RECUSADO`, NUNCA em
     sucesso silencioso, mesmo ANTES desta correcao. O motivo e ESTRUTURAL, nao
     um acidente do caso especifico: `marcar_atendimento_humano` grava
-    `primeira_resposta_humana_at` e zera `queued_at` (`aplicar_estado_humano`
-    faz o mesmo sempre que le `primeira_resposta_humana_at is not None`), e as
-    invariantes 5 (`queued_at IS NOT NULL`) e 6
+    `primeira_resposta_humana_at`, e a invariante 6
     (`primeira_resposta_humana_at IS NULL`) de `WAITING_HUMAN`
-    (`_validar_campos_operacionais`, `app/v2/estados.py`) exigem exatamente o
-    OPOSTO desses dois campos — a resposta humana concorrente derruba as duas
-    invariantes ao mesmo tempo, e `aplicar_transicao` recusa antes de mutar
-    qualquer coisa.
+    (`_validar_campos_operacionais`, `app/v2/estados.py`) exige exatamente o
+    OPOSTO — a resposta humana concorrente a derruba, e `aplicar_transicao`
+    recusa antes de mutar qualquer coisa.
+
+    ATUALIZADO PELO HOTFIX-01 (preservar `queued_at` na 1a resposta humana).
+    Ate aquela correcao, `marcar_atendimento_humano` TAMBEM zerava `queued_at`
+    (e `aplicar_estado_humano` fazia o mesmo sempre que lia
+    `primeira_resposta_humana_at is not None`), entao a resposta humana
+    concorrente derrubava DUAS invariantes de uma vez: a 5 (`queued_at IS NOT
+    NULL`) e a 6. Hoje `queued_at` e PRESERVADO, a invariante 5 continua
+    satisfeita, e so a 6 e violada. A CONCLUSAO NAO MUDA — uma invariante basta
+    para `aplicar_transicao` recusar, e a recusa continua sendo antes de
+    qualquer mutacao. Muda so o numero de invariantes que caem, e este
+    paragrafo existe para que a prosa nao continue descrevendo o codigo antigo.
 
     O lock acima, entao, NAO fecha a corrida especifica que o revisor
     descreveu (a validacao de invariantes ja fechava). Fecha uma DIFERENTE,

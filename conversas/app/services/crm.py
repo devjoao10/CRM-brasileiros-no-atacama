@@ -18,9 +18,30 @@ from typing import Optional
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
+from app.database import IS_SQLITE
 from app.models.conversation import Conversation
 
 logger = logging.getLogger(__name__)
+
+# CONV-HOTFIX-LOCK-03 (correcao aprovada nesta rodada) — sufixo do SELECT que
+# reserva a linha do lead ate o fim da transacao.
+#
+# `sync_responsavel_to_crm` fazia SELECT sem trava + UPDATE sem CAS na tabela
+# `leads` do banco COMPARTILHADO, a partir do Conversas. O proprio
+# `worker_reconciliacao.py` ja declara essa funcao proibida para a V2 por isso
+# ("ACHADO DE SEGURANCA DA REVISAO"), com teste AST guardando — mas ela continua
+# viva e acessivel pelo caminho V1 (`PUT /api/conversations/{id}` e
+# `PUT /{id}/responsavel`). Duas trocas de responsavel simultaneas no mesmo lead
+# liam o mesmo `old_resp` e gravavam dois `lead_history` com origem identica,
+# alem de decidirem em cima de um valor ja obsoleto.
+#
+# Este e o equivalente em SQL cru do `with_for_update()` que `_lock_lead`
+# (`app/routers/leads.py`, CRM) e `_lock_conversation` ja usam via ORM — mesma
+# semantica, mesmo ramo IS_SQLITE, porque aqui o call site usa Core e nao ORM.
+# No SQLite a clausula nao existe na gramatica (seria erro de sintaxe, nao no-op
+# silencioso como no compilador do ORM) e tambem nao e necessaria: o arquivo
+# inteiro ja e serializado por lock de arquivo.
+_TRAVA_LINHA_SQL = "" if IS_SQLITE else " FOR UPDATE"
 
 
 def _only_digits(value: Optional[str]) -> str:
@@ -207,9 +228,15 @@ async def sync_responsavel_to_crm(
         return False
 
     try:
-        # Get the current responsavel for history logging
+        # Get the current responsavel for history logging.
+        # CONV-HOTFIX-LOCK-03: este SELECT tambem TRAVA a linha ate o fim da
+        # transacao (ver `_TRAVA_LINHA_SQL` no topo do modulo). Ele ja e o
+        # check-then-act do UPDATE logo abaixo — travar aqui serializa a segunda
+        # transacao concorrente ate a primeira commitar, entao ela le o
+        # `old_resp` JA atualizado. Nao commita nada: a trava vive na transacao
+        # do caller, a mesma que grava a conversa (ver a nota F8 acima).
         current = db.execute(
-            text("SELECT responsavel_id FROM leads WHERE id = :lid"),
+            text(f"SELECT responsavel_id FROM leads WHERE id = :lid{_TRAVA_LINHA_SQL}"),
             {"lid": lead_id},
         ).fetchone()
 
