@@ -211,11 +211,15 @@ check(
     f"({_CHECK_STATUS_SQL!r})",
 )
 
-# --- H. Lista de colunas: copia deliberada, provada equivalente -------------
+# --- H. Lista de colunas: a m016 e subconjunto do model, nao igualdade -----
+# Igualdade exata quebraria por construcao assim que qualquer migration
+# POSTERIOR (ex.: m019) acrescentasse coluna a handoff_operations sem a m016
+# retroagir para "criar" o que nao criou - a m016 so precisa provar que tudo
+# que ELA declara existir de fato existe no model, nao que e a lista inteira.
 _COLUNAS_DO_MODEL = [c.name for c in HandoffOperation.__table__.columns]
 check(
-    sorted(_COLUNAS_OBRIGATORIAS) == sorted(_COLUNAS_DO_MODEL),
-    f"H. _COLUNAS_OBRIGATORIAS da migration == colunas do model "
+    set(_COLUNAS_OBRIGATORIAS) <= set(_COLUNAS_DO_MODEL),
+    f"H. _COLUNAS_OBRIGATORIAS da migration esta contida nas colunas do model "
     f"(migration={sorted(_COLUNAS_OBRIGATORIAS)}, model={sorted(_COLUNAS_DO_MODEL)})",
 )
 

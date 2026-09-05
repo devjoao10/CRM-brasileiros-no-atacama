@@ -166,6 +166,8 @@ R-INTENT: nenhuma decisao aqui ramifica sobre texto livre de
 `AIInterpretationResult.intent` — esta funcao nem sequer recebe esse objeto.
 """
 import logging
+from dataclasses import dataclass
+from enum import StrEnum
 
 import httpx
 from sqlalchemy.exc import IntegrityError
@@ -176,6 +178,7 @@ from app.database import IS_SQLITE
 from app.models.conversation import Conversation
 from app.models.handoff_op import HandoffOperation, StatusHandoff
 from app.services.atendimento import aplicar_estado_humano
+from app.services.crm import get_leads_responsaveis
 from app.v2.contratos import HandoffResult
 from app.v2.estados import Estado, TransicaoInvalida, aplicar_transicao
 from app.v2.eventos import EventoDuplicado, registrar_evento
@@ -193,8 +196,18 @@ logger = logging.getLogger(__name__)
 # `app/routers/v2_lead_domain.py`, no outro app):
 #   POST /api/v2/lead-domain/handoff
 #   X-API-Key: <chave>
-#   {"event_id": <uuid>, "lead_id": <int>, "target_user_id": <int>}
-#   200 -> {"lead_id", "target_user_id", "event_id", "replayed"}
+#   {"event_id": <uuid>, "lead_id": <int>, "target_user_id": <int>,
+#    "expected_responsavel_id": <int|null>}   <- R-B, secao 2.1.2 do desenho:
+#       baseline do compare-and-swap. Campo AUSENTE e diferente de `null`:
+#       ausente = "nao sei / nao tenho baseline" (o CRM aplica incondicional,
+#       comportamento pre-R-B); `null` = "espero que o lead esteja SEM dono".
+#       Ver `_ler_baseline_cas`.
+#   200 -> {"lead_id", "target_user_id", "event_id", "replayed",
+#           "current_responsavel_id"}  <- NUNCA ecoa `expected_responsavel_id`
+#   409 -> {"detail": {"error": "IDEMPOTENCY_PAYLOAD_CONFLICT"|"LEAD_ALREADY_ASSIGNED",
+#                      "current_responsavel_id": ..., "current_owner_event_id": ...,
+#                      "current_owner_applied_at": ...}}  <- unico status desta
+#       rota discriminado por CORPO; ver `_classificar_conflito`.
 _CAMINHO_CRM = "/api/v2/lead-domain/handoff"
 _CABECALHO_API_KEY = "X-API-Key"
 # Timeout CURTO de proposito: esta chamada acontece com o cliente esperando no
@@ -208,24 +221,136 @@ _TIMEOUT_CRM = httpx.Timeout(10.0, connect=5.0)
 # para `handoff_operations.error_code`. NENHUM carrega dado do cliente nem
 # corpo de resposta do CRM: o token diz o MODO da falha, nunca o conteudo.
 # ---------------------------------------------------------------------------
-_ERRO_SEM_CREDENCIAL = "CRM_SEM_CREDENCIAL"
-_ERRO_INDISPONIVEL = "CRM_INDISPONIVEL"
-_ERRO_NAO_AUTORIZADO = "CRM_NAO_AUTORIZADO"
-_ERRO_NAO_ENCONTRADO = "CRM_NAO_ENCONTRADO"
-_ERRO_CONFLITO = "CRM_CONFLITO"
-_ERRO_RECUSADO = "CRM_RECUSADO"
-_ERRO_HTTP = "CRM_HTTP_ERRO"
-_ERRO_RESPOSTA_INVALIDA = "CRM_RESPOSTA_INVALIDA"
+class TokenErroCrm(StrEnum):
+    """
+    Os tokens que `_chamar_crm` pode devolver. `StrEnum` LOCAL a este modulo,
+    mesmo precedente de `EtapaFinal`/`ResultadoPipeline` em `pipeline.py` — e
+    NAO em `contratos.py`, que e deliberadamente inerte a httpx/SQLAlchemy/
+    config (um teste AST guarda isso) e nao pode hospedar semantica de erro
+    HTTP.
+
+    Membro de `StrEnum` E uma `str`: toda comparacao/persistencia que ja
+    existia com as constantes `_ERRO_*` abaixo continua valendo palavra por
+    palavra. Escritas em banco passam `.value`, mesma disciplina de
+    `StatusHandoff`.
+    """
+
+    SEM_CREDENCIAL = "CRM_SEM_CREDENCIAL"
+    INDISPONIVEL = "CRM_INDISPONIVEL"
+    NAO_AUTORIZADO = "CRM_NAO_AUTORIZADO"
+    NAO_ENCONTRADO = "CRM_NAO_ENCONTRADO"
+    CONFLITO = "CRM_CONFLITO"
+    # R-B, secao 6.2 do desenho: DISTINTO de `CONFLITO`, e nao um sinonimo. A
+    # selecao da Direcao A da reconciliacao (R15) usa este token como
+    # predicado; colapsa-lo em `CRM_CONFLITO` (que e terminal-ticket) deixaria
+    # aquela direcao morta em silencio.
+    LEAD_JA_ATRIBUIDO = "CRM_LEAD_JA_ATRIBUIDO"
+    LIMITE_TAXA = "CRM_LIMITE_TAXA"
+    RECUSADO = "CRM_RECUSADO"
+    HTTP_ERRO = "CRM_HTTP_ERRO"
+    RESPOSTA_INVALIDA = "CRM_RESPOSTA_INVALIDA"
+
+
+class ClasseErroCrm(StrEnum):
+    """
+    Como uma falha deve ser TRATADA, que e uma pergunta diferente de qual foi o
+    modo dela (`TokenErroCrm`). O mesmo token muda de classe conforme a origem
+    — `CRM_HTTP_ERRO` e retriavel no 400, terminal no 405 e ambiguo no 500;
+    `CRM_INDISPONIVEL` e retriavel num `ConnectError` e ambiguo num
+    `ReadTimeout` — e e por isso que a classe precisa de um campo proprio, nao
+    de uma funcao do token (secao 8/m019 do desenho).
+
+    `SUPERADO_TERMINAL` nunca sai de `_chamar_crm`: e a releitura que SO o
+    worker de reconciliacao (R15) faz de um `LEAD_ALREADY_ASSIGNED` comum,
+    depois de comparar `current_responsavel_id` com o dono local (secao 6.2).
+    Fica aqui porque o vocabulario e fechado e mora num lugar so.
+    """
+
+    NAO_APLICADO_TERMINAL = "NAO_APLICADO_TERMINAL"
+    NAO_APLICADO_RETRIAVEL = "NAO_APLICADO_RETRIAVEL"
+    AMBIGUO_RETRIAVEL = "AMBIGUO_RETRIAVEL"
+    SUPERADO_TERMINAL = "SUPERADO_TERMINAL"
+
+
+@dataclass(frozen=True)
+class RespostaCrm:
+    """
+    Desfecho de UMA chamada ao CRM. Sucesso e `RespostaCrm()` — `error_code`
+    None, como o `None` que esta funcao devolvia antes desta mudanca.
+
+    Os tres campos de dono sao ESTRITAMENTE DIAGNOSTICOS (corpo do 409, secao
+    7 do desenho): existem para o log e para o worker de reconciliacao decidir
+    entre "convergiu" e "divergencia nova". NAO sao persistidos, e nenhuma
+    decisao deste modulo ramifica sobre eles.
+
+    `error_class`, ao contrario dos tres, E PERSISTIDA (secao 6.2/8-m019): a
+    regra de particao de fila entre R15 e R16 (secao 4.2) seleciona R16 por
+    CLASSE, e o `error_code` sozinho NAO determina a classe — o mesmo token e
+    retriavel, terminal ou ambiguo conforme o status que o originou. Sem a
+    coluna, aquele predicado nao seria expressavel em SQL.
+
+    `current_owner_applied_at` chega ja como texto ISO-8601 (o CRM serializa
+    com `.isoformat()`): nunca um `datetime` cru, que `json.dumps` nao
+    serializaria de volta.
+    """
+
+    error_code: TokenErroCrm | None = None
+    error_class: ClasseErroCrm | None = None
+    current_responsavel_id: int | None = None
+    current_owner_event_id: str | None = None
+    current_owner_applied_at: str | None = None
+
+
+# Apelidos: os nomes que o resto do modulo ja usava continuam existindo, agora
+# apontando para os membros do enum (uma unica definicao por token).
+_ERRO_SEM_CREDENCIAL = TokenErroCrm.SEM_CREDENCIAL
+_ERRO_INDISPONIVEL = TokenErroCrm.INDISPONIVEL
+_ERRO_NAO_AUTORIZADO = TokenErroCrm.NAO_AUTORIZADO
+_ERRO_NAO_ENCONTRADO = TokenErroCrm.NAO_ENCONTRADO
+_ERRO_CONFLITO = TokenErroCrm.CONFLITO
+_ERRO_LEAD_JA_ATRIBUIDO = TokenErroCrm.LEAD_JA_ATRIBUIDO
+_ERRO_LIMITE_TAXA = TokenErroCrm.LIMITE_TAXA
+_ERRO_RECUSADO = TokenErroCrm.RECUSADO
+_ERRO_HTTP = TokenErroCrm.HTTP_ERRO
+_ERRO_RESPOSTA_INVALIDA = TokenErroCrm.RESPOSTA_INVALIDA
+# NAO e um token do CRM (a recusa e local, do proprio Conversas) — por isso
+# fica fora de `TokenErroCrm`, mas dentro do mesmo vocabulario fechado.
 _ERRO_ESTADO_LOCAL = "ESTADO_LOCAL_RECUSADO"
 
 # Status HTTP -> token. Qualquer outro status vira `_ERRO_HTTP`: o vocabulario
-# e fechado de proposito, entao nao se interpola o status no token.
+# e fechado de proposito, entao nao se interpola o status no token. 409 NAO
+# entra aqui: e o unico status desta rota discriminado pelo CORPO (secao 6.2
+# do desenho) — ver `_classificar_conflito`.
 _TOKEN_POR_STATUS = {
     401: _ERRO_NAO_AUTORIZADO,
     403: _ERRO_NAO_AUTORIZADO,
     404: _ERRO_NAO_ENCONTRADO,
-    409: _ERRO_CONFLITO,
     422: _ERRO_RECUSADO,
+    429: _ERRO_LIMITE_TAXA,
+}
+
+# Status HTTP -> classe, transcrita da matriz da secao 6.1 do desenho. Status
+# fora da tabela cai em `AMBIGUO_RETRIAVEL`, a leitura conservadora: sem saber
+# o que a resposta significa, nao da para afirmar que a escrita nao aconteceu.
+_CLASSE_POR_STATUS = {
+    400: ClasseErroCrm.NAO_APLICADO_RETRIAVEL,  # corpo ilegivel, transitorio
+    401: ClasseErroCrm.NAO_APLICADO_TERMINAL,
+    403: ClasseErroCrm.NAO_APLICADO_TERMINAL,
+    404: ClasseErroCrm.NAO_APLICADO_TERMINAL,
+    405: ClasseErroCrm.NAO_APLICADO_TERMINAL,
+    422: ClasseErroCrm.NAO_APLICADO_TERMINAL,
+    429: ClasseErroCrm.NAO_APLICADO_RETRIAVEL,  # recusado ANTES do handler
+    500: ClasseErroCrm.AMBIGUO_RETRIAVEL,  # duas origens indistinguiveis
+    502: ClasseErroCrm.NAO_APLICADO_RETRIAVEL,
+    503: ClasseErroCrm.NAO_APLICADO_RETRIAVEL,
+    504: ClasseErroCrm.AMBIGUO_RETRIAVEL,  # timeout no proxy: pode ter aplicado
+}
+
+# Sub-tokens do 409, discriminados por `detail.error` (secao 6.2). Qualquer
+# outro valor — inclusive corpo malformado — cai em `_ERRO_CONFLITO`.
+_TOKEN_POR_ERRO_409 = {
+    "IDEMPOTENCY_PAYLOAD_CONFLICT": _ERRO_CONFLITO,
+    "LEAD_ALREADY_ASSIGNED": _ERRO_LEAD_JA_ATRIBUIDO,
 }
 
 
@@ -310,6 +435,10 @@ def _abrir_tentativa(
     else:
         operacao.status = StatusHandoff.REQUESTED.value
         operacao.error_code = None
+        # `error_class` acompanha `error_code` em TODA escrita: uma linha
+        # `REQUESTED` que ainda carregue a classe da tentativa anterior mentiria
+        # para o predicado de particao do worker (secao 4.2 do desenho).
+        operacao.error_class = None
         db.flush()  # ANTES de registrar_evento — ver "db.flush() EXPLICITO" no topo.
 
     registrar_evento(
@@ -325,23 +454,134 @@ def _abrir_tentativa(
     return operacao
 
 
-def _chamar_crm(*, event_id: str, lead_id: int, target_user_id: int) -> str | None:
+def _inteiro_opcional(valor: object) -> int | None:
+    """Inteiro de verdade vindo do corpo do CRM, ou `None`. `bool` e recusado
+    explicitamente (mesma disciplina de `validar_inteiro`): `True` nao vira 1."""
+    return valor if isinstance(valor, int) and not isinstance(valor, bool) else None
+
+
+def _texto_opcional(valor: object) -> str | None:
+    """Texto vindo do corpo do CRM, ou `None` para qualquer outro tipo."""
+    return valor if isinstance(valor, str) else None
+
+
+def _ler_baseline_cas(db: Session, lead_id: int | None) -> dict:
     """
-    Chama o CRM com `event_id` como idempotency key. Devolve `None` em sucesso,
-    ou o token de falha do vocabulario fechado acima.
+    Baseline do compare-and-swap: o `responsavel_id` que o CRM tem AGORA para
+    este lead, lido do banco compartilhado por `crm.get_leads_responsaveis` —
+    a mesma funcao (e a mesma query em lote) que o inbox ja usa como fonte de
+    verdade do responsavel.
+
+    Devolve um FRAGMENTO do corpo da requisicao, nao um valor solto, porque a
+    distincao que importa (secao 2.1.2 do desenho) e AUSENTE x `null`:
+      - `{}`                                  -> nao ha baseline confiavel; o
+        campo nao vai no corpo e o CRM aplica incondicionalmente, exatamente
+        como fazia antes de R-B existir. Preferido a mandar `null`, que o CRM
+        le como "espero que o lead esteja SEM dono" e faria TODA operacao
+        sobre lead ja atribuido falhar o CAS por engano.
+      - `{"expected_responsavel_id": None}`   -> baseline lido e o lead
+        REALMENTE nao tem dono.
+      - `{"expected_responsavel_id": <int>}`  -> baseline lido.
+
+    Sem baseline confiavel em tres casos: conversa nao vinculada a lead
+    (`lead_id` ausente/<=0), lead ausente do retorno, e CRM inacessivel
+    (`get_leads_responsaveis` devolve `None`, ja logando o motivo — e o caso de
+    dev/CI sem as tabelas do CRM). Aquele caminho faz `db.rollback()` para
+    limpar a transacao abortada:
+    seguro AQUI porque o commit 1 ja fechou a transacao anterior e nada desta
+    operacao esta pendente na sessao.
+    """
+    if not lead_id or lead_id <= 0:
+        return {}
+    responsaveis = get_leads_responsaveis([lead_id], db)
+    if not responsaveis or lead_id not in responsaveis:
+        return {}
+    return {"expected_responsavel_id": responsaveis[lead_id]["responsavel_id"]}
+
+
+def _classificar_conflito(resposta: httpx.Response) -> RespostaCrm:
+    """
+    409 e o UNICO status desta rota que precisa LER o corpo (secao 6.2): dois
+    sub-casos de semantica bem diferente chegam com o mesmo status, e a
+    Direcao A da reconciliacao (R15) seleciona por um deles.
+
+    DOIS guards, nao um — os dois sao necessarios e cada um cobre um formato
+    diferente de corpo quebrado:
+      (a) `except ValueError` — corpo nao-JSON (`JSONDecodeError` E um
+          `ValueError`, mesmo guard que o caminho 200 ja usa);
+      (b) `isinstance(detalhe, dict)` — JSON VALIDO com forma errada. O 409 de
+          hoje manda `detail` como STRING solta; `"...".get("error")`
+          levantaria `AttributeError` sem ninguem capturar. Alcancavel de
+          verdade: rollback do CRM depois do Conversas ja ter subido.
+
+    Sem token reconhecido, o fallback e `CRM_CONFLITO`/`NAO_APLICADO_TERMINAL`.
+    O corpo quebrado deixa ambiguo o MOTIVO, nunca se ESTA chamada aplicou
+    algo: um 409 garante que a escrita desta chamada nao aconteceu nos dois
+    emissores (CAS recusado antes de qualquer commit; ou replay detectando que
+    o dono mudou, caso em que a escrita aconteceu no PASSADO, sob outra
+    chamada). Por isso terminal, e nao `AMBIGUO_RETRIAVEL`.
+    """
+    try:
+        dados = resposta.json()
+    except ValueError:
+        dados = None
+    detalhe = dados.get("detail") if isinstance(dados, dict) else None
+    if not isinstance(detalhe, dict):
+        return RespostaCrm(
+            error_code=_ERRO_CONFLITO, error_class=ClasseErroCrm.NAO_APLICADO_TERMINAL
+        )
+    return RespostaCrm(
+        error_code=_TOKEN_POR_ERRO_409.get(
+            _texto_opcional(detalhe.get("error")), _ERRO_CONFLITO
+        ),
+        error_class=ClasseErroCrm.NAO_APLICADO_TERMINAL,
+        current_responsavel_id=_inteiro_opcional(detalhe.get("current_responsavel_id")),
+        current_owner_event_id=_texto_opcional(detalhe.get("current_owner_event_id")),
+        current_owner_applied_at=_texto_opcional(detalhe.get("current_owner_applied_at")),
+    )
+
+
+def _chamar_crm(
+    *, event_id: str, lead_id: int, target_user_id: int, baseline_cas: dict
+) -> RespostaCrm:
+    """
+    Chama o CRM com `event_id` como idempotency key. Devolve `RespostaCrm()`
+    em sucesso (`error_code is None`), ou o token de falha do vocabulario
+    fechado acima MAIS a classe que diz como trata-la.
 
     Client SINCRONO: esta funcao inteira roda sobre uma `Session` sincrona do
     SQLAlchemy, como todos os demais modulos de `app/v2/`. Nenhuma transacao
     fica aberta durante a chamada — o commit 1 ja fechou a anterior.
 
+    DOIS DICTS, NAO UM: `corpo_requisicao` (o que vai na rede) e `corpo_eco`
+    (o que a resposta 200 precisa devolver de volta) sao objetos distintos de
+    proposito. `expected_responsavel_id` entra so no primeiro — a resposta 200
+    NUNCA o ecoa (secao 7 do desenho), entao conferi-lo no eco faria toda
+    chamada BEM-SUCEDIDA com baseline nao-nulo (o caso "cliente que volta",
+    lead que ja tem dono) virar `CRM_RESPOSTA_INVALIDA` com o CRM tendo
+    aplicado corretamente. Reunificar os dois dicts reabre esse bug.
+
     A RESPOSTA DO CRM E ENTRADA EXTERNA, e e conferida como tal: um 200 cujo
-    corpo nao ecoe os TRES parametros enviados vira `CRM_RESPOSTA_INVALIDA` e
-    NAO autoriza aplicar o estado local. Sem essa conferencia, um proxy, um
-    ambiente apontado para o CRM errado ou uma rota trocada poderiam devolver
-    200 e a conversa iria para `WAITING_HUMAN` com um dono que o CRM nunca
-    confirmou. `replayed` e informativo (o CRM ja conhecia este `event_id`) e
-    nao muda o que fazemos aqui: o estado local pode nao ter sido aplicado
-    ainda, e e justamente esse o caso de retomada.
+    corpo nao ecoe os TRES parametros de identidade vira
+    `CRM_RESPOSTA_INVALIDA` e NAO autoriza aplicar o estado local. Sem essa
+    conferencia, um proxy, um ambiente apontado para o CRM errado ou uma rota
+    trocada poderiam devolver 200 e a conversa iria para `WAITING_HUMAN` com
+    um dono que o CRM nunca confirmou. `replayed` e informativo (o CRM ja
+    conhecia este `event_id`) e nao muda o que fazemos aqui: o estado local
+    pode nao ter sido aplicado ainda, e e justamente esse o caso de retomada.
+
+    ORDEM DOS `except`, ESPECIFICO ANTES DE GENERICO — restricao real, nao
+    estilo: uma clausula de classe-base (`RequestError`) colocada antes rouba
+    a excecao e a especifica nunca dispara.
+    `ConnectError`/`ConnectTimeout`/`PoolTimeout` sao `NAO_APLICADO_RETRIAVEL`
+    porque a conexao nunca chegou a se estabelecer — nenhum byte saiu. Todo o
+    resto de `RequestError` (`ReadTimeout`, `WriteTimeout`, `RemoteProtocol
+    Error`, `DecodingError`, `ProxyError`...) e `AMBIGUO_RETRIAVEL`: nao ha
+    garantia de que o servidor nao recebeu e aplicou. `InvalidURL` e
+    `CookieConflict` NAO aparecem aqui de proposito — nao sao subclasses de
+    `RequestError` (herdam de `Exception`), entao nenhum `except` desta
+    familia as alcancaria; a primeira e erro de CONFIGURACAO (`CRM_BASE_URL`
+    malformada) e a segunda e inalcancavel por este codigo.
     """
     if not BIA_V2_CRM_API_KEY or not BIA_V2_CRM_API_KEY.isascii():
         # Credencial ausente NAO e no-op silencioso aqui (ver app/config.py):
@@ -355,30 +595,60 @@ def _chamar_crm(*, event_id: str, lead_id: int, target_user_id: int) -> str | No
         # dois casos a acao corretiva e identica (reconfigurar
         # `BIA_V2_CRM_API_KEY`), e um segundo token so para distinguir a
         # CAUSA nao ajudaria quem opera a decidir o que fazer.
-        return _ERRO_SEM_CREDENCIAL
+        #
+        # Terminal: nenhuma tentativa mecanica corrige credencial ausente. Fora
+        # da matriz da secao 6.1 de proposito (nao chega a tocar a rede) — e o
+        # proprio exemplo da regra "reclamacao que nunca chamou a rede".
+        return RespostaCrm(
+            error_code=_ERRO_SEM_CREDENCIAL, error_class=ClasseErroCrm.NAO_APLICADO_TERMINAL
+        )
 
-    corpo = {"event_id": event_id, "lead_id": lead_id, "target_user_id": target_user_id}
+    corpo_eco = {"event_id": event_id, "lead_id": lead_id, "target_user_id": target_user_id}
+    corpo_requisicao = {**corpo_eco, **baseline_cas}
     try:
         with httpx.Client(timeout=_TIMEOUT_CRM) as client:
             resposta = client.post(
                 f"{CRM_BASE_URL}{_CAMINHO_CRM}",
-                json=corpo,
+                json=corpo_requisicao,
                 headers={_CABECALHO_API_KEY: BIA_V2_CRM_API_KEY},
             )
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
+        return RespostaCrm(
+            error_code=_ERRO_INDISPONIVEL, error_class=ClasseErroCrm.NAO_APLICADO_RETRIAVEL
+        )
     except httpx.RequestError:
-        return _ERRO_INDISPONIVEL
+        return RespostaCrm(
+            error_code=_ERRO_INDISPONIVEL, error_class=ClasseErroCrm.AMBIGUO_RETRIAVEL
+        )
+
+    if resposta.status_code == 409:
+        return _classificar_conflito(resposta)
 
     if resposta.status_code != 200:
-        return _TOKEN_POR_STATUS.get(resposta.status_code, _ERRO_HTTP)
+        return RespostaCrm(
+            error_code=_TOKEN_POR_STATUS.get(resposta.status_code, _ERRO_HTTP),
+            error_class=_CLASSE_POR_STATUS.get(
+                resposta.status_code, ClasseErroCrm.AMBIGUO_RETRIAVEL
+            ),
+        )
 
     try:
         dados = resposta.json()
     except ValueError:
-        return _ERRO_RESPOSTA_INVALIDA
+        return RespostaCrm(
+            error_code=_ERRO_RESPOSTA_INVALIDA, error_class=ClasseErroCrm.AMBIGUO_RETRIAVEL
+        )
 
-    if not isinstance(dados, dict) or any(dados.get(chave) != valor for chave, valor in corpo.items()):
-        return _ERRO_RESPOSTA_INVALIDA
-    return None
+    if not isinstance(dados, dict) or any(
+        dados.get(chave) != valor for chave, valor in corpo_eco.items()
+    ):
+        # A rota so responde 200 DEPOIS do commit — um eco quebrado quase
+        # sempre e transporte/serializacao, nao "nao aplicou". Por isso
+        # ambiguo, nunca `NAO_APLICADO_*`.
+        return RespostaCrm(
+            error_code=_ERRO_RESPOSTA_INVALIDA, error_class=ClasseErroCrm.AMBIGUO_RETRIAVEL
+        )
+    return RespostaCrm()
 
 
 def _aplicar_estado_local(
@@ -497,7 +767,12 @@ def _aplicar_estado_local(
 
 
 def _reservar_desfecho_ou_ceder_para_vencedor(
-    db: Session, operacao: HandoffOperation, *, status_final: str, error_code: str | None
+    db: Session,
+    operacao: HandoffOperation,
+    *,
+    status_final: str,
+    error_code: str | None,
+    error_class: str | None,
 ) -> HandoffResult | None:
     """
     RESERVA o DESFECHO FINAL desta tentativa (`COMPLETED` ou `FAILED`) de
@@ -515,9 +790,14 @@ def _reservar_desfecho_ou_ceder_para_vencedor(
     entre o claim e o commit final).
 
     MECANISMO: `UPDATE handoff_operations SET status=:status_final,
-    error_code=:error_code WHERE id=:id AND status != 'COMPLETED'`, como parte
+    error_code=:error_code, error_class=:error_class WHERE id=:id AND status !=
+    'COMPLETED'`, como parte
     da MESMA transacao que contem o resto do trabalho desta tentativa (nunca
-    commita sozinho). So exclui `COMPLETED` (nunca `REQUESTED`/`FAILED`)
+    commita sozinho). `error_class` viaja NA MESMA escrita que `error_code` de
+    proposito (secao 6.2 do desenho): dois `UPDATE`s separados abririam uma
+    janela em que a linha teria codigo de uma tentativa e classe de outra, e e
+    exatamente o par (codigo, classe) que a particao de fila do §4.2 le para
+    decidir qual worker e dono da linha. So exclui `COMPLETED` (nunca `REQUESTED`/`FAILED`)
     porque e o UNICO desfecho com efeito colateral irreversivel em
     `conversations` — sobrescreve-lo perderia a aplicacao real. Duas
     tentativas concorrentes ambas terminando em `FAILED` (ex.: CRM fora do ar
@@ -560,7 +840,10 @@ def _reservar_desfecho_ou_ceder_para_vencedor(
     linhas = (
         db.query(HandoffOperation)
         .filter(HandoffOperation.id == operacao.id, HandoffOperation.status != StatusHandoff.COMPLETED.value)
-        .update({"status": status_final, "error_code": error_code}, synchronize_session=False)
+        .update(
+            {"status": status_final, "error_code": error_code, "error_class": error_class},
+            synchronize_session=False,
+        )
     )
     if linhas == 1:
         return None
@@ -570,12 +853,36 @@ def _reservar_desfecho_ou_ceder_para_vencedor(
 
 
 def _registrar_falha(
-    db: Session, operacao: HandoffOperation, *, conversation: Conversation, reason: str, error_code: str
+    db: Session,
+    operacao: HandoffOperation,
+    *,
+    conversation: Conversation,
+    reason: str,
+    error_code: str,
+    error_class: str | None,
 ) -> HandoffResult:
     """
     Registro de FALHA: `FAILED` + `HANDOFF_FAILED`. O estado local nunca foi
     aplicado (ou ja foi desfeito por quem chamou), entao a conversa continua
     exatamente como estava — nunca chega perto de `WAITING_HUMAN`.
+
+    `error_class` E PERSISTIDA JUNTO DE `error_code`, na MESMA transacao (secao
+    6.2/8-m019 do desenho). Nao e informacao redundante: a regra de particao de
+    fila (secao 4.2) elege R16 por CLASSE
+    (`NAO_APLICADO_RETRIAVEL`/`AMBIGUO_RETRIAVEL`), e o MESMO token pode
+    pertencer a classes diferentes conforme o status que o originou
+    (`CRM_HTTP_ERRO` e retriavel no 400, terminal no 405, ambiguo no 500) —
+    derivar a classe do codigo depois do fato e impossivel.
+
+    `None` e um valor legitimo aqui, nao "esqueceram de passar": e o que
+    `ESTADO_LOCAL_RECUSADO` grava. Aquela falha nao veio do CRM (a chamada
+    HTTP teve SUCESSO; quem recusou foi a maquina de estados local), entao
+    nenhum membro de `ClasseErroCrm` a descreve — `NAO_APLICADO_*` seria falso
+    (o CRM APLICOU), `AMBIGUO_RETRIAVEL` seria falso (sabe-se exatamente o que
+    aconteceu) e `SUPERADO_TERMINAL` e reservado a releitura que so o worker de
+    reconciliacao faz. A linha e roteada por `error_code`, que e como a secao
+    4.2 elege a Direcao B de R15 — e a classe NULA e o que a mantem fora da
+    fila de R16 por uma segunda via, alem da exclusao explicita por codigo.
 
     O desfecho e RESERVADO por `_reservar_desfecho_ou_ceder_para_vencedor`
     (F2, ver docstring la e no topo do modulo) ANTES de `registrar_evento` —
@@ -586,7 +893,8 @@ def _registrar_falha(
     operacao, no fim, nao teve, e SEM ter emitido `HANDOFF_FAILED` nenhum.
     """
     cedido = _reservar_desfecho_ou_ceder_para_vencedor(
-        db, operacao, status_final=StatusHandoff.FAILED.value, error_code=error_code
+        db, operacao, status_final=StatusHandoff.FAILED.value,
+        error_code=error_code, error_class=error_class,
     )
     if cedido is not None:
         return cedido
@@ -607,8 +915,8 @@ def _registrar_falha(
     # Ids internos e token de vocabulario fechado — nenhum dado de cliente
     # (nome, telefone, conteudo de mensagem) entra nesta linha.
     logger.warning(
-        "handoff FALHOU: conversation_id=%s target_user_id=%s error_code=%s",
-        operacao.conversation_id, operacao.target_user_id, error_code,
+        "handoff FALHOU: conversation_id=%s target_user_id=%s error_code=%s error_class=%s",
+        operacao.conversation_id, operacao.target_user_id, error_code, error_class,
     )
     return _resultado(operacao, sucesso=False, replayed=False, error_code=error_code)
 
@@ -672,6 +980,13 @@ def handoff_to_human(
     # `lead_id` num local ANTES do release: depois dele o objeto fica expirado, e
     # toca-lo reabriria a transacao que a linha seguinte acabou de fechar.
     lead_id = conversation.lead_id
+    # R-B: baseline do compare-and-swap, lido AQUI e nao la dentro de
+    # `_chamar_crm` pelo mesmo motivo da linha acima — depois do commit
+    # abaixo, esta query abriria uma transacao NOVA que ficaria aberta durante
+    # todo o round-trip HTTP, exatamente o que aquele commit existe para
+    # evitar. E o ponto mais fresco possivel: nenhuma chamada de rede acontece
+    # entre esta leitura e a ida ao CRM. Ver `_ler_baseline_cas`.
+    baseline_cas = _ler_baseline_cas(db, lead_id)
     # NAO segurar conexao do pool durante um round-trip HTTP. Nada esta pendente
     # aqui (o commit 1 fechou a transacao anterior; a retomada de uma operacao
     # `REQUESTED` nao escreveu nada), entao isto so encerra a transacao de
@@ -681,12 +996,22 @@ def handoff_to_human(
     # de inbound.
     db.commit()
 
-    erro = _chamar_crm(
-        event_id=event_id_final, lead_id=lead_id, target_user_id=target_user_id
+    resposta_crm = _chamar_crm(
+        event_id=event_id_final,
+        lead_id=lead_id,
+        target_user_id=target_user_id,
+        baseline_cas=baseline_cas,
     )
-    if erro is not None:
+    if resposta_crm.error_code is not None:
+        # Token E classe sao persistidos (o par que a particao de fila do §4.2
+        # le); os tres campos de dono ficam so na memoria desta chamada — ver o
+        # docstring de `RespostaCrm`.
         return _registrar_falha(
-            db, operacao, conversation=conversation, reason=reason, error_code=erro
+            db, operacao, conversation=conversation, reason=reason,
+            error_code=resposta_crm.error_code.value,
+            error_class=(
+                resposta_crm.error_class.value if resposta_crm.error_class is not None else None
+            ),
         )
 
     try:
@@ -710,8 +1035,12 @@ def handoff_to_human(
         # Desfaz as escritas de campo desta tentativa. O commit 1 ja fechou a
         # transacao anterior, entao o rollback nao alcanca a linha `REQUESTED`.
         db.rollback()
+        # `error_class=None` de proposito — ver o docstring de `_registrar_falha`:
+        # esta falha nao veio do CRM, entao nenhum membro de `ClasseErroCrm` a
+        # descreve. A linha e da Direcao B de R15, eleita por `error_code`.
         return _registrar_falha(
-            db, operacao, conversation=conversation, reason=reason, error_code=_ERRO_ESTADO_LOCAL
+            db, operacao, conversation=conversation, reason=reason,
+            error_code=_ERRO_ESTADO_LOCAL, error_class=None,
         )
 
     # F2 (revisao da Fase 6): reserva o desfecho ANTES de registrar qualquer
@@ -721,7 +1050,8 @@ def handoff_to_human(
     # entre o `_aplicar_estado_local` acima e agora, cede o resultado REAL
     # (replay) em vez de aplicar HUMAN_SELECTED/HANDOFF_COMPLETED de novo.
     cedido = _reservar_desfecho_ou_ceder_para_vencedor(
-        db, operacao, status_final=StatusHandoff.COMPLETED.value, error_code=None
+        db, operacao, status_final=StatusHandoff.COMPLETED.value,
+        error_code=None, error_class=None,
     )
     if cedido is not None:
         return cedido

@@ -61,10 +61,10 @@ endpoint que um chamador anonimo possa martelar.
 from datetime import datetime, timezone
 from enum import StrEnum
 
-from sqlalchemy import CheckConstraint, Column, DateTime, Index, Integer, String
+from sqlalchemy import CheckConstraint, Column, DateTime, Index, Integer, String, text
 from sqlalchemy.sql import func
 
-from app.database import Base
+from app.database import Base, IS_SQLITE
 
 
 class StatusHandoff(StrEnum):
@@ -84,6 +84,42 @@ class StatusHandoff(StrEnum):
 _TOKENS_STATUS = ",".join(f"'{membro.value}'" for membro in StatusHandoff)
 _CHECK_STATUS_SQL = f"status IN ({_TOKENS_STATUS})"
 
+# m020 — colunas do indice parcial de baixo, condicionadas por DIALETO (nao
+# so o WHERE, que ja era condicional desde m019). Achado de concorrencia:
+# `app/v2/worker_fila.py:consulta_de_reclamacao` ordena por
+# `next_attempt_at.asc().nullsfirst(), id.asc()`; um btree comum e ASC NULLS
+# LAST por padrao no PostgreSQL (SQLite e o OPOSTO — ASC ja poe NULL
+# primeiro por padrao ali). `NULLS FIRST` pedido pela consulta x `NULLS
+# LAST` do indice sao direcoes de varredura INCOMPATIVEIS: o planner
+# descarta o indice inteiro e faz Seq Scan + Sort completo da tabela a CADA
+# CICLO de CADA worker (30s) — provado empiricamente (EXPLAIN ANALYZE,
+# PostgreSQL 16 real, 30k linhas): 14.796ms/587 buffers sem indice efetivo
+# contra 0.098ms/24 buffers com a ordem corrigida, e o custo cresce com o
+# tamanho da tabela, que por desenho nunca e podada (ver "CRESCIMENTO
+# ILIMITADO" abaixo). Migration `m020_handoff_operations_indice_pendentes_
+# nulls_first.py` substitui o indice antigo (DROP + CREATE) por este.
+#
+# `NULLS FIRST` SO no ramo PostgreSQL, nunca no SQLite: o SQLite deste
+# projeto (>= 3.30) aceita `NULLS FIRST` em `ORDER BY`, mas NAO dentro de
+# `CREATE INDEX` — levanta `OperationalError: unsupported use of NULLS
+# FIRST` (provado contra o driver `sqlite3` real antes de escrever isto). E
+# nao faz falta ali: o ASC padrao do SQLite ja poe NULL primeiro (o mesmo
+# fato que `worker_fila.py` documenta em `_janela_chegou`), entao um indice
+# ascendente comum ja bate com a consulta sem anotacao nenhuma — confirmado
+# com `EXPLAIN QUERY PLAN` (`SCAN ... USING INDEX`, sem SORT separado). Cada
+# processo roda UM dialeto so (`IS_SQLITE` e fixado na importacao de
+# `app.database`), entao esta escolha e feita uma vez so, nunca alternando.
+#
+# `id` como SEGUNDA coluna nos dois dialetos (novo em relacao a m019): a
+# consulta desempata por `id.asc()` depois de `next_attempt_at` — sem a
+# segunda coluna no indice, o PostgreSQL ainda precisaria de um "Incremental
+# Sort" residual para as linhas empatadas (o caso mais comum e `NULL`, o
+# mais urgente — "Legenda A", secao 6.1 do desenho).
+if IS_SQLITE:
+    _INDICE_PENDENTES_COLS = ("next_attempt_at", "id")
+else:
+    _INDICE_PENDENTES_COLS = (text("next_attempt_at ASC NULLS FIRST"), "id")
+
 
 class HandoffOperation(Base):
     """Uma operacao de handoff BIA -> humano — ver docstring do modulo."""
@@ -100,6 +136,36 @@ class HandoffOperation(Base):
     # `conversation_events.error_code` (formato `^[A-Z][A-Z0-9_]*$`). NULL
     # enquanto a operacao nao falhou; limpo quando uma nova tentativa comeca.
     error_code = Column(String(64), nullable=True)
+
+    # ---- R15/R17, m019 (secao 8/4.2 do desenho) — reconciliacao e retomada.
+    # Schema apenas: quem LE e ESCREVE estes campos e `app/v2/handoff.py` e o
+    # worker, fora do escopo deste model/migration.
+    #
+    # `responsavel_id` que a operacao esperava encontrar no CRM no momento em
+    # que foi criada — usado pelo CAS da reconciliacao (R15), nunca o valor
+    # atual. Sem FK, mesmo motivo de `target_user_id`: `leads` vive no schema
+    # do CRM.
+    expected_responsavel_id = Column(Integer, nullable=True)
+    # Quantas vezes R16 ja tentou retomar esta operacao. NOT NULL: ao
+    # contrario de `state_version` (Conversation/m014), aqui nao existe
+    # "ausencia de contagem" — toda operacao nasce com zero tentativas, por
+    # isso NOT NULL de verdade (nao so nullable-com-default). `default=0` +
+    # `server_default=text("0")` no mesmo par que `Message.send_attempts` usa
+    # para NOT NULL numerico com DEFAULT — `text("0")` e nao a string nua "0"
+    # pelo mesmo motivo de `state_version`: string nua vira `DEFAULT '0'` no
+    # DDL, nao `DEFAULT 0`, e a coluna e INTEGER.
+    attempt_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    # Proximo instante elegivel para retomada — NULL enquanto a operacao nunca
+    # falhou. Coluna que o indice parcial abaixo cobre.
+    next_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    # Instante em que a reconciliacao (R15) resolveu esta linha — NULL
+    # enquanto pendente.
+    reconciled_at = Column(DateTime(timezone=True), nullable=True)
+    # Classe do erro (NAO_APLICADO_RETRIAVEL/AMBIGUO_RETRIAVEL/...) que a regra
+    # de particao de fila do §4.2 usa para decidir se R16 e elegivel —
+    # `error_code` sozinho NAO determina a classe (o mesmo token pode ser
+    # retriavel OU ambiguo dependendo do status HTTP que o originou).
+    error_class = Column(String(32), nullable=True)
 
     # Mesmo padrao de `ConversationEvent.created_at`: default do lado do Python
     # + server_default. `now()` do PostgreSQL e por TRANSACAO, entao linhas
@@ -124,9 +190,23 @@ class HandoffOperation(Base):
         # (CREATE UNIQUE INDEX) nos dois dialetos.
         Index("uq_handoff_operations_event_id", "event_id", unique=True),
         CheckConstraint(_CHECK_STATUS_SQL, name="ck_handoff_operations_status"),
-        # NENHUM indice secundario de proposito: `app/v2/handoff.py` consulta
-        # esta tabela SO por `event_id`. Indice para uma consulta que ninguem
-        # faz ainda e custo sem leitor.
+        # m019 (secao 8/4.2 do desenho), colunas corrigidas pela m020 — indice
+        # PARCIAL compartilhado por R15 e R16: os dois workers fazem `FOR
+        # UPDATE SKIP LOCKED` sobre `next_attempt_at`/`id` restritos as linhas
+        # ainda pendentes de retomada. `sqlite_where` E `postgresql_where`
+        # (nao so o de producao) porque o SQLite de dev/CI tambem precisa
+        # emitir o MESMO objeto que a migration cria em bancos existentes —
+        # mesmo cuidado de paridade model x migration ja aplicado ao
+        # `uq_handoff_operations_event_id` acima e a `Conversation.whatsapp`.
+        # Mesmo NOME e mesmo PREDICADO nos dois dialetos; a ORDEM/anotacao das
+        # colunas (`_INDICE_PENDENTES_COLS` acima) diverge por dialeto DE
+        # PROPOSITO desde a m020 — nao editar um lado sem reler o motivo la.
+        Index(
+            "ix_handoff_operations_pendentes",
+            *_INDICE_PENDENTES_COLS,
+            sqlite_where=text("status IN ('REQUESTED','FAILED')"),
+            postgresql_where=text("status IN ('REQUESTED','FAILED')"),
+        ),
     )
 
     def __repr__(self):

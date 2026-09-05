@@ -226,11 +226,20 @@ class _ClientFalso:
         return CRM.post(*args, **kwargs)
 
 
-# Substitui SO o atributo `httpx` do modulo sob teste. `RequestError` continua
-# sendo a classe real, para que o `except` de handoff.py capture o que uma
-# falha de rede de verdade levantaria.
+# Substitui SO o atributo `httpx` do modulo sob teste. As classes de excecao
+# continuam sendo as REAIS, para que os `except` de handoff.py capturem o que
+# uma falha de rede de verdade levantaria - e para que a hierarquia real
+# (ConnectError/ConnectTimeout/PoolTimeout dentro de RequestError) decida a
+# classificacao, nao um dublê. Sem as tres especificas aqui, o `except
+# (ConnectError, ConnectTimeout, PoolTimeout)` de `_chamar_crm` levantaria
+# AttributeError ao ser avaliado (R-B, secao 6.1 do desenho).
 handoff_mod.httpx = SimpleNamespace(
-    Client=_ClientFalso, RequestError=httpx.RequestError, Timeout=httpx.Timeout,
+    Client=_ClientFalso,
+    RequestError=httpx.RequestError,
+    ConnectError=httpx.ConnectError,
+    ConnectTimeout=httpx.ConnectTimeout,
+    PoolTimeout=httpx.PoolTimeout,
+    Timeout=httpx.Timeout,
 )
 
 db = SessionLocal()
@@ -289,7 +298,7 @@ def ler_operacao(event_id):
         if op is None:
             return None
         return SimpleNamespace(
-            status=op.status, error_code=op.error_code,
+            status=op.status, error_code=op.error_code, error_class=op.error_class,
             conversation_id=op.conversation_id, target_user_id=op.target_user_id,
         )
     finally:
@@ -441,16 +450,23 @@ check(
 # ===========================================================================
 # 6. Falha do CRM => nunca WAITING_HUMAN, HANDOFF_FAILED emitido
 # ===========================================================================
+# A quarta coluna e a CLASSE esperada em `handoff_operations.error_class`. Ela
+# nao e redundante com o token: a regra de particao de fila do §4.2 seleciona
+# R16 por CLASSE, e o MESMO token muda de classe conforme a origem
+# (`CRM_INDISPONIVEL` e retriavel num ConnectError e ambiguo num ReadTimeout).
+# Ate esta rodada, a classe so era verificada em `_chamar_crm` isolado (RB3) —
+# nada provava que ela CHEGAVA ao banco pelo caminho real de `handoff_to_human`,
+# que e de onde os dois workers a leem.
 _CASOS_FALHA_CRM = [
-    ("rede", httpx.ConnectError("sem rota para o host"), "CRM_INDISPONIVEL"),
-    ("timeout", httpx.ReadTimeout("estourou"), "CRM_INDISPONIVEL"),
-    ("401", _RespostaFalsa(401, {}), "CRM_NAO_AUTORIZADO"),
-    ("404", _RespostaFalsa(404, {}), "CRM_NAO_ENCONTRADO"),
-    ("409", _RespostaFalsa(409, {}), "CRM_CONFLITO"),
-    ("422", _RespostaFalsa(422, {}), "CRM_RECUSADO"),
-    ("500", _RespostaFalsa(500, {}), "CRM_HTTP_ERRO"),
+    ("rede", httpx.ConnectError("sem rota para o host"), "CRM_INDISPONIVEL", "NAO_APLICADO_RETRIAVEL"),
+    ("timeout", httpx.ReadTimeout("estourou"), "CRM_INDISPONIVEL", "AMBIGUO_RETRIAVEL"),
+    ("401", _RespostaFalsa(401, {}), "CRM_NAO_AUTORIZADO", "NAO_APLICADO_TERMINAL"),
+    ("404", _RespostaFalsa(404, {}), "CRM_NAO_ENCONTRADO", "NAO_APLICADO_TERMINAL"),
+    ("409", _RespostaFalsa(409, {}), "CRM_CONFLITO", "NAO_APLICADO_TERMINAL"),
+    ("422", _RespostaFalsa(422, {}), "CRM_RECUSADO", "NAO_APLICADO_TERMINAL"),
+    ("500", _RespostaFalsa(500, {}), "CRM_HTTP_ERRO", "AMBIGUO_RETRIAVEL"),
 ]
-for _rotulo, _item, _token in _CASOS_FALHA_CRM:
+for _rotulo, _item, _token, _classe in _CASOS_FALHA_CRM:
     CRM.limpar()
     _cid, _ = criar_conversa()
     _ev = novo_id()
@@ -470,6 +486,12 @@ for _rotulo, _item, _token in _CASOS_FALHA_CRM:
     )
     check(_op is not None and _op.status == StatusHandoff.FAILED.value and _op.error_code == _token,
           f"6.{_rotulo} operacao marcada FAILED com o motivo (={_op and (_op.status, _op.error_code)})")
+    check(
+        _op is not None and _op.error_class == _classe,
+        f"6.{_rotulo} a CLASSE {_classe} foi PERSISTIDA em error_class — e por ela, nao "
+        f"pelo token, que a particao de fila do §4.2 decide quem retoma a linha "
+        f"(obteve {_op and _op.error_class!r})",
+    )
     check(contar_eventos(_cid, TipoEvento.HANDOFF_FAILED) == 1, f"6.{_rotulo} exatamente 1 HANDOFF_FAILED")
     check(
         contar_eventos(_cid, TipoEvento.HANDOFF_REQUESTED) == 1
@@ -1081,11 +1103,13 @@ def _chamar_f2(nome):
 
 _t1_f2 = threading.Thread(target=_chamar_f2, args=("t1",))
 _t2_f2 = threading.Thread(target=_chamar_f2, args=("t2",))
-_t1_f2.start()
-_t2_f2.start()
-_t1_f2.join(timeout=15)
-_t2_f2.join(timeout=15)
-handoff_mod._aplicar_estado_local = _aplicar_estado_local_original_f2
+try:
+    _t1_f2.start()
+    _t2_f2.start()
+    _t1_f2.join(timeout=15)
+    _t2_f2.join(timeout=15)
+finally:
+    handoff_mod._aplicar_estado_local = _aplicar_estado_local_original_f2
 
 check(not _erros_f2, f"F2a. nenhuma das duas chamadas concorrentes levantou excecao inesperada (erros={_erros_f2})")
 
@@ -1201,12 +1225,14 @@ def _chamar_f2b(nome):
 
 _t1_f2b = threading.Thread(target=_chamar_f2b, args=("t1",))
 _t2_f2b = threading.Thread(target=_chamar_f2b, args=("t2",))
-_t1_f2b.start()
-_t2_f2b.start()
-_t1_f2b.join(timeout=15)
-_t2_f2b.join(timeout=15)
-handoff_mod._abrir_tentativa = _abrir_tentativa_original_f2b
-handoff_mod._aplicar_estado_local = _aplicar_estado_local_original_f2b
+try:
+    _t1_f2b.start()
+    _t2_f2b.start()
+    _t1_f2b.join(timeout=15)
+    _t2_f2b.join(timeout=15)
+finally:
+    handoff_mod._abrir_tentativa = _abrir_tentativa_original_f2b
+    handoff_mod._aplicar_estado_local = _aplicar_estado_local_original_f2b
 
 check(
     not _erros_f2b,
@@ -1259,6 +1285,240 @@ check(
     f"reabrindo via _abrir_tentativa's else, redundante mas TOLERADO - nao toca `conversations` nem "
     f"duplica o efeito caro, mesma tolerancia ja documentada para duplo-FAILED) - o numero exato aqui "
     f"e OBSERVADO, nao presumido (={_qtd_requested_f2b}, trilha completa={trilha(cidF2b)})",
+)
+
+
+# ===========================================================================
+# R-B. Contrato de `_chamar_crm` (bia-v2-r15-r17-design-v4.md, secoes 6/6.1/6.2)
+#   RB1  baseline do CAS: `_ler_baseline_cas` distingue AUSENTE de `null`
+#   RB2  dois dicts: `expected_responsavel_id` vai na REQUISICAO e NAO e
+#        exigido no ECO - a regressao que faria todo handoff bem-sucedido de
+#        lead ja atribuido virar CRM_RESPOSTA_INVALIDA
+#   RB3  classificacao fina: token + classe, por subclasse de rede e por status
+#   RB4  409 discriminado por CORPO, com os DOIS guards (nao-JSON e `detail`
+#        string solta de um CRM ainda nao atualizado)
+# ===========================================================================
+_TC = handoff_mod.TokenErroCrm
+_CE = handoff_mod.ClasseErroCrm
+_baseline_real = handoff_mod.get_leads_responsaveis
+
+
+def _com_baseline(retorno):
+    """Troca a leitura do CRM por um retorno fixo, no formato real da funcao."""
+    handoff_mod.get_leads_responsaveis = lambda ids, sessao: retorno
+
+
+# --- RB1: AUSENTE x null -----------------------------------------------------
+try:
+    _com_baseline({777: {"responsavel_id": 7, "responsavel_nome": "Fulano"}})
+    check(
+        handoff_mod._ler_baseline_cas(db, 777) == {"expected_responsavel_id": 7},
+        f"RB1a. lead com dono => baseline explicito ({handoff_mod._ler_baseline_cas(db, 777)})",
+    )
+    _com_baseline({777: {"responsavel_id": None, "responsavel_nome": None}})
+    check(
+        handoff_mod._ler_baseline_cas(db, 777) == {"expected_responsavel_id": None},
+        f"RB1b. lead SEM dono => campo presente como null ('espero ninguem'), nao ausente "
+        f"({handoff_mod._ler_baseline_cas(db, 777)})",
+    )
+    _com_baseline(None)
+    check(
+        handoff_mod._ler_baseline_cas(db, 777) == {},
+        "RB1c. CRM inacessivel => campo AUSENTE (CRM aplica incondicional, comportamento pre-R-B)",
+    )
+    _com_baseline({})
+    check(
+        handoff_mod._ler_baseline_cas(db, 777) == {},
+        "RB1d. lead fora do retorno => campo AUSENTE, nunca null por engano",
+    )
+    _com_baseline({0: {"responsavel_id": 7}})
+    check(
+        handoff_mod._ler_baseline_cas(db, 0) == {} and handoff_mod._ler_baseline_cas(db, None) == {},
+        "RB1e. conversa sem lead vinculado => campo AUSENTE, sem consultar o CRM",
+    )
+
+    # --- RB2: payload x eco --------------------------------------------------
+    CRM.limpar()
+    cidRB, leadRB = criar_conversa()
+    evRB = novo_id()
+    _com_baseline({leadRB: {"responsavel_id": 7, "responsavel_nome": "Fulano"}})
+    # 200 REAL do contrato: ecoa os tres parametros de identidade e NUNCA
+    # `expected_responsavel_id` (secao 7 do desenho).
+    CRM.programar(_RespostaFalsa(200, {
+        "event_id": evRB, "lead_id": leadRB, "target_user_id": 61,
+        "replayed": False, "current_responsavel_id": 61,
+    }))
+    resRB = handoff_to_human(db, conversation_id=cidRB, target_user_id=61, reason=MOTIVO, event_id=evRB)
+finally:
+    handoff_mod.get_leads_responsaveis = _baseline_real
+
+check(
+    CRM.chamadas[0]["corpo"] == {
+        "event_id": evRB, "lead_id": leadRB, "target_user_id": 61, "expected_responsavel_id": 7,
+    },
+    f"RB2a. o baseline do CAS vai no corpo da REQUISICAO ({CRM.chamadas[0]['corpo']})",
+)
+check(
+    resRB.sucesso is True and ler_conversa(cidRB).state == "WAITING_HUMAN",
+    f"RB2b. 200 que NAO ecoa expected_responsavel_id continua sendo sucesso - o eco confere "
+    f"so os tres parametros de identidade ({resRB})",
+)
+
+# --- RB3/RB4: classificacao fina --------------------------------------------
+_CASOS_CLASSE = [
+    ("ConnectError", httpx.ConnectError("sem rota"), _TC.INDISPONIVEL, _CE.NAO_APLICADO_RETRIAVEL),
+    ("ConnectTimeout", httpx.ConnectTimeout("estourou"), _TC.INDISPONIVEL, _CE.NAO_APLICADO_RETRIAVEL),
+    ("PoolTimeout", httpx.PoolTimeout("pool cheio"), _TC.INDISPONIVEL, _CE.NAO_APLICADO_RETRIAVEL),
+    ("ReadTimeout", httpx.ReadTimeout("estourou"), _TC.INDISPONIVEL, _CE.AMBIGUO_RETRIAVEL),
+    ("WriteTimeout", httpx.WriteTimeout("estourou"), _TC.INDISPONIVEL, _CE.AMBIGUO_RETRIAVEL),
+    ("RemoteProtocolError", httpx.RemoteProtocolError("quebrou"), _TC.INDISPONIVEL, _CE.AMBIGUO_RETRIAVEL),
+    # As 6 subclasses raras que a secao 6 do desenho nomeia uma a uma. Nenhuma
+    # tem `except` proprio: todas caem no `except httpx.RequestError` generico e
+    # herdam a classificacao CONSERVADORA (`AMBIGUO_RETRIAVEL`). Testadas
+    # nominalmente porque a lista existe justamente para provar que nenhuma
+    # escapa da hierarquia — se alguma deixasse de ser subclasse de
+    # `RequestError` numa atualizacao do httpx, ela subiria crua de
+    # `_chamar_crm` e este check pegaria.
+    ("DecodingError", httpx.DecodingError("corpo ilegivel"), _TC.INDISPONIVEL, _CE.AMBIGUO_RETRIAVEL),
+    ("TooManyRedirects", httpx.TooManyRedirects("loop"), _TC.INDISPONIVEL, _CE.AMBIGUO_RETRIAVEL),
+    ("ProxyError", httpx.ProxyError("proxy recusou"), _TC.INDISPONIVEL, _CE.AMBIGUO_RETRIAVEL),
+    ("UnsupportedProtocol", httpx.UnsupportedProtocol("esquema invalido"), _TC.INDISPONIVEL, _CE.AMBIGUO_RETRIAVEL),
+    ("LocalProtocolError", httpx.LocalProtocolError("h11 reclamou"), _TC.INDISPONIVEL, _CE.AMBIGUO_RETRIAVEL),
+    ("CloseError", httpx.CloseError("falhou ao fechar"), _TC.INDISPONIVEL, _CE.AMBIGUO_RETRIAVEL),
+    ("400", _RespostaFalsa(400, {}), _TC.HTTP_ERRO, _CE.NAO_APLICADO_RETRIAVEL),
+    ("401", _RespostaFalsa(401, {}), _TC.NAO_AUTORIZADO, _CE.NAO_APLICADO_TERMINAL),
+    # 403 e o MESMO token do 401 de proposito (a acao corretiva e humana e
+    # identica nos dois), mas e um caminho distinto do CRM — autenticado e nao
+    # autorizado, `_conferir_chamador_autorizado`. Ate esta rodada so o 401
+    # tinha teste, entao a fusao dos dois no mesmo token nunca foi verificada.
+    ("403", _RespostaFalsa(403, {}), _TC.NAO_AUTORIZADO, _CE.NAO_APLICADO_TERMINAL),
+    ("404", _RespostaFalsa(404, {}), _TC.NAO_ENCONTRADO, _CE.NAO_APLICADO_TERMINAL),
+    # 405 e o contraexemplo que justifica a coluna `error_class` existir: MESMO
+    # token do 400 e do 500, tres classes diferentes.
+    ("405", _RespostaFalsa(405, {}), _TC.HTTP_ERRO, _CE.NAO_APLICADO_TERMINAL),
+    ("422", _RespostaFalsa(422, {}), _TC.RECUSADO, _CE.NAO_APLICADO_TERMINAL),
+    ("429", _RespostaFalsa(429, {"error": "Rate limit exceeded"}), _TC.LIMITE_TAXA, _CE.NAO_APLICADO_RETRIAVEL),
+    ("500", _RespostaFalsa(500, {}), _TC.HTTP_ERRO, _CE.AMBIGUO_RETRIAVEL),
+    ("502", _RespostaFalsa(502, {}), _TC.HTTP_ERRO, _CE.NAO_APLICADO_RETRIAVEL),
+    ("503", _RespostaFalsa(503, {}), _TC.HTTP_ERRO, _CE.NAO_APLICADO_RETRIAVEL),
+    ("504", _RespostaFalsa(504, {}), _TC.HTTP_ERRO, _CE.AMBIGUO_RETRIAVEL),
+    ("418 fora da matriz", _RespostaFalsa(418, {}), _TC.HTTP_ERRO, _CE.AMBIGUO_RETRIAVEL),
+    (
+        "409 LEAD_ALREADY_ASSIGNED",
+        _RespostaFalsa(409, {"detail": {
+            "error": "LEAD_ALREADY_ASSIGNED", "current_responsavel_id": 10,
+            "current_owner_event_id": "e-abc", "current_owner_applied_at": "2026-09-04T12:00:00+00:00",
+        }}),
+        _TC.LEAD_JA_ATRIBUIDO, _CE.NAO_APLICADO_TERMINAL,
+    ),
+    (
+        "409 IDEMPOTENCY_PAYLOAD_CONFLICT",
+        _RespostaFalsa(409, {"detail": {"error": "IDEMPOTENCY_PAYLOAD_CONFLICT", "current_responsavel_id": 10}}),
+        _TC.CONFLITO, _CE.NAO_APLICADO_TERMINAL,
+    ),
+    (
+        "409 detail string (CRM nao atualizado)",
+        _RespostaFalsa(409, {"detail": "event_id ja processado com parametros diferentes"}),
+        _TC.CONFLITO, _CE.NAO_APLICADO_TERMINAL,
+    ),
+    ("409 corpo nao-JSON", _RespostaFalsa(409, None, json_quebrado=True), _TC.CONFLITO, _CE.NAO_APLICADO_TERMINAL),
+    (
+        "409 token desconhecido",
+        _RespostaFalsa(409, {"detail": {"error": "TOKEN_QUE_NAO_EXISTE"}}),
+        _TC.CONFLITO, _CE.NAO_APLICADO_TERMINAL,
+    ),
+]
+# A classificacao das 6 subclasses raras acima so vale enquanto elas de fato
+# descenderem de `RequestError` — e o `except` generico que as alcanca. E o
+# desenho (secao 6.1) registra a correcao oposta: `InvalidURL` e `CookieConflict`
+# herdam direto de `Exception` e NENHUM `except httpx.RequestError`, em nenhuma
+# granularidade, as pega. As duas afirmacoes foram verificadas ao vivo contra
+# httpx==0.28.1 durante o desenho, mas so viravam garantia permanente aqui.
+check(
+    all(issubclass(_c, httpx.RequestError) for _c in (
+        httpx.DecodingError, httpx.TooManyRedirects, httpx.ProxyError,
+        httpx.UnsupportedProtocol, httpx.LocalProtocolError, httpx.CloseError,
+    )),
+    "RB3.hierarquia as 6 subclasses raras descendem de httpx.RequestError — sem isso "
+    "elas subiriam cruas de _chamar_crm em vez de virar AMBIGUO_RETRIAVEL",
+)
+check(
+    not issubclass(httpx.InvalidURL, httpx.RequestError)
+    and not issubclass(httpx.CookieConflict, httpx.RequestError),
+    "RB3.hierarquia InvalidURL/CookieConflict NAO sao RequestError — ficam fora da "
+    "matriz de proposito (erro de CONFIGURACAO, nao de request individual)",
+)
+
+for _rotulo, _programado, _token_esperado, _classe_esperada in _CASOS_CLASSE:
+    CRM.limpar()
+    CRM.programar(_programado)
+    _resp = handoff_mod._chamar_crm(
+        event_id=novo_id(), lead_id=1, target_user_id=2, baseline_cas={}
+    )
+    check(
+        _resp.error_code == _token_esperado and _resp.error_class == _classe_esperada,
+        f"RB3.{_rotulo} => ({_token_esperado}, {_classe_esperada}) "
+        f"[obteve ({_resp.error_code}, {_resp.error_class})]",
+    )
+
+CRM.limpar()
+CRM.programar(_RespostaFalsa(409, {"detail": {
+    "error": "LEAD_ALREADY_ASSIGNED", "current_responsavel_id": 10,
+    "current_owner_event_id": "e-abc", "current_owner_applied_at": "2026-09-04T12:00:00+00:00",
+}}))
+_resp_409 = handoff_mod._chamar_crm(event_id=novo_id(), lead_id=1, target_user_id=2, baseline_cas={})
+check(
+    _resp_409.current_responsavel_id == 10
+    and _resp_409.current_owner_event_id == "e-abc"
+    and _resp_409.current_owner_applied_at == "2026-09-04T12:00:00+00:00",
+    f"RB4a. o 409 estruturado entrega os campos de diagnostico do dono atual ({_resp_409})",
+)
+
+CRM.limpar()
+CRM.programar(_RespostaFalsa(409, {"detail": {
+    "error": "LEAD_ALREADY_ASSIGNED", "current_responsavel_id": True,
+    "current_owner_event_id": {"nao": "e texto"}, "current_owner_applied_at": 12345,
+}}))
+_resp_409_sujo = handoff_mod._chamar_crm(event_id=novo_id(), lead_id=1, target_user_id=2, baseline_cas={})
+check(
+    _resp_409_sujo.error_code == _TC.LEAD_JA_ATRIBUIDO
+    and _resp_409_sujo.current_responsavel_id is None
+    and _resp_409_sujo.current_owner_event_id is None
+    and _resp_409_sujo.current_owner_applied_at is None,
+    f"RB4b. campo de diagnostico com tipo errado vira None (inclusive bool, que NAO e um id) "
+    f"em vez de contaminar o resultado ({_resp_409_sujo})",
+)
+
+# RB4c. `datetime` CRU no lugar da data serializada. O CRM promete
+# `.isoformat()` explicito (secao 6 do desenho) porque, sem ele, o `json.dumps`
+# do Starlette estoura dentro do proprio handler de excecao — o Conversas nunca
+# chegaria a ver este corpo. Mas o guard deste lado nao pode DEPENDER daquela
+# promessa: um CRM mais antigo, um proxy que reserialize, ou uma regressao la
+# nao podem contaminar `RespostaCrm` com um objeto vivo que o worker de
+# reconciliacao depois tentaria logar ou comparar como texto. RB4b ja prova o
+# guard com um `int`; esta variacao usa o tipo que a secao 6 nomeia.
+CRM.limpar()
+CRM.programar(_RespostaFalsa(409, {"detail": {
+    "error": "LEAD_ALREADY_ASSIGNED", "current_responsavel_id": 10,
+    "current_owner_event_id": "e-abc",
+    "current_owner_applied_at": datetime.now(timezone.utc),
+}}))
+_resp_409_data_crua = handoff_mod._chamar_crm(
+    event_id=novo_id(), lead_id=1, target_user_id=2, baseline_cas={}
+)
+check(
+    _resp_409_data_crua.error_code == _TC.LEAD_JA_ATRIBUIDO
+    and _resp_409_data_crua.current_responsavel_id == 10
+    and _resp_409_data_crua.current_owner_applied_at is None,
+    f"RB4c. `datetime` cru em current_owner_applied_at vira None e NAO contamina o "
+    f"resto do diagnostico — o campo e str ou nada ({_resp_409_data_crua})",
+)
+
+CRM.limpar()
+_resp_ok = handoff_mod._chamar_crm(event_id=novo_id(), lead_id=1, target_user_id=2, baseline_cas={})
+check(
+    _resp_ok.error_code is None and _resp_ok.error_class is None,
+    f"RB4d. sucesso nao carrega token nem classe ({_resp_ok})",
 )
 
 
