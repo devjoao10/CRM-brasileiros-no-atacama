@@ -56,7 +56,6 @@ import pathlib
 import re
 import sys
 import threading
-import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
@@ -1738,7 +1737,6 @@ check(
 
 db.close()
 _logger_v2.removeHandler(COLETOR)
-time.sleep(0.05)
 
 print()
 if failures:
