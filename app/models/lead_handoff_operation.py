@@ -97,6 +97,14 @@ class LeadHandoffOperation(Base):
     lead_id = Column(Integer, nullable=False)
     target_user_id = Column(Integer, nullable=False)
 
+    # Snapshot de `leads.responsavel_id` no instante em que esta linha foi
+    # gravada — "de quem" o lead saiu, ao lado de `target_user_id` ("para
+    # quem"). NULL para toda linha escrita antes da m018 (a coluna nao tem
+    # valor a recuperar retroativamente) e para handoff de lead sem
+    # responsavel anterior. Sem FK, mesma razao de `lead_id`/`target_user_id`
+    # acima. Adicionada em banco existente pela migration `m018`.
+    previous_responsavel_id = Column(Integer, nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # `Index(unique=True)` e nao `UniqueConstraint`: mesmo DDL vindo do

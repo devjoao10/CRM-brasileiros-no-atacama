@@ -118,6 +118,11 @@ app.add_middleware(SlowAPIMiddleware)
 # o servidor nao concluiu —, mas o corpo e generico DE PROPOSITO: o
 # `IntegrityError` original carrega SQL, nome de constraint e nome de coluna, e
 # nada disso pode chegar ao cliente. O detalhe fica no log do servidor.
+#
+# O corpo e token estruturado, nao prosa: este 500 e o unico nao-2xx do handoff
+# V2 que nasce FORA de `v2_lead_domain.py`, e deixa-lo como string solta furaria
+# a regra de "todo nao-2xx desta rota responde `{"detail": {"error": ...}}`" no
+# unico caso em que o cliente mais precisa distinguir "nao aplicou" de "nao sei".
 async def _handoff_indeterminado_handler(
     request: StarletteRequest, exc: v2_lead_domain.HandoffIndeterminado
 ):
@@ -127,7 +132,9 @@ async def _handoff_indeterminado_handler(
     logger.error("Handoff V2 indeterminado em %s: %s", request.url.path, exc, exc_info=exc)
     return JSONResponse(
         status_code=500,
-        content={"detail": "Nao foi possivel concluir a operacao de handoff."},
+        content={
+            "detail": {"error": v2_lead_domain.TokenErroHandoff.HANDOFF_NAO_APLICADO}
+        },
     )
 
 

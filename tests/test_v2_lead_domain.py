@@ -12,9 +12,12 @@ O QUE ESTE ARQUIVO PROVA
      lead_history, `replayed=false`.
   2. Mesmo event_id duas vezes: `replayed=true`, ZERO efeito duplicado (uma
      linha de livro-razao, um evento de historico).
-  3. Replay nao reaplica por cima de mudanca posterior legitima, e continua
-     respondendo replay mesmo depois de o alvo ser desativado ou o lead
-     apagado — sem deixar de recusar um event_id INEDITO nas mesmas condicoes.
+  3. Replay nao reaplica por cima de mudanca posterior legitima: se o dono
+     mudou desde que aquele event_id aplicou, responde 409
+     LEAD_ALREADY_ASSIGNED com o dono REAL em vez de afirmar um resultado ja
+     superado. Continua respondendo replay (200) enquanto o dono bate — mesmo
+     depois de o alvo ser desativado ou o lead apagado —, sem deixar de recusar
+     um event_id INEDITO nas mesmas condicoes.
   4. Mesmo event_id com target_user_id diferente: 409, e o lead NAO se move.
   5. lead_id inexistente: 404. target_user_id inexistente: 404.
   6. target_user_id existente mas inativo: 422, e nada e gravado.
@@ -34,6 +37,36 @@ O QUE ESTE ARQUIVO PROVA
  13. Falha do SQLAlchemy que NAO e a colisao esperada de event_id (ex.:
      OperationalError dentro do SAVEPOINT) vira HandoffIndeterminado / 500
      com corpo generico, nunca o 500 cru do Starlette.
+ 14. Compare-and-swap por `expected_responsavel_id`: campo AUSENTE aplica sem
+     checar (compatibilidade), presente-e-batendo aplica, presente-e-divergente
+     recusa com 409 sem consumir o event_id, e `null` EXPLICITO significa
+     "espero o lead sem dono" (nao "aplica incondicional"). Mais o snapshot em
+     `previous_responsavel_id` (coluna da m018).
+ 15. Release legitimo e reatribuicao (Caso 6): o lead volta a ficar disponivel
+     pelo BASELINE, nunca por TTL. Na janela sem dono, o replay do event_id
+     antigo recusa com `current_responsavel_id=None` presente — "ninguem" e um
+     valor de comparacao, nao um campo ausente — e um baseline obsoleto (o dono
+     de antes do release) tambem recusa.
+ 16. Corpo estruturado dos DOIS 409: `LEAD_ALREADY_ASSIGNED` carrega
+     `current_owner_event_id` e `current_owner_applied_at` como STRING ISO-8601
+     (sem o `.isoformat()` explicito o `json.dumps` do Starlette estoura dentro
+     do proprio handler e degrada para 500); `IDEMPOTENCY_PAYLOAD_CONFLICT`
+     carrega os parametros GRAVADOS no livro-razao, nao os do payload novo.
+ 17. `event_id` duplicado CONCORRENTE responde replay (200), nunca 409: a gemea
+     que perde o `FOR UPDATE` rele o lead ja aplicado, o CAS falha contra o
+     baseline antigo, e sem a reconsulta do livro-razao ela sairia por
+     LEAD_ALREADY_ASSIGNED sobre a propria repeticao. Sem engolir os conflitos
+     de verdade: CAS perdido para OUTRO event_id continua 409, e a mesma chave
+     com alvo divergente continua IDEMPOTENCY_PAYLOAD_CONFLICT.
+
+A prova de CONCORRENCIA REAL do compare-and-swap nao mora aqui e nao PODE morar:
+o dialeto SQLite do SQLAlchemy descarta `FOR UPDATE` em silencio. Ela vive em
+`tests/test_v2_rb_cas_postgres.py`, que exige PostgreSQL e falha sem ele.
+
+Todo nao-2xx desta rota responde `{"detail": {"error": "<TOKEN>"}}` — corpo
+estruturado, nunca prosa. As excecoes sao os dois erros que nascem FORA deste
+router e valem para toda a API do CRM: o 401 de `get_current_user` e o 422 de
+schema do proprio FastAPI.
 
 Nao toca banco real, rede, n8n nem Meta. SQLite descartavel em scratch/.
 
@@ -43,6 +76,7 @@ import os
 import pathlib
 import sys
 import uuid
+from datetime import datetime
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRATCH = ROOT / "scratch"
@@ -223,7 +257,18 @@ _db.query(Lead).filter(Lead.id == lead_id).first().responsavel_id = BRUNO_ID
 _db.commit()
 _db.close()
 r3 = handoff(event_id, lead_id, ANA_ID)
-check(r3.status_code == 200 and r3.json().get("replayed") is True, "replay continua 200/true")
+# BIA-V2 R-B, Caso 2b: ate esta versao o replay respondia 200/replayed=true aqui.
+# Dizer "ja apliquei, era a Ana" e verdade sobre o passado e MENTIRA sobre o
+# presente — o Conversas aplicaria a Ana localmente enquanto o CRM ja tem o
+# Bruno, e os dois lados relatariam sucesso divergindo em silencio. O replay
+# agora compara o dono FRESCO contra o livro-razao e recusa.
+check(r3.status_code == 409,
+      f"409 quando o dono mudou desde que este event_id aplicou (veio {r3.status_code})")
+_c3 = r3.json().get("detail", {}) if r3.status_code == 409 else {}
+check(_c3.get("error") == "LEAD_ALREADY_ASSIGNED",
+      f"token LEAD_ALREADY_ASSIGNED no corpo (veio {_c3.get('error')!r})")
+check(_c3.get("current_responsavel_id") == BRUNO_ID,
+      f"o corpo carrega o dono REAL (veio {_c3.get('current_responsavel_id')!r})")
 check(estado(lead_id)[0] == BRUNO_ID,
       f"o responsavel atual (Bruno) foi PRESERVADO (veio {estado(lead_id)[0]})")
 
@@ -314,14 +359,41 @@ print("\n7. Colisao concorrente no SAVEPOINT")
 lead_r = novo_lead("Lead Corrida")
 ev_r = ev()
 # Simula a requisicao concorrente que VENCEU: grava e comita o livro-razao por
-# fora, numa sessao propria, sem passar pela rota. Quando a rota rodar, o
-# INSERT dentro do begin_nested() vai bater no UNIQUE de verdade.
+# fora, numa sessao propria, sem passar pela rota.
 _db = SessionLocal()
 _db.add(LeadHandoffOperation(event_id=ev_r, lead_id=lead_r, target_user_id=ANA_ID))
 _db.commit()
 _db.close()
 
-r7 = handoff(ev_r, lead_r, ANA_ID)
+
+# A linha ja comitada acima, sozinha, NAO faz a rota chegar ao SAVEPOINT: a
+# etapa 1 (`_buscar_registro`, sem lock) encontra o registro e responde pelo
+# caminho rapido de replay — era assim antes desta versao tambem, apesar do que
+# o comentario original deste bloco afirmava; este teste nunca tinha exercitado
+# a colisao. Para exercitar de verdade e preciso reproduzir a JANELA real: a
+# requisicao concorrente commita DEPOIS da etapa 1 e ANTES do INSERT. Fazer a
+# primeira consulta ao livro-razao (e so a primeira) devolver None e a forma
+# deterministica de abrir essa janela sem thread nem escrita concorrente em
+# SQLite. A reconsulta de `_resolver_colisao` usa a funcao real.
+from app.routers import v2_lead_domain as _v2_mod  # noqa: E402
+
+_chamadas_buscar_registro = []
+_buscar_registro_real = _v2_mod._buscar_registro
+
+
+def _buscar_registro_com_janela(db, event_id):
+    """Primeira chamada mente 'inedito'; da segunda em diante, a funcao real."""
+    _chamadas_buscar_registro.append(event_id)
+    if len(_chamadas_buscar_registro) == 1:
+        return None
+    return _buscar_registro_real(db, event_id)
+
+
+with patch.object(_v2_mod, "_buscar_registro", _buscar_registro_com_janela):
+    r7 = handoff(ev_r, lead_r, ANA_ID)
+check(len(_chamadas_buscar_registro) == 2,
+      f"a rota chegou mesmo a reconsulta pos-IntegrityError "
+      f"(chamadas: {len(_chamadas_buscar_registro)})")
 check(r7.status_code == 200, f"200 apos colidir no SAVEPOINT (veio {r7.status_code}: {r7.text[:160]})")
 check(r7.json().get("replayed") is True, "a colisao virou replay, nao erro")
 check(linhas_do_evento(ev_r) == 1,
@@ -555,8 +627,8 @@ with patch.object(Session, "begin_nested", _begin_nested_com_falha):
 
 check(r13.status_code == 500,
       f"500 via handler dedicado para falha SQLAlchemy nao-IntegrityError (veio {r13.status_code})")
-check(r13.json().get("detail") == "Nao foi possivel concluir a operacao de handoff.",
-      f"corpo generico do handler dedicado, nao stack cru (veio {r13.text[:160]})")
+check(r13.json().get("detail") == {"error": "HANDOFF_NAO_APLICADO"},
+      f"corpo do handler dedicado e o token estruturado, nao stack cru (veio {r13.text[:160]})")
 check(estado(lead_op) == (None, 0, 0),
       f"nada foi gravado quando o SAVEPOINT falha por outro motivo (veio {estado(lead_op)})")
 # A aplicacao continua sa depois — mesma garantia que o teste 7 prova para a
@@ -564,6 +636,283 @@ check(estado(lead_op) == (None, 0, 0),
 r13b = handoff(ev(), novo_lead("Lead Pos-Erro-Operacional"), BRUNO_ID)
 check(r13b.status_code == 200 and r13b.json().get("replayed") is False,
       f"a aplicacao continua utilizavel depois da falha (veio {r13b.status_code})")
+
+
+# ── 14. Compare-and-swap por expected_responsavel_id ──────────────────────
+# BIA-V2 R-B: o CAS e o que impede duas operacoes concorrentes de aplicarem as
+# duas. A prova de CONCORRENCIA de verdade exige PostgreSQL (o dialeto SQLite do
+# SQLAlchemy DESCARTA a clausula FOR UPDATE em silencio) e vive no teste de
+# aceitacao dos Casos 4/5. O que da para provar aqui — e que nao pode quebrar em
+# silencio — sao os tres ramos da decisao e a distincao ausente-vs-null.
+
+print("\n14. Compare-and-swap (expected_responsavel_id)")
+_AUSENTE = object()
+
+
+def handoff_cas(event_id, lead_id, target_user_id, expected=_AUSENTE):
+    corpo = {"event_id": event_id, "lead_id": lead_id, "target_user_id": target_user_id}
+    if expected is not _AUSENTE:
+        corpo["expected_responsavel_id"] = expected
+    return client.post("/api/v2/lead-domain/handoff", json=corpo, headers=HEADERS)
+
+
+def registro_do_evento(event_id):
+    db = SessionLocal()
+    try:
+        return (db.query(LeadHandoffOperation)
+                  .filter(LeadHandoffOperation.event_id == event_id).first())
+    finally:
+        db.close()
+
+
+# 14a. Campo AUSENTE = chamador anterior a esta versao: aplica sem checar, mesmo
+# sobre lead que JA TEM dono. E o cenario "cliente que volta", e tratar ausente
+# como `null` faria todo handoff desses falhar 409 durante a janela de deploy
+# em que o CRM ja subiu e o Conversas ainda nao.
+lead_cas = novo_lead("Lead CAS Ausente")
+check(handoff_cas(ev(), lead_cas, ANA_ID).status_code == 200, "sem CAS: primeira aplicacao OK")
+r14a = handoff_cas(ev(), lead_cas, BRUNO_ID)
+check(r14a.status_code == 200 and estado(lead_cas)[0] == BRUNO_ID,
+      f"campo AUSENTE aplica sobre lead que ja tem dono (veio {r14a.status_code})")
+
+# 14b. Campo presente e BATENDO com o dono atual: aplica.
+r14b = handoff_cas(ev(), lead_cas, ANA_ID, expected=BRUNO_ID)
+check(r14b.status_code == 200 and estado(lead_cas)[0] == ANA_ID,
+      f"CAS correto aplica (veio {r14b.status_code})")
+check(r14b.json().get("current_responsavel_id") == ANA_ID,
+      f"200 devolve current_responsavel_id (veio {r14b.json().get('current_responsavel_id')!r})")
+
+# 14c. Campo presente e NAO batendo: 409, lead intocado, event_id nao consumido.
+ev_cas = ev()
+r14c = handoff_cas(ev_cas, lead_cas, BRUNO_ID, expected=99999999)
+check(r14c.status_code == 409, f"CAS errado recusa com 409 (veio {r14c.status_code})")
+_c14 = r14c.json().get("detail", {}) if r14c.status_code == 409 else {}
+check(_c14.get("error") == "LEAD_ALREADY_ASSIGNED",
+      f"token LEAD_ALREADY_ASSIGNED (veio {_c14.get('error')!r})")
+check(_c14.get("current_responsavel_id") == ANA_ID and _c14.get("expected_responsavel_id") == 99999999,
+      f"corpo carrega dono real e a expectativa recusada (veio {_c14})")
+check(estado(lead_cas)[0] == ANA_ID, f"o lead NAO se moveu no 409 de CAS (veio {estado(lead_cas)[0]})")
+check(linhas_do_evento(ev_cas) == 0, "o event_id recusado no CAS nao foi consumido")
+
+# 14d. `null` EXPLICITO significa "espero o lead SEM dono" — nao "aplica
+# incondicional". A leitura oposta reabriria a corrida que o CAS existe para
+# fechar: quem nao manda expectativa venceria sempre.
+r14d = handoff_cas(ev(), lead_cas, BRUNO_ID, expected=None)
+check(r14d.status_code == 409,
+      f"`null` explicito sobre lead COM dono recusa (veio {r14d.status_code})")
+
+# 14e. `null` explicito sobre lead SEM dono: aplica.
+lead_livre = novo_lead("Lead CAS Livre")
+ev_livre = ev()
+r14e = handoff_cas(ev_livre, lead_livre, ANA_ID, expected=None)
+check(r14e.status_code == 200 and estado(lead_livre)[0] == ANA_ID,
+      f"`null` explicito sobre lead SEM dono aplica (veio {r14e.status_code})")
+
+# 14f. `previous_responsavel_id` (coluna da m018) guarda o dono ANTERIOR — o
+# unico lugar onde esse valor sobrevive ao UPDATE.
+check(registro_do_evento(ev_livre).previous_responsavel_id is None,
+      "previous_responsavel_id = None quando o lead nao tinha dono")
+ev_prev = ev()
+check(handoff_cas(ev_prev, lead_livre, BRUNO_ID, expected=ANA_ID).status_code == 200,
+      "aplicacao com dono anterior OK")
+check(registro_do_evento(ev_prev).previous_responsavel_id == ANA_ID,
+      f"previous_responsavel_id guarda o dono anterior (veio "
+      f"{registro_do_evento(ev_prev).previous_responsavel_id!r})")
+
+
+# ── 15. Release legitimo e reatribuicao (Caso 6 do desenho R-B) ───────────
+# O Caso 6 e o que derrubou a hipotese do indice unico parcial (secao 1 do
+# desenho): sem uma saida para o lead liberado, o claim travaria o lead para
+# sempre. Aqui a saida e o BASELINE, nao o tempo — nao ha TTL em lugar nenhum.
+# O check 14e prova `null` sobre um lead que NUNCA teve dono; este prova a
+# transicao real teve-dono -> liberado -> reatribuido, que e outro caminho.
+
+print("\n15. Release legitimo, replay na janela sem dono, e reatribuicao")
+lead_rel = novo_lead("Lead Release Legitimo")
+ev_rel = ev()
+check(handoff_cas(ev_rel, lead_rel, ANA_ID, expected=None).status_code == 200,
+      "atribuicao inicial ao primeiro responsavel OK")
+
+_db = SessionLocal()
+_db.query(Lead).filter(Lead.id == lead_rel).first().responsavel_id = None
+_db.commit()
+_db.close()
+check(estado(lead_rel)[0] is None, "release zerou leads.responsavel_id")
+
+# 15a. Sub-caso G5 do desenho (secao 2.1.1): na janela entre o release e a
+# reatribuicao, `lead.responsavel_id` e None enquanto `registro.target_user_id`
+# nunca e (coluna NOT NULL). O replay do event_id antigo SEMPRE acusa
+# "diferente" aqui — e recusa. O nome do token engana ("ja atribuido" com valor
+# None), mas o que ele comunica e "o valor que voce esperava nao e mais
+# verdade", e None e um VALOR de comparacao legitimo, nao ausencia de dado.
+r15a = handoff(ev_rel, lead_rel, ANA_ID)
+check(r15a.status_code == 409,
+      f"replay do event_id antigo na janela SEM dono recusa (veio {r15a.status_code})")
+_c15a = r15a.json().get("detail", {}) if r15a.status_code == 409 else {}
+check(_c15a.get("error") == "LEAD_ALREADY_ASSIGNED",
+      f"token LEAD_ALREADY_ASSIGNED tambem no lead liberado (veio {_c15a.get('error')!r})")
+check("current_responsavel_id" in _c15a and _c15a.get("current_responsavel_id") is None,
+      f"`current_responsavel_id` PRESENTE e None — 'ninguem' e um valor, nao um "
+      f"campo faltando (corpo: {_c15a})")
+
+# 15b. Baseline OBSOLETO: quem ainda acha que o lead e da Ana (dono de ANTES do
+# release) e recusado. O CAS decide por baseline, nao por quem chegou primeiro.
+r15b = handoff_cas(ev(), lead_rel, BRUNO_ID, expected=ANA_ID)
+check(r15b.status_code == 409,
+      f"baseline obsoleto (dono de antes do release) recusa (veio {r15b.status_code})")
+check(estado(lead_rel)[0] is None, "o lead continua sem dono apos o baseline obsoleto")
+
+# 15c. Caso 6 propriamente dito: com o baseline CERTO (`null` = sem dono), a
+# reatribuicao e aceita. Sem TTL, sem espera, sem intervencao manual.
+ev_rel2 = ev()
+r15c = handoff_cas(ev_rel2, lead_rel, BRUNO_ID, expected=None)
+check(r15c.status_code == 200 and estado(lead_rel)[0] == BRUNO_ID,
+      f"reatribuicao apos release aceita pelo baseline correto (veio {r15c.status_code})")
+check(registro_do_evento(ev_rel2).previous_responsavel_id is None,
+      "previous_responsavel_id registra que o lead saiu de 'ninguem'")
+
+
+# ── 16. Corpo estruturado dos dois 409 (contrato da secao 7 do desenho) ───
+# O 409 e o unico status desta rota que o Conversas discrimina por
+# `detail.error`, e o unico cujo corpo carrega campos alem do token. Os checks 3
+# e 14c ja provam o token; o que falta e o resto do contrato — em especial
+# `current_owner_applied_at`, que vem de um `DateTime(timezone=True)` hidratado
+# como objeto `datetime` VIVO. Sem o `.isoformat()` explicito de
+# `_erro_lead_ja_atribuido`, o `json.dumps` do JSONResponse estoura `TypeError`
+# DENTRO do handler de excecao, que ninguem recaptura: a resposta degrada para
+# um 500 generico e o corpo estruturado some justamente no caso que mais
+# importa. Nenhum check anterior tocava esse campo, entao a linha nunca era
+# exercitada com assercao.
+
+print("\n16. Corpo estruturado dos dois 409 (inclui data serializavel)")
+lead_dt = novo_lead("Lead Corpo 409")
+ev_dono = ev()
+check(handoff_cas(ev_dono, lead_dt, ANA_ID, expected=None).status_code == 200,
+      "dono estabelecido por uma operacao V2 (deixa rastro no livro-razao)")
+
+r16 = handoff_cas(ev(), lead_dt, BRUNO_ID, expected=99999999)
+check(r16.status_code == 409,
+      f"409 de CAS, nao 500 — a data do corpo serializa (veio {r16.status_code}: "
+      f"{r16.text[:160]})")
+_c16 = r16.json().get("detail", {}) if r16.status_code == 409 else {}
+check(_c16.get("current_owner_event_id") == ev_dono,
+      f"`current_owner_event_id` aponta a operacao que pos o dono atual "
+      f"(veio {_c16.get('current_owner_event_id')!r})")
+_aplicado_em = _c16.get("current_owner_applied_at")
+check(isinstance(_aplicado_em, str),
+      f"`current_owner_applied_at` e STRING, nunca um datetime cru "
+      f"(veio {type(_aplicado_em).__name__}: {_aplicado_em!r})")
+_data_ok = False
+if isinstance(_aplicado_em, str):
+    try:
+        datetime.fromisoformat(_aplicado_em)
+        _data_ok = True
+    except ValueError:
+        _data_ok = False
+check(_data_ok, f"`current_owner_applied_at` e ISO-8601 parseavel (veio {_aplicado_em!r})")
+
+# O outro 409: `IDEMPOTENCY_PAYLOAD_CONFLICT` responde "com que parametros este
+# event_id foi de fato aplicado?" — e por isso carrega os valores GRAVADOS, nao
+# os recebidos. O check 4 so olhava o status code.
+r16b = handoff(ev_dono, lead_dt, BRUNO_ID)
+check(r16b.status_code == 409, f"409 de payload divergente (veio {r16b.status_code})")
+_c16b = r16b.json().get("detail", {}) if r16b.status_code == 409 else {}
+check(_c16b.get("error") == "IDEMPOTENCY_PAYLOAD_CONFLICT",
+      f"token IDEMPOTENCY_PAYLOAD_CONFLICT (veio {_c16b.get('error')!r})")
+check(_c16b.get("registered_lead_id") == lead_dt
+      and _c16b.get("registered_target_user_id") == ANA_ID,
+      f"o corpo devolve os parametros GRAVADOS, nao os do payload novo (veio {_c16b})")
+check(_c16b.get("current_responsavel_id") == ANA_ID,
+      f"`current_responsavel_id` presente tambem neste 409 (veio "
+      f"{_c16b.get('current_responsavel_id')!r})")
+
+
+# ── 17. event_id duplicado CONCORRENTE nao pode virar 409 ─────────────────
+# Regressao de IDEMPOTENCIA introduzida pelo CAS, provada empiricamente contra
+# PostgreSQL: duas requisicoes com o MESMO `event_id` (duas instancias do worker
+# R16 podem legitimamente emitir as duas em paralelo) veem o livro-razao vazio na
+# etapa 1 e se serializam no `FOR UPDATE`. A perdedora rele o lead JA aplicado
+# pela gemea, o CAS falha contra o baseline antigo, e ela saia por 409
+# LEAD_ALREADY_ASSIGNED — sem NUNCA alcancar `_resolver_colisao`, o unico codigo
+# que reconheceria "mesmo event_id, mesmos parametros => replay". O Conversas
+# recebia CRM_LEAD_JA_ATRIBUIDO sobre a propria repeticao e podia empurrar a
+# operacao para o diagnostico errado de R15.
+#
+# Em SQLite nao ha `FOR UPDATE` (o dialeto descarta em silencio), entao a
+# JANELA e reproduzida do mesmo jeito deterministico do check 7: a primeira
+# consulta ao livro-razao mente "inedito", e o resto da requisicao encontra o
+# mundo que a gemea ja deixou aplicado (livro-razao gravado + lead com o dono
+# novo). A prova sob concorrencia REAL exige PostgreSQL e nao cabe aqui.
+
+print("\n17. event_id duplicado CONCORRENTE responde replay, nunca 409")
+
+
+def _com_janela_de_corrida(fn):
+    """Roda `fn()` com a PRIMEIRA consulta ao livro-razao devolvendo None.
+
+    E a janela em que a gemea concorrente ainda nao havia commitado quando a
+    etapa 1 rodou. Da segunda consulta em diante vale a funcao real — inclusive
+    a reconsulta do ramo de CAS, que e justamente o que esta sob teste.
+    """
+    chamadas = []
+
+    def _janela(db, event_id):
+        chamadas.append(event_id)
+        return None if len(chamadas) == 1 else _buscar_registro_real(db, event_id)
+
+    with patch.object(_v2_mod, "_buscar_registro", _janela):
+        return fn(), len(chamadas)
+
+
+lead_g = novo_lead("Lead Gemea Concorrente")
+ev_g = ev()
+# A gemea que VENCEU a corrida: grava o livro-razao E aplica o responsavel, o
+# mesmo par que o handler commita junto.
+_db = SessionLocal()
+_db.add(LeadHandoffOperation(event_id=ev_g, lead_id=lead_g, target_user_id=ANA_ID,
+                             previous_responsavel_id=None))
+_db.query(Lead).filter(Lead.id == lead_g).first().responsavel_id = ANA_ID
+_db.commit()
+_db.close()
+
+# A perdedora: MESMO event_id, MESMOS parametros, MESMA expectativa (`null` =
+# "espero o lead sem dono", que era verdade quando ela comecou).
+r17, _n17 = _com_janela_de_corrida(
+    lambda: handoff_cas(ev_g, lead_g, ANA_ID, expected=None)
+)
+check(_n17 == 2, f"a rota chegou mesmo a reconsulta do ramo de CAS (consultas: {_n17})")
+check(r17.status_code == 200,
+      f"200, nao 409, para o mesmo event_id que a gemea concorrente aplicou "
+      f"(veio {r17.status_code}: {r17.text[:160]})")
+check(r17.status_code == 200 and r17.json().get("replayed") is True,
+      "a gemea perdedora recebe replayed=true, nao LEAD_ALREADY_ASSIGNED")
+check(linhas_do_evento(ev_g) == 1,
+      f"nenhuma segunda linha no livro-razao (veio {linhas_do_evento(ev_g)})")
+check(estado(lead_g)[0] == ANA_ID, f"o lead nao se moveu (veio {estado(lead_g)[0]})")
+
+# A correcao NAO pode engolir o conflito de CAS de verdade: um event_id INEDITO
+# perdendo o baseline continua 409 — e o check que impede a "correcao" de virar
+# um `if not cas_ok: pass`.
+r17b = handoff_cas(ev(), lead_g, BRUNO_ID, expected=None)
+check(r17b.status_code == 409,
+      f"CAS perdido para OUTRO event_id continua 409 (veio {r17b.status_code})")
+_c17b = r17b.json().get("detail", {}) if r17b.status_code == 409 else {}
+check(_c17b.get("error") == "LEAD_ALREADY_ASSIGNED",
+      f"e continua sendo o token LEAD_ALREADY_ASSIGNED (veio {_c17b.get('error')!r})")
+check(estado(lead_g)[0] == ANA_ID, "o lead nao se moveu no 409 real de CAS")
+
+# E a reconsulta continua conferindo parametros: mesma chave com OUTRO alvo e
+# adulteracao, nao replay — o token muda para IDEMPOTENCY_PAYLOAD_CONFLICT.
+r17c, _ = _com_janela_de_corrida(
+    lambda: handoff_cas(ev_g, lead_g, BRUNO_ID, expected=None)
+)
+check(r17c.status_code == 409,
+      f"mesmo event_id com alvo divergente na janela continua 409 (veio {r17c.status_code})")
+_c17c = r17c.json().get("detail", {}) if r17c.status_code == 409 else {}
+check(_c17c.get("error") == "IDEMPOTENCY_PAYLOAD_CONFLICT",
+      f"token IDEMPOTENCY_PAYLOAD_CONFLICT na reconsulta do ramo de CAS "
+      f"(veio {_c17c.get('error')!r})")
+check(estado(lead_g)[0] == ANA_ID, "o lead nao se moveu no 409 de payload divergente")
 
 
 # ── Resultado ─────────────────────────────────────────────────────────────

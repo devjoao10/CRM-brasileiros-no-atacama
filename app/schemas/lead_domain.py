@@ -33,6 +33,26 @@ class HandoffRequest(BaseModel):
     target_user_id: int = Field(
         ..., gt=0, description="ID do usuario que passa a ser responsavel pelo lead."
     )
+    # O `= None` NAO e decorativo: sob Pydantic v2, `int | None` SEM default e um
+    # campo OBRIGATORIO-porem-anulavel, nao opcional. Com `extra="forbid"` acima,
+    # a diferenca e brutal — todo payload antigo do Conversas (que nunca manda
+    # esta chave) passaria a receber 422 assim que o CRM subisse, independente da
+    # ordem de deploy. Ver desenho BIA-V2 R-B, secao 7.
+    #
+    # AUSENTE e diferente de `null`, e o router depende dessa distincao via
+    # `model_fields_set` (nao via `.get()`/default, que funde os dois):
+    # ausente = chamador pre-R-B, aplica sem compare-and-swap (comportamento
+    # historico preservado); `null` explicito = chamador novo dizendo "espero que
+    # o lead esteja SEM dono". Ver `aplicar_handoff`.
+    expected_responsavel_id: int | None = Field(
+        default=None,
+        description=(
+            "Compare-and-swap: valor que o chamador espera encontrar em "
+            "`leads.responsavel_id` ANTES da troca. `null` explicito significa "
+            "'espero que o lead esteja sem responsavel'. Omitir o campo desliga "
+            "a checagem (compatibilidade com chamadores anteriores a esta versao)."
+        ),
+    )
 
     @field_validator("event_id")
     @classmethod
@@ -69,5 +89,18 @@ class HandoffResponse(BaseModel):
         description=(
             "False na primeira aplicacao deste event_id; True quando ele ja "
             "tinha sido processado com os mesmos parametros."
+        ),
+    )
+    # Obrigatorio-porem-anulavel DE PROPOSITO (ao contrario de
+    # `expected_responsavel_id` na requisicao): e resposta, nao entrada, entao
+    # nao ha payload antigo para quebrar — e exigir o campo em toda construcao
+    # impede que algum caminho de retorno esqueca de informar o dono real.
+    # `None` e um valor legitimo: um replay cujo lead ja foi apagado nao tem
+    # dono para reportar.
+    current_responsavel_id: int | None = Field(
+        ...,
+        description=(
+            "Leitura fresca de `leads.responsavel_id` no momento da resposta. "
+            "`null` quando o lead nao existe mais (replay sobrevive a delecao)."
         ),
     )
