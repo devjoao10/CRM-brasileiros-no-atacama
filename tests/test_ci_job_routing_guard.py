@@ -94,6 +94,64 @@ for caminho in roteados:
     check(MARCADOR in codigo_sem_prosa(caminho.read_text(encoding="utf-8")),
           f"{caminho.name}: usa o marcador como CODIGO, nao so em prosa")
 
+# ── O gate de PostgreSQL do R-B nao pode virar inerte ─────────────────────
+# `tests/test_v2_rb_cas_postgres.py` e o unico teste que FALHA (nao pula) sem
+# banco, por exigencia do desenho BIA-V2 R-B (secoes 2.3 e 8). Isso so funciona
+# com as DUAS metades juntas: excluido dos dois jobs comuns (senao quebra todo
+# PR) E rodado por um job proprio que provisiona PostgreSQL. Apagar a segunda
+# metade nao quebraria nada visivelmente — o arquivo simplesmente pararia de
+# rodar, que e exatamente a "gate inerte" que o desenho proibe. Por isso o
+# guard e aqui, e nao dentro do proprio arquivo (que nao rodaria para reclamar).
+RB_CAS = "tests/test_v2_rb_cas_postgres.py"
+check((ROOT / RB_CAS).exists(), f"{RB_CAS} existe")
+check(r"grep -v '^tests/test_v2_rb_cas_postgres\.py$'" in workflow,
+      "o job `crm` ainda EXCLUI o gate de PostgreSQL do R-B da sua selecao — "
+      "sem a exclusao ele roda sem banco e derruba todo PR por configuracao")
+check("rb-cas-postgres:" in workflow,
+      "test.yml ainda declara o job `rb-cas-postgres` — sem ele o gate do R-B "
+      "nao roda em lugar nenhum e a prova de concorrencia vira decorativa")
+check("DATABASE_URL_RB_CAS_PROOF" in workflow,
+      "o job `rb-cas-postgres` ainda passa DATABASE_URL_RB_CAS_PROOF — sem a "
+      "env var o proprio teste falha, que e o comportamento desejado, mas o CI "
+      "ficaria vermelho por configuracao em vez de por regressao")
+check("postgres:16" in workflow,
+      "o job `rb-cas-postgres` ainda provisiona um servico PostgreSQL")
+
+# ── O E2E distribuido tem a MESMA estrutura de duas metades ────────────────
+# `tests/test_v2_e2e_distribuido.py` casa o `grep -l` do job `conversas` (ele
+# insere conversas/ no sys.path de verdade, como CODIGO), mas nao pode rodar la:
+# ele sobe TAMBEM o app do CRM num processo proprio, e o ambiente do job
+# `conversas` nao tem slowapi/passlib/bcrypt. E, como o gate do R-B, ele FALHA
+# (nao pula) sem PostgreSQL. As duas metades precisam existir juntas: a exclusao
+# no job `conversas` E o job proprio que provisiona banco e os DOIS virtualenvs.
+E2E_DIST = "tests/test_v2_e2e_distribuido.py"
+check((ROOT / E2E_DIST).exists(), f"{E2E_DIST} existe")
+check(r"grep -v '^tests/test_v2_e2e_distribuido\.py$'" in workflow,
+      "o job `conversas` ainda EXCLUI o E2E distribuido da sua selecao — sem a "
+      "exclusao ele roda sem as dependencias do CRM e derruba todo PR")
+check("e2e-distribuido:" in workflow,
+      "test.yml ainda declara o job `e2e-distribuido` — sem ele o E2E distribuido "
+      "nao roda em lugar nenhum e o fechamento de R-B/R15/R16/R17 fica sem prova "
+      "fim-a-fim")
+check("DATABASE_URL_E2E_DIST" in workflow,
+      "o job `e2e-distribuido` ainda passa DATABASE_URL_E2E_DIST — sem a env var o "
+      "proprio teste falha (comportamento desejado), mas o CI ficaria vermelho por "
+      "configuracao em vez de por regressao")
+for _var in ("E2E_DIST_PYTHON_CRM", "E2E_DIST_PYTHON_CONVERSAS"):
+    check(_var in workflow,
+          f"o job `e2e-distribuido` ainda passa {_var} — sem os dois interpretadores "
+          f"separados um dos dois apps subiria com os pins do outro, que e exatamente "
+          f"o que a separacao de ambientes deste repo existe para impedir")
+
+# Mesma logica de inercia, um andar abaixo: o check 3e de test_v2_workers.py e
+# a unica prova COMPORTAMENTAL de SKIP LOCKED (3a-3d rodam em SQLite, que
+# descarta a clausula). Ele faz skip gracioso sem a env var, entao remover a
+# variavel do workflow nao quebra nada de forma visivel — so desliga a prova.
+check("DATABASE_URL_WORKERS_PROOF" in workflow,
+      "o job `conversas` ainda liga a prova REAL de SKIP LOCKED "
+      "(DATABASE_URL_WORKERS_PROOF) — sem ela o check 3e faz skip e a exclusao "
+      "entre workers volta a ser provada so em SQLite, que ignora a clausula")
+
 if falhas:
     print(f"\n{len(falhas)} FALHA(S) — roteamento de job do CI")
     print(
