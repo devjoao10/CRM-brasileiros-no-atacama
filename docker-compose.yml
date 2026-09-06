@@ -183,6 +183,15 @@ services:
       # fail-closed, mas silenciosamente inoperante, o tipo de lacuna que
       # convida a um bypass apressado no primeiro deploy real.
       - V2_AGENT_WEBHOOK_AUTH_VALUE=${V2_AGENT_WEBHOOK_AUTH_VALUE:?Defina V2_AGENT_WEBHOOK_AUTH_VALUE no .env}
+      # BIA-V2 (achado da revisao da rota sombra) — credencial PROPRIA de
+      # POST /webhook/agent-bia-v2-shadow, separada de V2_AGENT_WEBHOOK_AUTH_VALUE
+      # acima. Sem o `:?` a sombra ficaria 401 pra sempre (fail-closed, mas
+      # silenciosamente inoperante) e convidaria a "resolver" copiando o
+      # valor da credencial viva pro `.env` — exatamente o atalho que anula a
+      # separacao entre as duas rotas. Ver o comentario de
+      # V2_AGENT_SHADOW_WEBHOOK_AUTH_VALUE em conversas/app/config.py para o
+      # cenario de URL trocada que motivou a separacao.
+      - V2_AGENT_SHADOW_WEBHOOK_AUTH_VALUE=${V2_AGENT_SHADOW_WEBHOOK_AUTH_VALUE:?Defina V2_AGENT_SHADOW_WEBHOOK_AUTH_VALUE no .env}
       # Mesma credencial do bloco `crm` acima (Fases 8/9 do BIA V2) — os dois
       # apps chamam a IA Interpretadora/Comunicadora. Sem esta linha o
       # container do Conversas nunca recebe a chave, so o do CRM.

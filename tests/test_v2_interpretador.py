@@ -409,7 +409,7 @@ check(erro_7b is not None, "7b. _chamar_llm com GEMINI_API_KEY=None tambem levan
 # alcancar este segundo guard. ---
 with mock.patch("app.v2.interpretador.GEMINI_API_KEY", "fake-key-de-teste"):
     with mock.patch(
-        "app.v2.interpretador.genai.Client", side_effect=lambda api_key: _ClienteGeminiFalso(None)
+        "app.v2.interpretador.genai.Client", side_effect=lambda api_key, http_options: _ClienteGeminiFalso(None)
     ) as mock_cliente_7c:
         erro_7c = None
         try:
@@ -427,7 +427,7 @@ check(mock_cliente_7c.call_count == 1, "7c3. genai.Client foi instanciado - prov
 # resposta.text` cobre os dois valores falsy, mesma logica do par 7a/7b. ---
 with mock.patch("app.v2.interpretador.GEMINI_API_KEY", "fake-key-de-teste"):
     with mock.patch(
-        "app.v2.interpretador.genai.Client", side_effect=lambda api_key: _ClienteGeminiFalso("")
+        "app.v2.interpretador.genai.Client", side_effect=lambda api_key, http_options: _ClienteGeminiFalso("")
     ):
         erro_7d = None
         try:
@@ -443,12 +443,45 @@ check(erro_7d is not None, "7d. resposta.text == '' (string vazia) tambem levant
 with mock.patch("app.v2.interpretador.GEMINI_API_KEY", "fake-key-de-teste"):
     with mock.patch(
         "app.v2.interpretador.genai.Client",
-        side_effect=lambda api_key: _ClienteGeminiFalso('{"ok": true}'),
+        side_effect=lambda api_key, http_options: _ClienteGeminiFalso('{"ok": true}'),
     ):
         resultado_7e = _CHAMAR_LLM_REAL("mensagem qualquer")
 check(
     resultado_7e == '{"ok": true}',
     f"7e. controle positivo - resposta.text presente e devolvido intacto (obtido={resultado_7e!r})",
+)
+
+# --- 7f. TETO DE ESPERA na chamada ao SDK. Sem `http_options.timeout` o
+# google-genai NAO impoe teto nenhum: a chamada fica pendurada para sempre e,
+# junto com ela, a rota HTTP que a invocou (o caminho vivo e a rota SOMBRA).
+# O valor e conferido EM MILISSEGUNDOS - `types.HttpOptions.timeout` e
+# documentado como "Timeout for the request in milliseconds" no SDK instalado,
+# entao um valor em segundos aqui viraria um teto de 90ms e reprovaria toda
+# chamada real. Este check trava as duas coisas: que existe teto e que a
+# ORDEM DE GRANDEZA e de milissegundos. ---
+with mock.patch("app.v2.interpretador.GEMINI_API_KEY", "fake-key-de-teste"):
+    with mock.patch(
+        "app.v2.interpretador.genai.Client",
+        side_effect=lambda api_key, http_options: _ClienteGeminiFalso('{"ok": true}'),
+    ) as mock_cliente_7f:
+        _CHAMAR_LLM_REAL("mensagem qualquer")
+
+_http_options_7f = mock_cliente_7f.call_args.kwargs.get("http_options")
+check(
+    _http_options_7f is not None and _http_options_7f.timeout is not None,
+    f"7f. genai.Client recebe http_options com timeout (obtido={_http_options_7f!r})",
+)
+check(
+    _http_options_7f is not None and _http_options_7f.timeout == interpretador._TIMEOUT_GEMINI_MS,
+    f"7f2. o timeout passado e `_TIMEOUT_GEMINI_MS` "
+    f"(obtido={getattr(_http_options_7f, 'timeout', None)!r}, "
+    f"esperado={interpretador._TIMEOUT_GEMINI_MS!r})",
+)
+check(
+    10_000 <= interpretador._TIMEOUT_GEMINI_MS <= 600_000,
+    f"7f3. o valor esta na faixa de MILISSEGUNDOS plausivel (10s-600s) - pega "
+    f"a troca acidental de unidade para segundos (obtido="
+    f"{interpretador._TIMEOUT_GEMINI_MS!r})",
 )
 
 

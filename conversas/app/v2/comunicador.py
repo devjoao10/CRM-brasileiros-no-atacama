@@ -81,6 +81,7 @@ separados (ver a divisao de responsabilidades no prompt desta tarefa).
 import logging
 
 from google import genai
+from google.genai import types
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from app.config import GEMINI_API_KEY
@@ -92,6 +93,16 @@ logger = logging.getLogger(__name__)
 # Mesmo modelo usado pelo CRM (app/routers/ai.py) - convencao do projeto.
 # Nao configuravel nesta fase: nenhum caller pede modelo diferente (YAGNI).
 _MODEL_NAME = "gemini-2.5-flash"
+
+# TETO DE ESPERA DA CHAMADA AO GEMINI - EM MILISSEGUNDOS.
+# Mesmo valor e mesma justificativa de `_TIMEOUT_GEMINI_MS` em
+# `interpretador.py` (unidade conferida no SDK instalado:
+# `google.genai.types.HttpOptions.timeout` e documentado como "Timeout for the
+# request in milliseconds", google-genai 1.75.0). Sem ele o SDK espera para
+# sempre, e quem chama - caminho vivo e `app/v2/sombra.py` - fica preso junto.
+# Duplicado como constante local em vez de importado do interpretador: os dois
+# modulos sao fases independentes e nenhum importa o outro hoje.
+_TIMEOUT_GEMINI_MS = 90_000
 
 
 class ComunicadorIndisponivel(RuntimeError):
@@ -200,7 +211,10 @@ def _chamar_gemini(prompt: str) -> str:
     if not GEMINI_API_KEY:
         raise ComunicadorIndisponivel(_TOKEN_SEM_API_KEY)
     try:
-        cliente = genai.Client(api_key=GEMINI_API_KEY)
+        cliente = genai.Client(
+            api_key=GEMINI_API_KEY,
+            http_options=types.HttpOptions(timeout=_TIMEOUT_GEMINI_MS),
+        )
         resposta = cliente.models.generate_content(model=_MODEL_NAME, contents=prompt)
         if not resposta.text:
             raise RuntimeError("Resposta vazia do modelo de IA.")

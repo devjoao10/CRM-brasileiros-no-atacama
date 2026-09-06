@@ -135,6 +135,25 @@ from app.v2.eventos_validacao import ResultadoEvento, TipoEvento
 # divergir aqui, so o pacote do SDK mudou (ver docstring do modulo).
 NOME_MODELO = "gemini-2.5-flash"
 
+# TETO DE ESPERA DA CHAMADA AO GEMINI — EM MILISSEGUNDOS.
+#
+# A unidade foi conferida no SDK instalado, nao presumida:
+# `google.genai.types.HttpOptions.timeout` e `Optional[int]` documentado como
+# "Timeout for the request in milliseconds" (google-genai 1.75.0). Passar
+# segundos aqui daria um teto de 90ms e reprovaria toda chamada.
+#
+# Sem este parametro o SDK NAO impoe teto nenhum, e quem chama fica preso
+# indefinidamente. Isso importa alem da latencia: `app/v2/sombra.py` e o
+# caminho vivo entram nesta funcao a partir de uma rota HTTP, e uma espera sem
+# fim vira retencao sem fim do que a rota estiver segurando.
+#
+# 90s e generoso de proposito — uma geracao normal deste modelo termina em
+# poucos segundos, entao o teto so age no caso patologico (rede pendurada,
+# backend travado). Deliberadamente MUITO abaixo do timeout do agente n8n
+# (AGENT_TIMEOUT.read = 240s, webhook.py), que cobre execucao de workflow
+# inteira e nao uma unica chamada de modelo.
+_TIMEOUT_GEMINI_MS = 90_000
+
 # Vocabulario fechado de error_code desta fase (formato exigido por
 # eventos_validacao._REGEX_ERROR_CODE: maiuscula inicial, so [A-Z0-9_]).
 _ERRO_CHAMADA_LLM = "CHAMADA_LLM_FALHOU"
@@ -217,7 +236,10 @@ def _chamar_llm(mensagem: str) -> str:
             "GEMINI_API_KEY nao configurada — a IA Interpretadora nao pode ser chamada."
         )
 
-    cliente = genai.Client(api_key=GEMINI_API_KEY)
+    cliente = genai.Client(
+        api_key=GEMINI_API_KEY,
+        http_options=types.HttpOptions(timeout=_TIMEOUT_GEMINI_MS),
+    )
     resposta = cliente.models.generate_content(
         model=NOME_MODELO,
         contents=mensagem,
@@ -232,6 +254,52 @@ def _chamar_llm(mensagem: str) -> str:
     if not resposta.text:
         raise RuntimeError("Resposta vazia do modelo de IA.")
     return resposta.text
+
+
+def interpretar_sem_efeito(mensagem: str) -> AIInterpretationResult:
+    """
+    Chama o modelo e valida a saida contra `AIInterpretationResult`. NAO
+    registra evento nenhum, nao recebe `Session`, nao toca banco — a UNICA
+    coisa que faz e a interpretacao em si.
+
+    E o miolo de `interpretar()`: os dois passos (chamada ao SDK, validacao
+    do contrato) e o mapeamento de falha para os dois `error_code` fechados
+    desta fase. `interpretar()` continua sendo o ponto de entrada normal e
+    envolve esta funcao com o ciclo de vida de eventos (STARTED + exatamente
+    um entre COMPLETED/FAILED) e a medicao de `duration_ms`.
+
+    Extraida para o endpoint SOMBRA (`app/v2/sombra.py`), que precisa da
+    interpretacao REAL mas nao pode gravar linha nenhuma. Sem ela, a sombra
+    teria de reproduzir localmente o par chamada+validacao e o mapeamento de
+    `error_code` — duplicando exatamente o que este modulo existe para
+    concentrar.
+
+    Levanta `InterpretacaoFalhou` (nunca um resultado parcial), preservando a
+    excecao original do SDK como `__cause__` — ver o docstring da excecao.
+    """
+    try:
+        texto_bruto = _chamar_llm(mensagem)
+    except Exception as exc:
+        # Ampla de proposito: qualquer falha da fronteira de I/O (rede,
+        # credencial ausente, erro do SDK, bloqueio de seguranca do modelo)
+        # e a MESMA falha do ponto de vista deste modulo — "a interpretacao
+        # nao aconteceu".
+        raise InterpretacaoFalhou(
+            "Falha ao chamar o modelo de IA.", error_code=_ERRO_CHAMADA_LLM
+        ) from exc
+
+    try:
+        return AIInterpretationResult.model_validate_json(texto_bruto)
+    except ValidationError as exc:
+        # Cobre JSON malformado, campo obrigatorio faltando, campo extra
+        # (extra="forbid") e tipo errado — Pydantic v2 emite ValidationError
+        # para os quatro casos via model_validate_json (confirmado
+        # empiricamente contra o AIInterpretationResult real deste projeto
+        # antes de escrever este arquivo).
+        raise InterpretacaoFalhou(
+            "Saida do modelo de IA nao bate com AIInterpretationResult.",
+            error_code=_ERRO_RESPOSTA_INVALIDA,
+        ) from exc
 
 
 def interpretar(
@@ -270,12 +338,13 @@ def interpretar(
     inicio = time.monotonic()
 
     try:
-        texto_bruto = _chamar_llm(mensagem)
-    except Exception as exc:
-        # Ampla de proposito: qualquer falha da fronteira de I/O (rede,
-        # credencial ausente, erro do SDK, bloqueio de seguranca do modelo)
-        # e a MESMA falha do ponto de vista deste modulo — "a interpretacao
-        # nao aconteceu".
+        resultado = interpretar_sem_efeito(mensagem)
+    except InterpretacaoFalhou as exc:
+        # `exc.error_code` ja e o token fechado que a etapa que falhou
+        # escolheu (`CHAMADA_LLM_FALHOU` na fronteira de I/O,
+        # `RESPOSTA_INVALIDA` na validacao do contrato) — este bloco nao
+        # redecide qual foi, so registra o desfecho e deixa a MESMA excecao
+        # subir, com a `__cause__` original intacta.
         duracao_ms = int((time.monotonic() - inicio) * 1000)
         registrar_evento(
             db,
@@ -287,37 +356,9 @@ def interpretar(
             model_attempt=model_attempt,
             duration_ms=duracao_ms,
             result=ResultadoEvento.FALHA,
-            error_code=_ERRO_CHAMADA_LLM,
+            error_code=exc.error_code,
         )
-        raise InterpretacaoFalhou(
-            "Falha ao chamar o modelo de IA.", error_code=_ERRO_CHAMADA_LLM
-        ) from exc
-
-    try:
-        resultado = AIInterpretationResult.model_validate_json(texto_bruto)
-    except ValidationError as exc:
-        # Cobre JSON malformado, campo obrigatorio faltando, campo extra
-        # (extra="forbid") e tipo errado — Pydantic v2 emite ValidationError
-        # para os quatro casos via model_validate_json (confirmado
-        # empiricamente contra o AIInterpretationResult real deste projeto
-        # antes de escrever este arquivo).
-        duracao_ms = int((time.monotonic() - inicio) * 1000)
-        registrar_evento(
-            db,
-            tipo=TipoEvento.AI_INTERPRETATION_FAILED,
-            commit=commit,
-            conversation_id=conversation_id,
-            lead_id=lead_id,
-            model=NOME_MODELO,
-            model_attempt=model_attempt,
-            duration_ms=duracao_ms,
-            result=ResultadoEvento.FALHA,
-            error_code=_ERRO_RESPOSTA_INVALIDA,
-        )
-        raise InterpretacaoFalhou(
-            "Saida do modelo de IA nao bate com AIInterpretationResult.",
-            error_code=_ERRO_RESPOSTA_INVALIDA,
-        ) from exc
+        raise
 
     duracao_ms = int((time.monotonic() - inicio) * 1000)
     registrar_evento(

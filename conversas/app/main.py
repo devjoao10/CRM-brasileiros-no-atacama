@@ -19,7 +19,7 @@ from app.models.api_config import ApiConfig  # noqa: F401
 from app.models.message_variable import MessageVariable  # noqa: F401 — CONV-VAR-01
 from app.models.evento import ConversationEvent  # noqa: F401 — BIA-V2 Fase 0
 from app.models.handoff_op import HandoffOperation  # noqa: F401 — BIA-V2 Fase 6
-from app.routers import webhook, conversations, pages, auth, quick_replies, templates, settings, api_config, media, tags, notes, variables, v2_agent
+from app.routers import webhook, conversations, pages, auth, quick_replies, templates, settings, api_config, media, tags, notes, variables, v2_agent, v2_agent_sombra
 from app.seed import seed_dev_user, seed_quick_replies, seed_templates, seed_auto_replies, seed_business_hours, CONVERSAS_SEED_DEV_DATA
 from app.logging_config import configurar_logging
 from app.v2.eventos import EventoDuplicado
@@ -205,6 +205,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # Routers
 app.include_router(webhook.router)
 app.include_router(v2_agent.router)  # BIA-V2 Fase 10 — POST /webhook/agent-bia-v2
+app.include_router(v2_agent_sombra.router)  # BIA-V2 SOMBRA — POST /webhook/agent-bia-v2-shadow (zero efeito)
 app.include_router(conversations.router)
 app.include_router(auth.router)  # Login endpoint (local em dev, PostgreSQL em prod)
 app.include_router(quick_replies.router)

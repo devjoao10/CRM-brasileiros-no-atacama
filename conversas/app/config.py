@@ -151,6 +151,31 @@ V2_MODE = os.getenv("V2_MODE", "dry_run")
 # "configurada").
 V2_AGENT_WEBHOOK_AUTH_VALUE = os.getenv("V2_AGENT_WEBHOOK_AUTH_VALUE", "").strip()
 
+# ─── BIA-V2 (achado de seguranca da revisao da rota sombra) — credencial
+# PROPRIA de `POST /webhook/agent-bia-v2-shadow` ─────────────────────────
+# Ate esta correcao a sombra (app/routers/v2_agent_sombra.py) importava a
+# verificacao de `v2_agent.py` e comparava contra a MESMA
+# V2_AGENT_WEBHOOK_AUTH_VALUE acima, da rota VIVA. O problema: se o node do
+# n8n que chama a sombra apontar para a URL SEM o sufixo `-shadow` (erro de
+# configurar a URL, nao a credencial), a chamada autentica normalmente
+# contra a rota VIVA — e `executar_pipeline` ja grava uma linha real de
+# MESSAGE_RECEIVED em `conversation_events` ANTES de recusar `LEGACY` com
+# 409 (ver o docstring de app/routers/v2_agent.py). Toda mensagem de
+# producao espelhada por essa URL errada gravaria uma linha real, sem
+# nenhum efeito visivel ate alguem notar.
+#
+# Com credenciais DIFERENTES esse mesmo erro de URL vira 401 imediato (a
+# sombra nunca aceita a credencial viva, nem vice-versa) em vez de escrita
+# silenciosa. NAO simplificar isto de volta para reusar
+# V2_AGENT_WEBHOOK_AUTH_VALUE — a separacao das duas credenciais E o ponto
+# desta mudanca, nao um detalhe incidental.
+#
+# Mesma disciplina fail-closed da variavel irma acima: vazia (default)
+# recusa TODA chamada com 401, nunca abre por omissao. `.strip()` pelo
+# mesmo motivo — um valor so-espaco nao deveria virar credencial
+# "configurada".
+V2_AGENT_SHADOW_WEBHOOK_AUTH_VALUE = os.getenv("V2_AGENT_SHADOW_WEBHOOK_AUTH_VALUE", "").strip()
+
 # ─── Media storage (CONV-02) ─────────────────────
 # Espelho local dos binarios de midia (media_assets.local_path e RELATIVO a este dir).
 # Default fica sob conversas/uploads/ (ja coberto pelo .gitignore). Em producao:

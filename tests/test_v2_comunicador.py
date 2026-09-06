@@ -168,6 +168,59 @@ check(_erro_f is not None, "F1. _chamar_gemini sem GEMINI_API_KEY levanta Comuni
 check(str(_erro_f) == "gemini_api_key_ausente", f"F2. mensagem e o token fechado, sem detalhe extra (obtido={str(_erro_f)!r})")
 
 # ---------------------------------------------------------------------------
+# F3-F5. TETO DE ESPERA na chamada ao SDK. Sem `http_options.timeout` o
+# google-genai nao impoe teto nenhum e quem chama fica preso indefinidamente -
+# o caminho vivo e a rota SOMBRA (app/v2/sombra.py) entram aqui a partir de uma
+# rota HTTP. Espelha 7f/7f2/7f3 de tests/test_v2_interpretador.py: os dois
+# pontos que falam com o Gemini precisam do MESMO guard.
+#
+# A unidade e MILISSEGUNDOS (`types.HttpOptions.timeout` e documentado como
+# "Timeout for the request in milliseconds" no SDK instalado); passar segundos
+# daria um teto de 90ms e reprovaria toda chamada real - F5 pega isso.
+# ---------------------------------------------------------------------------
+class _RespostaGeminiFalsa:
+    def __init__(self, texto):
+        self.text = texto
+
+
+class _ModelsFalso:
+    def __init__(self, texto):
+        self._texto = texto
+
+    def generate_content(self, *, model, contents):
+        return _RespostaGeminiFalsa(self._texto)
+
+
+class _ClienteGeminiFalso:
+    def __init__(self, texto):
+        self.models = _ModelsFalso(texto)
+
+
+with mock.patch("app.v2.comunicador.GEMINI_API_KEY", "fake-key-de-teste"):
+    with mock.patch(
+        "app.v2.comunicador.genai.Client",
+        side_effect=lambda api_key, http_options: _ClienteGeminiFalso("texto qualquer"),
+    ) as _mock_cliente_f3:
+        comunicador._chamar_gemini("prompt qualquer")
+
+_http_options_f3 = _mock_cliente_f3.call_args.kwargs.get("http_options")
+check(
+    _http_options_f3 is not None and _http_options_f3.timeout is not None,
+    f"F3. genai.Client recebe http_options com timeout (obtido={_http_options_f3!r})",
+)
+check(
+    _http_options_f3 is not None and _http_options_f3.timeout == comunicador._TIMEOUT_GEMINI_MS,
+    f"F4. o timeout passado e `_TIMEOUT_GEMINI_MS` "
+    f"(obtido={getattr(_http_options_f3, 'timeout', None)!r}, "
+    f"esperado={comunicador._TIMEOUT_GEMINI_MS!r})",
+)
+check(
+    10_000 <= comunicador._TIMEOUT_GEMINI_MS <= 600_000,
+    f"F5. o valor esta na faixa de MILISSEGUNDOS plausivel (10s-600s) - pega a "
+    f"troca acidental de unidade para segundos (obtido={comunicador._TIMEOUT_GEMINI_MS!r})",
+)
+
+# ---------------------------------------------------------------------------
 # G. Sanidade do prompt - fatos_confirmados, campos_faltantes e acao
 # realmente chegam ao texto que vai para a LLM (o comunicador nao ignora a
 # entrada que recebeu).

@@ -155,6 +155,43 @@ def _recusar(db: Session, conversation_id: int, error_code: str) -> bool:
     return False
 
 
+def motivo_recusa(
+    conversation: Conversation,
+    *,
+    state_esperado: str,
+    version_esperada: int,
+) -> str | None:
+    """
+    As SEIS condicoes de recusa, na ordem normativa, sobre uma linha JA lida.
+    Devolve o `error_code` da PRIMEIRA que for verdadeira, ou `None` se
+    nenhuma for (= envio autorizado).
+
+    PURA: nao le banco, nao escreve, nao emite evento, nao faz IO. Toda a
+    decisao do gate mora aqui; `autorizar_envio` acrescenta exatamente duas
+    coisas — a RELEITURA sob `populate_existing=True` e a EMISSAO do
+    `AI_RESPONSE_DISCARDED` — e nada mais.
+
+    Extraida (sem mudanca de ordem, de token ou de comparacao) para que o
+    endpoint SOMBRA (`app/v2/sombra.py`) possa avaliar o gate sem persistir o
+    evento de recusa que `_recusar` grava. Sem esta separacao, a sombra teria
+    de reimplementar as seis condicoes — duplicando uma regra de seguranca
+    que so poderia divergir com o tempo.
+    """
+    if conversation.state_version != version_esperada:
+        return _ERRO_STATE_VERSION_DIVERGENTE
+    if conversation.state != state_esperado:
+        return _ERRO_STATE_DIVERGENTE
+    if conversation.is_bot_active is False:
+        return _ERRO_BOT_INATIVO
+    if conversation.atendente_id is not None:
+        return _ERRO_HUMANO_ASSUMIU
+    if conversation.status != _STATUS_ABERTA:
+        return _ERRO_CONVERSA_ENCERRADA
+    if not service_window_open(conversation.last_customer_msg_at):
+        return _ERRO_JANELA_FECHADA
+    return None
+
+
 def autorizar_envio(
     db: Session,
     *,
@@ -184,17 +221,10 @@ def autorizar_envio(
     if conversation is None:
         raise ValueError(f"autorizar_envio: conversation_id {conversation_id} nao encontrada")
 
-    if conversation.state_version != version_esperada:
-        return _recusar(db, conversation_id, _ERRO_STATE_VERSION_DIVERGENTE)
-    if conversation.state != state_esperado:
-        return _recusar(db, conversation_id, _ERRO_STATE_DIVERGENTE)
-    if conversation.is_bot_active is False:
-        return _recusar(db, conversation_id, _ERRO_BOT_INATIVO)
-    if conversation.atendente_id is not None:
-        return _recusar(db, conversation_id, _ERRO_HUMANO_ASSUMIU)
-    if conversation.status != _STATUS_ABERTA:
-        return _recusar(db, conversation_id, _ERRO_CONVERSA_ENCERRADA)
-    if not service_window_open(conversation.last_customer_msg_at):
-        return _recusar(db, conversation_id, _ERRO_JANELA_FECHADA)
+    motivo = motivo_recusa(
+        conversation, state_esperado=state_esperado, version_esperada=version_esperada
+    )
+    if motivo is not None:
+        return _recusar(db, conversation_id, motivo)
 
     return True
