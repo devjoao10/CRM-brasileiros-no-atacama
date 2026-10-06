@@ -11,13 +11,14 @@ import hmac
 import json
 import logging
 import re
-from datetime import datetime, timezone as tz
+from datetime import datetime, timedelta, timezone as tz
 
 import httpx
 from fastapi import APIRouter, Request, HTTPException, Query, Depends
 from sqlalchemy import exc as sa_exc, or_
 from sqlalchemy.orm import Session
 
+from app.auth import User
 from app.config import ENVIRONMENT, META_APP_SECRET, META_VERIFY_TOKEN, N8N_AGENT_ENABLED, N8N_BASE_URL, N8N_WEBHOOK_AUTH_HEADER, N8N_WEBHOOK_AUTH_VALUE
 from app.database import get_db, SessionLocal
 from app.models.conversation import Conversation, Message, service_window_open
@@ -120,6 +121,12 @@ def _verify_meta_signature(raw_body: bytes, signature_header: str) -> bool:
         hashlib.sha256,
     ).hexdigest()
     return hmac.compare_digest(signature_header, expected)
+
+
+# CONV-EXPEDIENTE-01 (D7) — anti-spam do aviso "Fora do expediente": no maximo UM
+# por conversa a cada 12h. Antes, cada mensagem de madrugada recebia o aviso de
+# novo (ver `_aviso_fora_do_expediente_recente`).
+OUT_OF_HOURS_COOLDOWN = timedelta(hours=12)
 
 
 # ─── Debounce system for batching rapid messages ─────────────
@@ -377,6 +384,10 @@ def _resolve_auto_reply(
 
     CONV-VAR-01-HARD-01: resolucao TUDO OU NADA — nunca token literal, texto
     mutilado ou string vazia; nunca levanta excecao.
+
+    CONV-EXPEDIENTE-01 (D8): `@NOMEATENDENTE`/`@EMAILATENDENTE` resolvem para o
+    atendente da conversa (`atendente_id`). Sem atendente continuam insoluveis e
+    a resposta e PULADA, como no CONV-VAR-01-HARD-01.
     """
     reply = db.query(AutoReply).filter(
         AutoReply.trigger == trigger,
@@ -386,24 +397,64 @@ def _resolve_auto_reply(
     if not (reply and reply.message and reply.message.strip()):
         return False, None
 
+    # CONV-EXPEDIENTE-01 (D8): o contexto saia com `user=None`, entao as variaveis
+    # do atendente eram SEMPRE insoluveis no webhook e a frase era pulada em
+    # silencio. A consulta e por id e so acontece quando ha atendente.
+    atendente = None
+    if conversation is not None and conversation.atendente_id:
+        atendente = db.query(User).filter(User.id == conversation.atendente_id).first()
+
     return True, variables_service.render_auto_reply(
         db,
         reply.message,
-        variables_service.VariableContext(db, conversation=conversation, user=None),
+        variables_service.VariableContext(db, conversation=conversation, user=atendente),
         trigger=trigger,
     )
+
+
+def _aviso_fora_do_expediente_recente(db: Session, conversation_id: int, texto: str) -> bool:
+    """
+    CONV-EXPEDIENTE-01 (D7) — o MESMO aviso ja foi enviado nesta conversa dentro
+    de `OUT_OF_HOURS_COOLDOWN`?
+
+    Conta so envio com o mesmo texto e status diferente de `failed`: um aviso que
+    a Meta recusou nao chegou ao cliente e e tentado de novo na proxima mensagem.
+    `NOT_FAILED_STATUSES` NAO serve aqui — ele nao inclui `delivered`/`read`, e um
+    aviso entregue ou lido tambem ja foi enviado.
+    """
+    ultimo = db.query(Message).filter(
+        Message.conversation_id == conversation_id,
+        Message.direction == "outbound",
+        Message.content == texto,
+        Message.status != "failed",
+    ).order_by(Message.created_at.desc()).first()
+    if ultimo is None:
+        return False
+
+    enviado_em = ultimo.created_at
+    if enviado_em.tzinfo is None:
+        # SQLite devolve datetime sem tzinfo; o que se grava e sempre UTC.
+        enviado_em = enviado_em.replace(tzinfo=tz.utc)
+    return datetime.now(tz.utc) - enviado_em < OUT_OF_HOURS_COOLDOWN
 
 
 async def _send_auto_reply_if_needed(
     conversation: Conversation,
     is_new_conversation: bool,
     db: Session,
+    *,
+    bia_vai_responder: bool,
 ):
     """
     Determine and send the appropriate auto-reply based on:
     1. Business hours (out_of_hours if outside)
     2. New conversation greeting
     3. Waiting for attendant
+
+    CONV-EXPEDIENTE-01 (D6): `bia_vai_responder` diz que esta mensagem segue para
+    a Bia (agente global ligado E Bia ligada na conversa). Nesse caso o aviso de
+    fora do expediente nao sai — a Bia responde — mas ele continua tendo
+    prioridade sobre greeting/waiting.
     """
     phone = conversation.whatsapp
 
@@ -415,10 +466,26 @@ async def _send_auto_reply_if_needed(
     if not _is_within_business_hours(db):
         configured, message = _resolve_auto_reply("out_of_hours", db, conversation)
         if configured:
+            # CONV-EXPEDIENTE-01 (D6/D7): o aviso so sai se a Bia NAO vai responder
+            # e se o mesmo aviso nao foi enviado dentro de OUT_OF_HOURS_COOLDOWN.
+            # Em qualquer caso o `return` abaixo se mantem: fora do horario com
+            # `out_of_hours` configurado, greeting/waiting continuam suprimidos.
             if message:
-                wa_response = await whatsapp.send_text_message(phone, message, db)
-                _save_outbound_message(conversation, message, db, wa_response)
-                logger.info(f"Auto-reply (fora do expediente) processado para {phone}")
+                if bia_vai_responder:
+                    logger.info(
+                        f"Aviso de fora do expediente nao enviado na conversa "
+                        f"{conversation.id}: a Bia vai responder esta mensagem"
+                    )
+                elif _aviso_fora_do_expediente_recente(db, conversation.id, message):
+                    logger.info(
+                        f"Aviso de fora do expediente nao enviado na conversa "
+                        f"{conversation.id}: ja enviado nas ultimas "
+                        f"{OUT_OF_HOURS_COOLDOWN.total_seconds() / 3600:g}h"
+                    )
+                else:
+                    wa_response = await whatsapp.send_text_message(phone, message, db)
+                    _save_outbound_message(conversation, message, db, wa_response)
+                    logger.info(f"Auto-reply (fora do expediente) processado para {phone}")
             return
 
     # New conversation — send greeting
@@ -714,8 +781,12 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
     if forward_to_agent:
         _remember_agent_cutoff(conversation.id, db)
 
-    # Send auto-reply if needed
-    await _send_auto_reply_if_needed(conversation, is_new_conversation, db)
+    # Send auto-reply if needed.
+    # CONV-EXPEDIENTE-01 (D6): se a mensagem vai para a Bia, o aviso de fora do
+    # expediente nao sai (ver `_send_auto_reply_if_needed`).
+    await _send_auto_reply_if_needed(
+        conversation, is_new_conversation, db, bia_vai_responder=forward_to_agent,
+    )
 
     # ─── N8N Agent: encaminhar para IA se bot ativo (com debounce) ───
     if forward_to_agent:
@@ -1105,6 +1176,11 @@ async def _forward_to_agent(conversation: Conversation, message_text: str, db: S
         "nome": conversation.nome or conversation.whatsapp,
         "mensagem": message_text,
         "historico": historico,
+        # CONV-BIA-FILA-01 (D11) — sinal DETERMINISTICO para o WF-01: a conversa
+        # ja esta na fila humana (`queued_at` preenchido). A Bia continua ligada
+        # na fila, e sem este sinal o n8n nao tem como saber que abrir uma 2a
+        # entrada na fila seria duplicar. Inerte ate o WF-01 le-lo.
+        "na_fila_humana": conversation.queued_at is not None,
     }
 
     agent_url = f"{N8N_BASE_URL}/webhook/agent-bia"
@@ -1162,6 +1238,21 @@ async def _forward_to_agent(conversation: Conversation, message_text: str, db: S
         )
         return
 
+    # CONV-BIA-FILA-01 (D5) — A BIA NAO FALA POR CIMA DA VENDEDORA.
+    #
+    # A Bia continua ligada na fila humana, entao a vendedora pode clicar em
+    # "Desativar Bot" (ou assumir a conversa) enquanto a chamada ao agente esta em
+    # voo — e ela dura ate AGENT_TIMEOUT.read (240s). A resposta que volta depois
+    # disso pertence a uma decisao vencida: envia-la seria a Bia atropelando a
+    # humana, e o fallback degradado idem. Descarta TUDO, sem tocar em nenhum
+    # campo e sem commit — o que a vendedora decidiu vale.
+    if not conversation.is_bot_active:
+        logger.info(
+            f"Bia desligada durante a chamada ao agente na conversa {conversation_id}: "
+            f"resposta descartada"
+        )
+        return
+
     # CONV-08b: cada parte e persistida com status fiel ao envio;
     # preview/unread so mudam se ao menos uma parte foi aceita.
     last_ok_part = None
@@ -1205,11 +1296,14 @@ async def _forward_to_agent(conversation: Conversation, message_text: str, db: S
     # torna isto idempotente: falhas repetidas nao empurram a conversa para o
     # fim da fila.
     #
-    # Nao atribuimos atendente aqui de proposito: isto e uma excecao, nao um
-    # handoff de triagem concluida. Ela entra na fila sem dono e qualquer
-    # atendente pode assumir.
+    # Nao atribuimos atendente NOVO aqui de proposito: isto e uma excecao, nao um
+    # handoff de triagem concluida. Sem dono, ela entra na fila sem dono e
+    # qualquer atendente pode assumir.
+    # CONV-BIA-FILA-01: quem JA era dono continua. Com a Bia ligada na fila a
+    # conversa pode ja ter atendente, e passar `None` aqui o zeraria por causa de
+    # uma falha da automacao.
     if degraded and not conversation.primeira_resposta_humana_at:
-        aplicar_estado_humano(conversation, None, keep_queue_position=True)
+        aplicar_estado_humano(conversation, conversation.atendente_id, keep_queue_position=True)
         logger.warning(
             f"Bia degradada na conversa {conversation.id} — conversa movida "
             f"para a FILA DE ESPERA humana (bot desligado)"
