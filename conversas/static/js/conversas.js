@@ -2047,12 +2047,14 @@
             // e o atendente nao tinha como saber de quem era o atendimento.
             // Agora o ATENDENTE vem primeiro quando existe.
             const respLabel = conv.atendente_nome || conv.responsavel_nome || 'Agente IA';
-            // Aguardando humano: a Bia terminou e ninguem respondeu ainda.
-            // NAO e o mesmo que "nao lida" — abrir a conversa zera unread_count
-            // mas nao encerra a espera.
+            // Aguardando humano: a conversa esta na fila humana e ninguem
+            // respondeu ainda. CONV-BIA-FILA-01: a Bia pode seguir ligada na
+            // fila (is_bot_active deixou de marcar a espera) — quem marca e
+            // queued_at. NAO e o mesmo que "nao lida" — abrir a conversa zera
+            // unread_count mas nao encerra a espera.
             const aguardandoHumano =
                 isOpenStatus(conv.status) &&
-                conv.is_bot_active === false &&
+                (conv.is_bot_active === false || !!conv.queued_at) &&
                 !conv.primeira_resposta_humana_at;
 
             return `

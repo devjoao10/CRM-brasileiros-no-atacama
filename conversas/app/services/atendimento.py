@@ -139,9 +139,11 @@ def aplicar_estado_humano(
     *,
     keep_queue_position: bool = False,
     resetar_atendimento: bool = False,
+    desligar_bia: bool = True,
 ) -> None:
     """
-    Tira a conversa do universo da BIA e define quem e o dono.
+    Poe a conversa na fila humana e define quem e o dono. A Bia so e desligada
+    quando `desligar_bia` for True (CONV-BIA-FILA-01, abaixo).
 
     INVARIANTE (AUDIT-2026-08-WA, revisada pelo HOTFIX-01) — atribuir NAO tira
     da fila, e responder tambem NAO apaga o instante em que ela entrou:
@@ -168,9 +170,23 @@ def aplicar_estado_humano(
     o zera de novo e SOMENTE o `resetar_atendimento=True` do release, que
     devolve a conversa a fila de proposito.
 
-    `is_bot_active` vira False em TODOS os casos: chegar aqui significa handoff,
-    claim, assign, release ou initiate. A unica volta para a BIA e a REABERTURA
-    de uma conversa encerrada (webhook).
+    CONV-BIA-FILA-01 — entrar ou continuar na fila NAO desliga mais a Bia: quem
+    a desliga e a vendedora, manualmente. O flag so cai por `desligar_bia`:
+
+        desligar_bia=True (padrao) -> um humano assumindo, ou a Bia falhando:
+            claim, botao "Desativar Bot" (PUT `is_bot_active=false`) e a falha
+            degradada da Bia no webhook (evita o loop do "repita sua mensagem").
+            O initiate tambem nasce sem a Bia, mas grava direto na criacao da
+            conversa. O padrao e mantido de proposito: o webhook e o handoff
+            V2 dependem dele.
+        desligar_bia=False -> preserva `is_bot_active` como esta: handoff,
+            assign (inclusive o do workflow n8n "Handoff Humano -> Julia"),
+            release e o PUT que so troca o atendente. NUNCA religa uma Bia
+            desligada.
+
+    Esta funcao nunca religa a Bia: a volta para ela e a REABERTURA de uma
+    conversa encerrada (webhook) ou o PUT `is_bot_active=true`, que devolve a
+    conversa inteira.
 
     `keep_queue_position=True` preserva um `queued_at` existente — e o que torna
     o handoff idempotente: retry do n8n NAO manda a conversa para o fim da fila.
@@ -183,7 +199,8 @@ def aplicar_estado_humano(
     CRM e nao pode ser escrita por operacao de fila.
     """
     conversation.atendente_id = atendente_id
-    conversation.is_bot_active = False
+    if desligar_bia:
+        conversation.is_bot_active = False
 
     if resetar_atendimento:
         conversation.primeira_resposta_humana_at = None
@@ -211,8 +228,9 @@ def marcar_atendimento_humano(conversation: Conversation, autor_user_id: int) ->
         aqui; ver nota abaixo)
       - atendente_id = quem respondeu, se ainda estava vazio (quem responde
         assume; nao existe atendimento sem dono)
-      - is_bot_active = False                (defensivo: se a Bia ainda estava
-        ligada por qualquer caminho, um humano falando encerra isso)
+      - is_bot_active = False                (a Bia segue ligada na fila —
+        CONV-BIA-FILA-01; a primeira resposta humana e a vendedora assumindo
+        a conversa, e a Bia para de responder)
 
     HOTFIX-01 (pre-autorizada pelo dono do projeto — preservar queued_at na 1a
     resposta humana): ate aqui esta funcao zerava `queued_at` na MESMA escrita
