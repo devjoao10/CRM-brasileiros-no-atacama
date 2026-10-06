@@ -311,11 +311,19 @@
     }
 
     window._toggleAutoReply = async function (trigger, isActive) {
-        await Auth.apiRequest(`/api/settings/auto-replies/${trigger}`, {
+        const resp = await Auth.apiRequest(`/api/settings/auto-replies/${trigger}`, {
             method: 'PUT',
             body: JSON.stringify({ is_active: isActive }),
         });
-        showToast(isActive ? 'Frase ativada' : 'Frase desativada');
+        // CONV-EXPEDIENTE-01: so confirma se o backend aceitou. Em erro (ex.: 422 "Escreva a
+        // mensagem antes de ativar"), mostra o motivo e recarrega a lista para o toggle voltar
+        // ao valor real — antes mostrava "Frase ativada" mesmo com o PUT falhando.
+        if (resp && resp.ok) {
+            showToast(isActive ? 'Frase ativada' : 'Frase desativada');
+            return;
+        }
+        await showBackendError(resp, 'Erro ao atualizar a frase');
+        loadAutoReplies();
     };
 
     window._saveAutoReply = async function (trigger) {
@@ -325,7 +333,7 @@
             body: JSON.stringify({ message }),
         });
         if (resp && resp.ok) showToast('Frase atualizada');
-        else showToast('Erro ao salvar');
+        else await showBackendError(resp, 'Erro ao salvar');
     };
 
     // ─── Business Hours ─────────────────────────
@@ -381,7 +389,7 @@
         });
 
         if (resp && resp.ok) showToast('Horarios salvos');
-        else showToast('Erro ao salvar horarios');
+        else await showBackendError(resp, 'Erro ao salvar horarios');
     }
 
     // ─── Quick Replies ──────────────────────────
@@ -617,6 +625,12 @@
             if (first && typeof first.msg === 'string') return first.msg.replace(/^Value error, /, '');
         }
         return fallback;
+    }
+
+    /** CONV-EXPEDIENTE-01: mostra no toast o erro que o backend devolveu (ou o texto padrao). */
+    async function showBackendError(resp, fallback) {
+        const err = resp ? await resp.json().catch(() => null) : null;
+        showToast(backendError(err, fallback));
     }
 
     async function handleSaveVar(e) {

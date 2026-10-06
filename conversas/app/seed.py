@@ -187,7 +187,7 @@ def seed_templates():
 # ─── Auto Replies ────────────────────────────
 def seed_auto_replies():
     """Create default auto-reply messages."""
-    from app.models.auto_reply import AutoReply
+    from app.models.auto_reply import AUTO_REPLY_PADROES, AutoReply
 
     db = SessionLocal()
     try:
@@ -195,41 +195,13 @@ def seed_auto_replies():
             logger.info("[SEED] Auto replies ja existem, pulando.")
             return
 
-        replies = [
-            {"trigger": "greeting", "title": "Frase de apresentação", "message": "", "is_active": False},
-            {
-                "trigger": "start_service",
-                "title": "Início de atendimento",
-                "message": "Estamos iniciando o seu atendimento. Como podemos te ajudar hoje?",
-            },
-            {
-                "trigger": "waiting",
-                "title": "Aguardando atendimento",
-                "message": "Recebemos sua mensagem! Em breve, um atendente estará com você. Obrigado pela paciência.",
-            },
-            {
-                "trigger": "end_service",
-                "title": "Término de atendimento",
-                "message": "Seu atendimento foi finalizado. Caso precise de mais alguma coisa, estamos à disposição. Até breve!",
-            },
-            {
-                "trigger": "out_of_hours",
-                "title": "Fora do expediente",
-                "message": "*Seja bem-vind@ à Brasileiros no Atacama!* 🌵\n\nNossa equipe comercial responde em horários específicos para garantir um atendimento ágil e de qualidade. No momento, estamos fora do horário, mas retornaremos sua mensagem o mais breve possível!",
-            },
-            {"trigger": "break_time", "title": "Intervalo de atendimento", "message": "", "is_active": False},
-            {
-                "trigger": "paused",
-                "title": "Status em pausa",
-                "message": "Estamos em uma breve pausa no momento, mas logo retornaremos para continuar seu atendimento. Obrigado pela compreensão!",
-            },
-        ]
-
-        for r in replies:
-            db.add(AutoReply(**r))
+        # CONV-EXPEDIENTE-01: os textos padrao vivem em AUTO_REPLY_PADROES (models/auto_reply.py),
+        # fonte unica compartilhada com a tela de Configuracoes.
+        for padrao in AUTO_REPLY_PADROES:
+            db.add(AutoReply(**dict(padrao)))
 
         db.commit()
-        logger.info(f"[SEED] {len(replies)} auto replies criados")
+        logger.info(f"[SEED] {len(AUTO_REPLY_PADROES)} auto replies criados")
     finally:
         db.close()
 
