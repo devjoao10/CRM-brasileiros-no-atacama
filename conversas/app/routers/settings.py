@@ -29,23 +29,27 @@ async def list_auto_replies(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Listar todas as frases automáticas: as do banco + as do catálogo que ainda não existem."""
+    """Listar as frases automáticas: o catálogo inteiro (com linha ou não) + linhas fora dele."""
     replies = db.query(AutoReply).order_by(AutoReply.id).all()
-    itens = [AutoReplyResponse.model_validate(r) for r in replies]
 
-    # CONV-EXPEDIENTE-01: em produção o seed não roda e a tabela pode estar vazia. O gatilho do
-    # catálogo sem linha aparece INATIVO, sem id, com o texto padrão; a linha nasce no 1º PUT.
-    existentes = {r.trigger for r in replies}
-    itens += [
-        AutoReplyResponse(
+    # CONV-EXPEDIENTE-01: em produção o seed não roda e a tabela pode estar vazia. Os gatilhos do
+    # catálogo vêm SEMPRE na ordem do catálogo — com a linha do banco quando existe, ou como
+    # placeholder INATIVO, sem id e com o texto padrão (a linha nasce no 1º PUT). Assim a frase
+    # não muda de posição ao ganhar a primeira linha. Linha fora do catálogo vai depois, por id.
+    por_gatilho = {r.trigger: r for r in replies}
+    itens = [
+        AutoReplyResponse.model_validate(por_gatilho[padrao["trigger"]])
+        if padrao["trigger"] in por_gatilho
+        else AutoReplyResponse(
             trigger=padrao["trigger"],
             title=padrao["title"],
             message=padrao["message"],
             is_active=False,
         )
         for padrao in AUTO_REPLY_PADROES
-        if padrao["trigger"] not in existentes
     ]
+    gatilhos_do_catalogo = {padrao["trigger"] for padrao in AUTO_REPLY_PADROES}
+    itens += [AutoReplyResponse.model_validate(r) for r in replies if r.trigger not in gatilhos_do_catalogo]
     return AutoReplyListResponse(auto_replies=itens, total=len(itens))
 
 

@@ -7,7 +7,8 @@ nao tinha como cadastrar a frase "Fora do expediente" nem o horario. Alem disso 
 mostrava "Frase ativada" mesmo quando o PUT falhava.
 
 Prova (HTTP real sobre SQLite, tabelas VAZIAS no inicio):
-  1. GET /api/settings/auto-replies lista o catalogo inteiro (7 gatilhos), inativos e sem id;
+  1. GET /api/settings/auto-replies lista o catalogo inteiro (7 gatilhos), inativos e sem id, SEMPRE
+     na ordem do catalogo (linha fora do catalogo vai depois, por id);
   2. PUT cria a linha que faltar (texto padrao do catalogo) e o GET passa a devolve-la com id;
   3. gatilho fora do catalogo -> 404;
   4. ativar frase com mensagem vazia (greeting) -> 422 e NADA e criado;
@@ -15,7 +16,8 @@ Prova (HTTP real sobre SQLite, tabelas VAZIAS no inicio):
   6. GET /api/settings/business-hours devolve sempre 7 dias (dia sem linha = aberto, sem horario);
   7. PUT business-hours valida HH:MM e fechamento > abertura (so em dia aberto);
   8. seed_auto_replies continua criando as mesmas 7 linhas (fonte unica AUTO_REPLY_PADROES);
-  9. guards estaticos do settings.js/settings.html (toast de sucesso so com resp.ok);
+  9. guards estaticos do settings.js/settings.html (toast de sucesso so com resp.ok; toggle manda o
+     texto da tela e no erro desfaz so o checkbox; aviso de horario nao salvo; nome do dia no 422);
  10. as rotas continuam exigindo login.
 
 Roda standalone:  python tests/test_conversas_settings_expediente.py
@@ -168,6 +170,13 @@ check(linha is not None and linha["is_active"] is True and linha["message"] == o
       and linha["title"] == ooh["title"], "linha persistida no banco (ativa, texto padrao, titulo do catalogo)")
 ooh_id = criada.get("id")
 
+# a ordem NAO depende de quem ja tem linha: a frase nao "pula" para o topo ao ganhar a 1a linha
+itens = client.get(URL_FRASES).json()["auto_replies"]
+check([i["trigger"] for i in itens] == GATILHOS,
+      "ordem do catalogo mantida depois da 1a criacao (out_of_hours nao pula para o topo)")
+check([i["id"] is not None for i in itens] == [t == "out_of_hours" for t in GATILHOS],
+      "so a out_of_hours ganhou id, na sua posicao do catalogo")
+
 resp = client.put(f"{URL_FRASES}/waiting", json={"message": "Texto proprio da fila"})
 check(resp.status_code == 200, "PUT waiting {message} -> 200")
 check(resp.json().get("is_active") is False, "criada sem is_active no payload -> INATIVA")
@@ -180,13 +189,32 @@ check(resp.status_code == 200 and resp.json().get("is_active") is True
 
 itens = client.get(URL_FRASES).json()["auto_replies"]
 check(len(itens) == 7, f"continua 7 itens (nenhum gatilho duplicado) (got {len(itens)})")
-check([i["trigger"] for i in itens] == ["out_of_hours", "waiting", "start_service",
-                                        "greeting", "end_service", "break_time", "paused"],
-      "ordem: linhas do banco por id, depois os gatilhos do catalogo que faltam")
+check([i["trigger"] for i in itens] == GATILHOS,
+      "ordem do catalogo mantida com 3 linhas reais e 4 gatilhos sem linha")
+check([i["id"] is not None for i in itens] == [t in ("out_of_hours", "waiting", "start_service") for t in GATILHOS],
+      "linhas reais e gatilhos sem linha ficam intercalados na ordem do catalogo")
 check(_item(itens, "out_of_hours")["id"] == ooh_id and _item(itens, "out_of_hours")["is_active"] is True,
       "GET devolve a out_of_hours criada, com id e ativa")
 check(_item(itens, "out_of_hours")["created_at"] is not None, "GET devolve a data de criacao da linha real")
 check(sum(1 for i in itens if i["id"] is None) == 4, "os 4 gatilhos restantes continuam sem linha")
+
+# linha FORA do catalogo (legada/manual) vai DEPOIS dos 7 do catalogo, ordenada por id (nao por nome)
+db = SessionLocal()
+db.add(AutoReply(trigger="zz_legado", title="Legado Z", message="z", is_active=False))
+db.add(AutoReply(trigger="aa_legado", title="Legado A", message="a", is_active=False))
+db.commit()
+db.close()
+corpo = client.get(URL_FRASES).json()
+itens = corpo["auto_replies"]
+check([i["trigger"] for i in itens] == GATILHOS + ["zz_legado", "aa_legado"],
+      "linhas fora do catalogo vao depois do catalogo, por id (nao em ordem alfabetica)")
+check(corpo["total"] == len(itens) == 9, f"total = tamanho da lista (got {corpo['total']} / {len(itens)})")
+check(all(i["id"] is not None for i in itens[-2:]), "linhas fora do catalogo vem com id")
+db = SessionLocal()
+db.query(AutoReply).filter(AutoReply.trigger.in_(["zz_legado", "aa_legado"])).delete(synchronize_session=False)
+db.commit()
+db.close()
+check(_contagem(AutoReply) == 3, "linhas de teste fora do catalogo removidas (so as 3 do catalogo seguem)")
 
 # ============ 3. gatilho desconhecido ============
 print("\nSETTINGS 3 — gatilho fora do catalogo")
@@ -273,6 +301,13 @@ semana_com_erro[4] = _dia(4, True, "19:00", "13:00")
 r = client.put(URL_HORARIOS, json={"days": semana_com_erro})
 check(r.status_code == 422 and _contagem(BusinessHours) == 0,
       "um dia invalido derruba o PUT inteiro: nada e salvo")
+# contrato que o settings.js usa para dizer QUAL dia errou: loc = ["body", "days", <posicao em days>]
+loc = r.json()["detail"][0]["loc"]
+check(loc == ["body", "days", 4], f"erro de regra aponta a posicao do dia em days (loc={loc})")
+r = client.put(URL_HORARIOS, json={"days": [_dia(0, True, "09:00", "18:00"), _dia(2, True, "9:00", "18:00")]})
+loc = r.json()["detail"][0]["loc"]
+check(r.status_code == 422 and loc[:3] == ["body", "days", 1],
+      f"erro de formato aponta a POSICAO em days (1), nao o weekday (2) (loc={loc})")
 
 # dia FECHADO com horarios nulos -> aceito; resposta traz os 7 dias
 r = client.put(URL_HORARIOS, json={"days": [_dia(3, False)]})
@@ -350,16 +385,56 @@ check(t_ini != -1 and t_fim > t_ini, "toggle da frase localizado no settings.js"
 check("resp.ok" in toggle and 0 <= toggle.find("resp.ok") < toggle.find("showToast(isActive"),
       "toggle: toast de sucesso SO depois de checar resp.ok")
 check("showBackendError(" in toggle, "toggle: no erro mostra a mensagem do backend")
-check("loadAutoReplies()" in toggle, "toggle: no erro recarrega a lista (volta ao valor real)")
+# o que fica salvo e o que esta na tela; o erro desfaz SO o checkbox (rascunhos das outras frases sobrevivem)
+check("window._toggleAutoReply(this.dataset.trigger, this.checked, this)" in js,
+      "toggle: o handler inline passa o proprio checkbox (this), sem montar seletor com o gatilho")
+check("document.getElementById(`ar-${trigger}`).value" in toggle
+      and "JSON.stringify({ is_active: isActive, message })" in toggle,
+      "toggle: manda is_active + o texto da caixa (o mesmo elemento que o Salvar le)")
+check("checkbox.checked = !isActive" in toggle, "toggle: no erro desfaz SO este checkbox")
+check("loadAutoReplies()" not in toggle, "toggle: no erro NAO recarrega a lista (rascunhos sobrevivem)")
 
 s_ini = js.find("window._saveAutoReply = async function")
 s_fim = js.find("// ─── Business Hours", s_ini)
 check(s_ini != -1 and s_fim > s_ini and "showBackendError(" in js[s_ini:s_fim],
       "salvar frase: no erro mostra a mensagem do backend")
+
+# aviso de horario nao salvo (dia sem linha: o webhook o trata como aberto o dia todo)
+AVISO = ('Horario comercial ainda nao salvo: ate voce clicar em "Salvar Horarios", todos os dias contam '
+         'como abertos o dia todo e a mensagem "Fora do expediente" nao e enviada.')
+r_ini = js.find("function renderBusinessHours")
+r_fim = js.find("async function saveBusinessHours", r_ini)
+render = js[r_ini:r_fim]
+check(r_ini != -1 and r_fim > r_ini and AVISO in render,
+      "horario: aviso 'ainda nao salvo' esta no renderBusinessHours (texto exato)")
+check("id == null" in render and 0 <= render.find("id == null") < render.find(AVISO),
+      "horario: o aviso so aparece quando algum dia tem id nulo (sem linha no banco)")
+check(f"textContent = '{AVISO}'" in render,
+      "horario: aviso montado com textContent (texto fixo, sem HTML interpolado)")
+check("h.open_time || '09:00'" in render and "h.close_time || '18:00'" in render,
+      "horario: preenchimento padrao 09:00/18:00 mantido (o aviso o explica)")
+
 b_ini = js.find("async function saveBusinessHours")
 b_fim = js.find("// ─── Quick Replies", b_ini)
-check(b_ini != -1 and b_fim > b_ini and "showBackendError(" in js[b_ini:b_fim],
+save_horarios = js[b_ini:b_fim]
+check(b_ini != -1 and b_fim > b_ini and "showBackendError(" in save_horarios,
       "salvar horarios: no erro mostra a mensagem do backend")
+check("loadBusinessHours()" in save_horarios
+      and 0 <= save_horarios.find("showToast('Horarios salvos')") < save_horarios.find("loadBusinessHours()"),
+      "salvar horarios: depois de salvar recarrega (o aviso 'ainda nao salvo' some)")
+
+# 422 do horario diz QUAL dia errou: loc = ["body", "days", <posicao>] -> days[posicao].weekday -> nome
+d_ini = js.find("function businessHoursErrorDay(")
+d_fim = js.find("\n    }\n", d_ini)
+dia_erro = js[d_ini:d_fim]
+check(d_ini != -1 and js.count("function businessHoursErrorDay(") == 1, "helper do nome do dia definido uma vez")
+check("loc[0] !== 'body'" in dia_erro and "loc[1] !== 'days'" in dia_erro
+      and "Number.isInteger(loc[2])" in dia_erro and "WEEKDAYS[days[loc[2]].weekday]" in dia_erro,
+      "nome do dia vem de days[loc[2]].weekday so quando o loc tem o formato body/days/<posicao>")
+check("async function showBackendError(resp, fallback, labelFor)" in js and "labelFor(err)" in js,
+      "helper unico aceita um rotulo opcional que prefixa a mensagem")
+check("businessHoursErrorDay(err, days)" in save_horarios,
+      "salvar horarios: o erro do backend ganha o nome do dia")
 
 check("horario de Brasilia" in html, "card de horario informa o fuso (Brasilia)")
 check("no maximo uma vez a cada 12 horas por conversa" in html,
