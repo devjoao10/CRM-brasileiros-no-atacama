@@ -80,12 +80,22 @@ def _sha256_normalizado(caminho: pathlib.Path) -> str:
 # - nada de flag --update, env var, ou "se nao bate, grava o atual": isso
 # transformaria a guarda em um no-op disfarcado.
 _PROTEGIDOS = (
+    # CONV-BIA-FILA-01 (pedido explicito do dono em 2026-10-06; hash recalculado
+    # A MAO): `aplicar_estado_humano` ganha `desligar_bia` (padrao True) — entrar
+    # ou continuar na fila nao desliga mais a Bia. Nenhuma referencia as colunas
+    # da V2 — a Familia B.1 continua verde.
     (CONVERSAS_DIR / "app/services/atendimento.py",
-     "1c4b4746dfcc73856f23063c6e5298436fc258367a5e567c254850b258cfad9b"),
+     "be21201afa37bc765ed5e760662e48c0979818ff3e99bd78870ac1088c1900c0"),
     (CONVERSAS_DIR / "app/services/outbound.py",
      "02ad2c4e2f4c07e5a4933adb333a02ddc516d197e01106b1d4710fe0caf6dd77"),
+    # CONV-EXPEDIENTE-01 + CONV-BIA-FILA-01 (pedido explicito do dono em
+    # 2026-10-06; hash recalculado A MAO): aviso de fora do expediente so com a
+    # Bia desligada e no maximo 1 por 12h; variaveis do atendente resolvem; a
+    # resposta da Bia e descartada se ela foi desligada durante a chamada ao
+    # agente; o ramo degradado preserva o dono; payload ganha `na_fila_humana`.
+    # Nenhuma referencia as colunas da V2 — a Familia B.1 continua verde.
     (CONVERSAS_DIR / "app/routers/webhook.py",
-     "5b5c23184a28ab293247dff4371675fc0e73ea31603e22db39755b92c7d95f90"),
+     "188c3108d0d5be809f91ed885293859d32324e2fd9fe647a548c445d4242e4dc"),
     # HOTFIX desta rodada (R8/R10), aprovado pelo dono; hash recalculado A MAO
     # com a formula de `_sha256_normalizado` acima. CONV-HOTFIX-R10-01 (o
     # read-repair do responsavel deixa de derrubar o inbox quando o banco o
@@ -98,8 +108,12 @@ _PROTEGIDOS = (
     # em volta do seu proprio `db.commit()` para nao expirar (e reintroduzir o
     # N+1 de `tags`) as OUTRAS conversas da mesma pagina — puro timing de
     # commit/expire, mesma ausencia de referencia as colunas da V2.
+    # CONV-BIA-FILA-01 (pedido explicito do dono em 2026-10-06; hash recalculado
+    # A MAO): handoff/assign/release/PUT so-atendente preservam a Bia; abas do
+    # inbox passam a usar `queued_at` para o lado humano. Nenhuma referencia as
+    # colunas da V2 — a Familia B.1 continua verde.
     (CONVERSAS_DIR / "app/routers/conversations.py",
-     "d3ed64dd61ba1982b5529ecb3ad33b1d9351159453ff8e96f0cfe900a924e369"),
+     "c07404498fe8d86eb864152d450b75f558abd5e9bea9273428861f931581a76d"),
     # HOTFIX desta rodada: CONV-HOTFIX-LOCK-03 — o SELECT de `sync_responsavel_to_crm`
     # passa a tomar `FOR UPDATE` (ramo IS_SQLITE), fechando a escrita cross-app
     # em `leads` que rodava sem trava nem CAS.
