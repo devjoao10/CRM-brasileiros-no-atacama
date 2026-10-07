@@ -95,7 +95,7 @@ _PROTEGIDOS = (
     # agente; o ramo degradado preserva o dono; payload ganha `na_fila_humana`.
     # Nenhuma referencia as colunas da V2 — a Familia B.1 continua verde.
     (CONVERSAS_DIR / "app/routers/webhook.py",
-     "188c3108d0d5be809f91ed885293859d32324e2fd9fe647a548c445d4242e4dc"),
+     "2749529a20401ebdf1245a89883061482d6447f6b4eb7bcabd8913a5ca06a905"),
     # HOTFIX desta rodada (R8/R10), aprovado pelo dono; hash recalculado A MAO
     # com a formula de `_sha256_normalizado` acima. CONV-HOTFIX-R10-01 (o
     # read-repair do responsavel deixa de derrubar o inbox quando o banco o
@@ -113,7 +113,7 @@ _PROTEGIDOS = (
     # inbox passam a usar `queued_at` para o lado humano. Nenhuma referencia as
     # colunas da V2 — a Familia B.1 continua verde.
     (CONVERSAS_DIR / "app/routers/conversations.py",
-     "c07404498fe8d86eb864152d450b75f558abd5e9bea9273428861f931581a76d"),
+     "7e7a422dce49bb257a7c6ca1d1cb7761a1f3db62dcaa86259f9ea96e44306c0f"),
     # HOTFIX desta rodada: CONV-HOTFIX-LOCK-03 — o SELECT de `sync_responsavel_to_crm`
     # passa a tomar `FOR UPDATE` (ramo IS_SQLITE), fechando a escrita cross-app
     # em `leads` que rodava sem trava nem CAS.
