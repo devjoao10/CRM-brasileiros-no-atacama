@@ -16,6 +16,17 @@ Fecho da rodada final: o cooldown so conta o MESMO texto (mensagem da vendedora,
 nao bloqueia o aviso) e uma corrida de inbounds da mesma conversa (o aviso so e gravado DEPOIS do
 await da Meta) gera um unico envio — a guarda em memoria e liberada mesmo quando o envio falha.
 
+Continuacao da rodada final:
+  * a guarda tambem e liberada quando o banco cai logo depois de gravar o aviso (o commit expira a
+    conversa; o `finally` nao pode depender de reler `conversation.id`);
+  * o skip por "envio em voo" tem texto proprio no log, e a ORDEM das decisoes e fixa:
+    Bia responde > envio em voo > cooldown > envia;
+  * a fronteira das 12h e exata (12h = pode avisar; 12h menos 1 microssegundo = bloqueia) tanto na
+    leitura naive do SQLite quanto na tz-aware do PostgreSQL (relogio injetado, sem mexer no relogio);
+  * tabela `business_hours` VAZIA (estado inicial de producao) = aberto o dia todo = nenhum aviso;
+  * toda chamada do webhook confere que NENHUM log ERROR saiu: o webhook transforma um crash em HTTP 200
+    + log ERROR, e as asserts negativas ("nada enviado") passariam de graca num crash.
+
 Webhook real (POST /webhook), Meta e n8n neutralizados, SEM patch de relogio:
 "aberto/fechado agora" vem das 7 linhas de BusinessHours — todas fechadas = fora
 do horario; todas 00:00-23:59 = dentro. Escrever os 7 dias (e nao so o de hoje)
@@ -31,6 +42,7 @@ import pathlib
 import re
 import sys
 from datetime import datetime, timedelta, timezone as tz
+from types import SimpleNamespace
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CONVERSAS_DIR = ROOT / "conversas"
@@ -53,6 +65,7 @@ sys.path.insert(0, str(CONVERSAS_DIR))
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import event  # noqa: E402
+from sqlalchemy.exc import OperationalError  # noqa: E402
 
 import app.main as main  # noqa: E402
 import app.routers.webhook as wh  # noqa: E402
@@ -177,19 +190,42 @@ def _cid(numero):
         s.close()
 
 
+class _CapturaErros(logging.Handler):
+    """Guarda toda mensagem de nivel ERROR (ou acima) de QUALQUER logger: o handler vai no logger raiz."""
+
+    def __init__(self):
+        super().__init__(level=logging.ERROR)
+        self.mensagens = []
+
+    def emit(self, record):
+        self.mensagens.append(f"{record.name}: {record.getMessage()}")
+
+
 def _inbound(numero, texto="oi, tudo bem?"):
-    """Uma mensagem do cliente pelo webhook real. Limpa o que foi capturado antes."""
+    """Uma mensagem do cliente pelo webhook real. Limpa o que foi capturado antes.
+
+    O webhook transforma um crash em HTTP 200 + log ERROR (`receive_webhook`), e uma assert negativa
+    ("nada foi enviado") passaria de graca nesse crash. Por isso TODA chamada confere que nenhum ERROR
+    foi logado: cada caso "sem aviso" tambem prova que nada quebrou no caminho.
+    """
     _seq["n"] += 1
     sent.clear()
     scheduled.clear()
-    r = client.post("/webhook", json={"entry": [{"changes": [{"value": {
-        "contacts": [{"profile": {"name": "Cliente Expediente"}}],
-        "messages": [{
-            "from": numero, "id": f"wamid.INOOH{_seq['n']}", "type": "text",
-            "timestamp": str(int(datetime.now(tz.utc).timestamp())),
-            "text": {"body": texto},
-        }],
-    }}]}]})
+    erros = _CapturaErros()
+    logging.getLogger().addHandler(erros)
+    try:
+        r = client.post("/webhook", json={"entry": [{"changes": [{"value": {
+            "contacts": [{"profile": {"name": "Cliente Expediente"}}],
+            "messages": [{
+                "from": numero, "id": f"wamid.INOOH{_seq['n']}", "type": "text",
+                "timestamp": str(int(datetime.now(tz.utc).timestamp())),
+                "text": {"body": texto},
+            }],
+        }}]}]})
+    finally:
+        logging.getLogger().removeHandler(erros)
+    check(not erros.mensagens,
+          f"webhook de ...{numero[-4:]} sem nenhum log ERROR (got {erros.mensagens!r})")
     return r
 
 
@@ -557,13 +593,13 @@ async def _envio_explode(to, message, db=None):
     raise RuntimeError("falha simulada de rede")
 
 
-async def _chamadas_juntas(cid, n):
+async def _chamadas_juntas(cid, n, *, bia_vai_responder=False):
     """`n` execucoes de `_send_auto_reply_if_needed` da MESMA conversa, cada uma com a sua sessao."""
     sessoes = [SessionLocal() for _ in range(n)]
     try:
         conversas = [sessao.query(Conversation).filter(Conversation.id == cid).first() for sessao in sessoes]
         await asyncio.gather(*(
-            wh._send_auto_reply_if_needed(conversa, False, sessao, bia_vai_responder=False)
+            wh._send_auto_reply_if_needed(conversa, False, sessao, bia_vai_responder=bia_vai_responder)
             for conversa, sessao in zip(conversas, sessoes)
         ))
     finally:
@@ -593,6 +629,8 @@ check(wh._avisos_fora_do_expediente_em_voo == set(), "a guarda em memoria e libe
 pulos = [m for nivel, m in captura.registros if nivel == "INFO" and "nao enviado" in m]
 check(len(pulos) == 2 and all(re.search(rf"\b{cid13}\b", m) for m in pulos) and all(N13 not in m for m in pulos),
       f"as 2 que cederam logam o skip em INFO com o id da conversa e sem o telefone (got {pulos!r})")
+check(all("esta em envio" in m for m in pulos) and not any("ja enviado" in m for m in pulos),
+      f"o skip por envio em voo tem texto proprio, nao o do cooldown (got {pulos!r})")
 
 # Um envio que EXPLODE tambem libera a guarda: se ela vazasse, a conversa ficaria sem aviso ate
 # o processo reiniciar. O erro continua subindo (o `finally` so garante a limpeza).
@@ -613,6 +651,205 @@ sent.clear()
 asyncio.run(_chamadas_juntas(cid14, 1))
 check(sent == [AVISO] and _outbound(cid14) == [(AVISO, "sent")],
       f"a tentativa seguinte envia o aviso normalmente (got {sent}, {_outbound(cid14)})")
+
+
+# =====================================================================
+# Ordem das decisoes do aviso: Bia responde > envio em voo > cooldown > envia
+# =====================================================================
+print("\nOrdem das decisoes: Bia responde > envio em voo > cooldown > envia")
+
+
+def _despacha(cid, *, bia_vai_responder):
+    """Uma execucao de `_send_auto_reply_if_needed`; devolve as mensagens INFO de skip do aviso."""
+    sent.clear()
+    captura_skip = _CapturaLog()
+    nivel_antes = wh.logger.level
+    wh.logger.addHandler(captura_skip)
+    wh.logger.setLevel(logging.INFO)
+    try:
+        asyncio.run(_chamadas_juntas(cid, 1, bia_vai_responder=bia_vai_responder))
+    finally:
+        wh.logger.removeHandler(captura_skip)
+        wh.logger.setLevel(nivel_antes)
+    return [m for nivel, m in captura_skip.registros if nivel == "INFO" and "nao enviado" in m]
+
+
+_horario(False)
+_frases(out_of_hours=AVISO)
+N15 = "5511911000018"
+cid15 = _conversa(N15, bia=False, atendente_id=JULIA_ID)
+_inbound(N15)                                    # grava um aviso recente: o cooldown fica armado
+check(sent == [AVISO], f"pre-condicao: o 1o aviso saiu e armou o cooldown (got {sent})")
+wh._avisos_fora_do_expediente_em_voo.add(cid15)  # ...e o envio de OUTRO inbound desta conversa esta em voo
+try:
+    pulos = _despacha(cid15, bia_vai_responder=True)
+    check(sent == [] and len(pulos) == 1 and "a Bia vai responder" in pulos[0],
+          f"Bia responde + envio em voo + cooldown: vence 'a Bia vai responder' (got {sent}, {pulos!r})")
+    pulos = _despacha(cid15, bia_vai_responder=False)
+    check(sent == [] and len(pulos) == 1 and "esta em envio" in pulos[0],
+          f"envio em voo + cooldown: vence 'esta em envio' (got {sent}, {pulos!r})")
+finally:
+    wh._avisos_fora_do_expediente_em_voo.discard(cid15)
+pulos = _despacha(cid15, bia_vai_responder=False)
+check(sent == [] and len(pulos) == 1 and "ja enviado nas ultimas" in pulos[0],
+      f"so o cooldown: 'ja enviado nas ultimas 12h' (got {sent}, {pulos!r})")
+_retroceder_avisos(cid15, 13)
+pulos = _despacha(cid15, bia_vai_responder=False)
+check(sent == [AVISO] and pulos == [], f"nada impede: o aviso sai (got {sent}, {pulos!r})")
+
+
+# =====================================================================
+# business_hours VAZIA (estado inicial de producao): sem linha = aberto o dia todo = nenhum aviso
+# =====================================================================
+print("\nbusiness_hours vazia (producao antes de salvar os horarios): sem linha = aberto, nenhum aviso")
+
+s = SessionLocal()
+s.query(BusinessHours).delete()
+s.commit()
+linhas_horario = s.query(BusinessHours).count()
+s.close()
+check(linhas_horario == 0, f"pre-condicao: a tabela business_hours esta vazia (got {linhas_horario})")
+_frases(out_of_hours=AVISO)        # SO o aviso existe: se algo for enviado, so pode ser ele
+_agente(True)
+N17 = "5511911000020"
+cid17 = _conversa(N17, bia=False, atendente_id=JULIA_ID)
+_inbound(N17)
+check(sent == [], f"tabela vazia + Bia desligada + out_of_hours ativo: nada e enviado (got {sent})")
+check(_outbound(cid17) == [], f"e nada e gravado (got {_outbound(cid17)})")
+_horario(False)                    # contraste: com os 7 dias SALVOS como fechados, a mesma conversa recebe o aviso
+_inbound(N17, "e agora?")
+check(sent == [AVISO], f"com os 7 dias salvos como fechados o aviso sai (got {sent})")
+
+
+# =====================================================================
+# D7 — a guarda e liberada mesmo se o banco cair logo depois de gravar o aviso
+# =====================================================================
+print("\nD7 — banco indisponivel logo apos gravar o aviso: a guarda nao fica presa")
+
+# `_save_outbound_message` commita, e o commit EXPIRA a conversa: reler `conversation.id` no `finally`
+# faz um SELECT. Com o banco fora do ar ele levantaria DENTRO do `finally` — mascara o erro original,
+# pula o `discard` e deixa o id preso na guarda ate o processo reiniciar. O fix e capturar o id antes.
+caida = {"on": False}
+
+
+def _derruba_consultas(conn, cursor, statement, parameters, context, executemany):
+    if caida["on"]:
+        raise OperationalError(statement, parameters, Exception("banco indisponivel (simulado)"))
+
+
+_salvar_original = wh._save_outbound_message
+
+
+def _salva_e_derruba(conversation, content, db, wa_response):
+    resultado = _salvar_original(conversation, content, db, wa_response)
+    caida["on"] = True      # o aviso JA foi gravado; a partir daqui qualquer consulta falha
+    return resultado
+
+
+_horario(False)
+_frases(out_of_hours=AVISO)
+N18 = "5511911000021"
+cid18 = _conversa(N18, bia=False, atendente_id=JULIA_ID)
+sent.clear()
+erro_inesperado = None
+event.listen(engine, "before_cursor_execute", _derruba_consultas)
+wh._save_outbound_message = _salva_e_derruba
+try:
+    asyncio.run(_chamadas_juntas(cid18, 1))
+except Exception as exc:        # noqa: BLE001 — queremos saber se ALGO estourou, seja o que for
+    erro_inesperado = exc
+finally:
+    caida["on"] = False
+    wh._save_outbound_message = _salvar_original
+    event.remove(engine, "before_cursor_execute", _derruba_consultas)
+check(wh._avisos_fora_do_expediente_em_voo == set(),
+      f"banco fora do ar logo apos o commit: a guarda e liberada (presos: {wh._avisos_fora_do_expediente_em_voo})")
+check(erro_inesperado is None,
+      f"e nada estoura depois do commit (got {type(erro_inesperado).__name__}: {erro_inesperado})")
+check(sent == [AVISO] and _outbound(cid18) == [(AVISO, "sent")],
+      f"o aviso foi enviado e gravado uma unica vez (got {sent}, {_outbound(cid18)})")
+
+
+# =====================================================================
+# D7 — fronteira EXATA das 12h, com o relogio injetado: naive (SQLite) e aware (PostgreSQL)
+# =====================================================================
+print("\nD7 — fronteira das 12h com o relogio fixo: 12h pode avisar, 12h menos 1 microssegundo bloqueia")
+
+AGORA = datetime(2026, 10, 7, 12, 0, 0, 123456, tzinfo=tz.utc)
+DOZE_HORAS = timedelta(hours=12)
+UM_MICROSSEGUNDO = timedelta(microseconds=1)
+BRASILIA = tz(timedelta(hours=-3))
+check(wh.OUT_OF_HOURS_COOLDOWN == DOZE_HORAS, "a constante do cooldown e de 12h (decisao D7)")
+
+N16 = "5511911000019"
+cid16 = _conversa(N16, bia=False, atendente_id=JULIA_ID)
+s = SessionLocal()
+s.add(Message(conversation_id=cid16, direction="outbound", content=AVISO, msg_type="text",
+              status="sent", created_at=AGORA - DOZE_HORAS))
+s.commit()
+s.close()
+
+
+def _recente_no_sqlite(enviado_em):
+    """Regrava o `created_at` do aviso e consulta com o relogio fixo em AGORA. O SQLite devolve naive."""
+    sessao = SessionLocal()
+    try:
+        sessao.query(Message).filter(Message.conversation_id == cid16, Message.content == AVISO).update(
+            {Message.created_at: enviado_em}, synchronize_session=False)
+        sessao.commit()
+        return wh._aviso_fora_do_expediente_recente(sessao, cid16, AVISO, agora=AGORA)
+    finally:
+        sessao.close()
+
+
+class _ConsultaFalsa:
+    """Responde a cadeia `query().filter().order_by().first()` com uma linha fixa."""
+
+    def __init__(self, linha):
+        self._linha = linha
+
+    def filter(self, *args, **kwargs):
+        return self
+
+    def order_by(self, *args, **kwargs):
+        return self
+
+    def first(self):
+        return self._linha
+
+
+class _SessaoFalsa:
+    def __init__(self, linha):
+        self._linha = linha
+
+    def query(self, *args, **kwargs):
+        return _ConsultaFalsa(self._linha)
+
+
+def _recente_com_datetime_aware(enviado_em):
+    """O PostgreSQL devolve `created_at` COM tzinfo (o SQLite nunca): a linha falsa reproduz isso."""
+    sessao = _SessaoFalsa(SimpleNamespace(created_at=enviado_em))
+    return wh._aviso_fora_do_expediente_recente(sessao, 1, AVISO, agora=AGORA)
+
+
+check(_recente_no_sqlite(AGORA - DOZE_HORAS) is False,
+      "SQLite (naive): aviso de EXATAMENTE 12h atras nao bloqueia (pode avisar de novo)")
+check(_recente_no_sqlite(AGORA - DOZE_HORAS + UM_MICROSSEGUNDO) is True,
+      "SQLite (naive): 12h menos 1 microssegundo AINDA bloqueia")
+check(_recente_no_sqlite(AGORA - DOZE_HORAS - UM_MICROSSEGUNDO) is False,
+      "SQLite (naive): 12h mais 1 microssegundo nao bloqueia")
+check(_recente_no_sqlite(AGORA - timedelta(minutes=1)) is True, "SQLite (naive): aviso de 1 minuto atras bloqueia")
+
+check(_recente_com_datetime_aware(AGORA - DOZE_HORAS) is False,
+      "PostgreSQL (aware): aviso de EXATAMENTE 12h atras nao bloqueia")
+check(_recente_com_datetime_aware(AGORA - DOZE_HORAS + UM_MICROSSEGUNDO) is True,
+      "PostgreSQL (aware): 12h menos 1 microssegundo AINDA bloqueia")
+check(_recente_com_datetime_aware((AGORA - DOZE_HORAS).astimezone(BRASILIA)) is False,
+      "PostgreSQL (aware, UTC-3): o MESMO instante de 12h atras, em outro fuso, nao bloqueia")
+check(_recente_com_datetime_aware((AGORA - DOZE_HORAS + UM_MICROSSEGUNDO).astimezone(BRASILIA)) is True,
+      "PostgreSQL (aware, UTC-3): 12h menos 1 microssegundo, em outro fuso, bloqueia")
+check(wh._aviso_fora_do_expediente_recente(_SessaoFalsa(None), 1, AVISO, agora=AGORA) is False,
+      "sem nenhum aviso anterior: nao bloqueia")
 
 
 # ─── Resultado ──────────────────────────────────────────────────────────

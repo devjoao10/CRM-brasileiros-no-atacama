@@ -13,7 +13,7 @@ class AutoReplyUpdate(BaseModel):
 
     @field_validator("message")
     @classmethod
-    def _sem_caractere_nulo(cls, message):
+    def _sem_caractere_nulo(cls, message: str | None) -> str | None:
         if message is not None and "\x00" in message:
             raise ValueError("A mensagem nao pode conter o caractere nulo.")
         return message
@@ -40,19 +40,22 @@ class AutoReplyListResponse(BaseModel):
 
 
 # ─── BusinessHours ────────────────────────────────
+# CONV-EXPEDIENTE-01: "HH:MM" com zero à esquerda. O webhook compara os horários como
+# texto (`open_time <= "HH:MM" <= close_time`), então "9:00" > "13:00" quebraria a conta.
+# Dígitos ASCII (`[0-9]`, não `\d`): o `\d` aceitaria dígitos de outros alfabetos (por exemplo
+# U+0669, o nove arábico-índico), que passariam pela validação e quebrariam a mesma comparação
+# de texto. Um padrão só, usado pelos dois campos.
+_HHMM = r"^([01][0-9]|2[0-3]):[0-5][0-9]$"
+
+
 class BusinessHoursDay(BaseModel):
     weekday: int = Field(..., ge=0, le=6)
     is_open: bool
-    # CONV-EXPEDIENTE-01: "HH:MM" com zero à esquerda. O webhook compara os horários como
-    # texto (`open_time <= "HH:MM" <= close_time`), então "9:00" > "13:00" quebraria a conta.
-    # Dígitos ASCII (`[0-9]`, não `\d`): o `\d` aceitaria dígitos de outros alfabetos (por exemplo
-    # U+0669, o nove arábico-índico), que passariam pela validação e quebrariam a mesma comparação
-    # de texto.
-    open_time: Optional[str] = Field(None, pattern=r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
-    close_time: Optional[str] = Field(None, pattern=r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
+    open_time: Optional[str] = Field(None, pattern=_HHMM)
+    close_time: Optional[str] = Field(None, pattern=_HHMM)
 
     @model_validator(mode="after")
-    def _fechamento_depois_da_abertura(self):
+    def _fechamento_depois_da_abertura(self) -> "BusinessHoursDay":
         # Só vale para dia aberto com os dois horários; dia fechado guarda qualquer valor
         # (a tela manda os campos desabilitados) e dia aberto sem horário fica aberto o dia todo.
         if self.is_open and self.open_time and self.close_time and self.close_time <= self.open_time:
@@ -70,7 +73,7 @@ class BusinessHoursUpdate(BaseModel):
 
     @field_validator("days")
     @classmethod
-    def _sem_dia_repetido(cls, days):
+    def _sem_dia_repetido(cls, days: list[BusinessHoursDay]) -> list[BusinessHoursDay]:
         weekdays = [day.weekday for day in days]
         if len(weekdays) != len(set(weekdays)):
             raise ValueError("Dia da semana repetido no envio.")

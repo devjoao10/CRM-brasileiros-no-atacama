@@ -105,11 +105,15 @@ async def update_auto_reply(
     if data.is_active is not None:
         reply.is_active = data.is_active
 
+    # CONV-EXPEDIENTE-01: o id de quem alterou é lido ANTES do commit. O `current_user` é um ORM
+    # preso a esta mesma sessão: depois do commit ele está expirado, e ler `.id` só para logar
+    # custaria um SELECT em `users` (a linha inteira, com o hash da senha) com a alteração já gravada.
+    usuario_id = current_user.id
     db.commit()
     db.refresh(reply)
     logger.info(
         f"✅ Frase automática '{trigger}' {'criada' if criada else 'atualizada'} "
-        f"(usuário {current_user.id})"
+        f"(usuário {usuario_id})"
     )
     return AutoReplyResponse.model_validate(reply)
 
@@ -154,9 +158,11 @@ async def update_business_hours(
     CONV-EXPEDIENTE-01: só administrador salva (mesmo motivo do PUT de frases): o horário decide
     quando o aviso "Fora do expediente" sai para o cliente. O GET segue liberado.
     """
-    # CONV-EXPEDIENTE-01: lê as linhas existentes UMA vez. A sessão tem `autoflush=False`
-    # (database.py), então um `query().first()` por item não enxergaria o INSERT ainda pendente
-    # de um item anterior do mesmo dia; o dict enxerga (o novo é registrado nele).
+    # CONV-EXPEDIENTE-01: lê as linhas existentes UMA vez, num dict por weekday, e a linha criada
+    # entra nele também. O schema (`BusinessHoursUpdate`) já recusa weekday repetido com 422, então
+    # na prática cada dia aparece uma só vez; guardar a linha nova no dict é defesa em profundidade
+    # deliberada: a rota continua segura (atualiza a linha pendente em vez de inserir uma segunda
+    # e estourar o UNIQUE de `weekday`) mesmo se for chamada com dias repetidos sem passar pelo schema.
     por_dia = {h.weekday: h for h in db.query(BusinessHours).all()}
     for day in data.days:
         hours = por_dia.get(day.weekday)
@@ -174,7 +180,9 @@ async def update_business_hours(
             db.add(hours)
             por_dia[day.weekday] = hours
 
+    # Id de quem alterou lido ANTES do commit (mesmo motivo do PUT de frases).
+    usuario_id = current_user.id
     db.commit()
-    logger.info(f"✅ Horário comercial atualizado (usuário {current_user.id})")
+    logger.info(f"✅ Horário comercial atualizado (usuário {usuario_id})")
 
     return _business_hours_da_semana(db)

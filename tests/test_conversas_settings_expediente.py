@@ -24,7 +24,9 @@ Prova (HTTP real sobre SQLite, tabelas VAZIAS no inicio):
      horarios escapados no value=; erro de padrao HH:MM vira frase clara em vez da regex crua);
  10. as rotas continuam exigindo login;
  11. salvar (os dois PUTs) exige administrador: usuario comum recebe 403 e nada e gravado,
-     o GET segue liberado, e o log de sucesso diz QUEM alterou.
+     o GET segue liberado, e o log de sucesso diz QUEM alterou — com o id lido ANTES do commit
+     (o usuario autenticado e um ORM da mesma sessao; depois do commit ele esta expirado, e ler
+     `.id` so para logar custaria um SELECT em `users`).
 
 Roda standalone:  python tests/test_conversas_settings_expediente.py
 """
@@ -51,13 +53,16 @@ os.environ["N8N_AGENT_ENABLED"] = "false"
 
 sys.path.insert(0, str(CONVERSAS_DIR))
 
+from fastapi import Depends  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import event  # noqa: E402
+from sqlalchemy.orm import Session  # noqa: E402
 
 import app.main as main  # noqa: E402
 import app.routers.settings as settings_router  # noqa: E402
 from app import seed  # noqa: E402
-from app.auth import get_current_user  # noqa: E402
-from app.database import Base, SessionLocal, engine  # noqa: E402
+from app.auth import User, get_current_user  # noqa: E402
+from app.database import Base, SessionLocal, engine, get_db  # noqa: E402
 from app.models.auto_reply import AUTO_REPLY_PADROES, AutoReply, BusinessHours  # noqa: E402
 
 failures = []
@@ -614,7 +619,70 @@ check(r_frase.status_code == 200 and r_horas.status_code == 200,
 sucessos = [m for nivel, m in captura.registros if nivel == "INFO"]
 check(len(sucessos) == 2 and all(re.search(r"\b4242\b", m) for m in sucessos),
       f"o log de sucesso dos dois PUTs inclui o id de quem alterou (got {sucessos!r})")
-main.app.dependency_overrides[get_current_user] = lambda: _User()
+
+# O id de quem alterou e lido ANTES do commit. O `current_user` do `get_current_user` real e um ORM preso
+# a MESMA sessao da rota: o commit o EXPIRA, e ler `.id` so para escrever o log faria um SELECT em `users`
+# depois do commit. O override abaixo devolve um ORM da sessao da requisicao, como o real.
+db_admin = SessionLocal()
+db_admin.add(User(id=777, nome="Admin da sessao", email="admin.sessao@local",
+                  hashed_password="x", role="ADMIN", is_active=True))
+db_admin.commit()
+db_admin.close()
+
+
+def _admin_da_sessao(db: Session = Depends(get_db)):
+    return db.query(User).filter(User.id == 777).first()
+
+
+consultas = []          # SQL emitido durante a requisicao, em ordem
+posicao_do_commit = []  # quantas consultas ja existiam quando cada commit terminou
+
+
+def _registra_sql(conn, cursor, statement, parameters, context, executemany):
+    consultas.append(statement)
+
+
+def _marca_commit(session):
+    posicao_do_commit.append(len(consultas))
+
+
+def _sql_depois_do_commit(fazer_put):
+    """Roda o PUT e devolve (resposta, log INFO, SQL emitido DEPOIS do ultimo commit da requisicao)."""
+    consultas.clear()
+    posicao_do_commit.clear()
+    captura_orm = _CapturaLog()
+    nivel_orm = settings_router.logger.level
+    settings_router.logger.addHandler(captura_orm)
+    settings_router.logger.setLevel(logging.INFO)
+    try:
+        resposta = fazer_put()
+    finally:
+        settings_router.logger.removeHandler(captura_orm)
+        settings_router.logger.setLevel(nivel_orm)
+    depois = consultas[posicao_do_commit[-1]:] if posicao_do_commit else []
+    return resposta, [m for nivel, m in captura_orm.registros if nivel == "INFO"], depois
+
+
+main.app.dependency_overrides[get_current_user] = _admin_da_sessao
+event.listen(engine, "before_cursor_execute", _registra_sql)
+event.listen(SessionLocal, "after_commit", _marca_commit)
+try:
+    r_frase, log_frase, sql_frase = _sql_depois_do_commit(
+        lambda: client.put(f"{URL_FRASES}/out_of_hours", json={"message": "Texto do admin da sessao"}))
+    r_horas, log_horas, sql_horas = _sql_depois_do_commit(
+        lambda: client.put(URL_HORARIOS, json={"days": [_dia(1, True, "09:00", "18:00")]}))
+finally:
+    event.remove(engine, "before_cursor_execute", _registra_sql)
+    event.remove(SessionLocal, "after_commit", _marca_commit)
+    main.app.dependency_overrides[get_current_user] = lambda: _User()
+check(r_frase.status_code == 200 and r_horas.status_code == 200,
+      f"com o usuario ORM da sessao os dois PUTs seguem 200 (got {r_frase.status_code} / {r_horas.status_code})")
+check(len(log_frase) == 1 and "777" in log_frase[0] and len(log_horas) == 1 and "777" in log_horas[0],
+      f"o log continua dizendo QUEM alterou (got {log_frase!r} / {log_horas!r})")
+check(any("auto_replies" in q for q in sql_frase) and any("business_hours" in q for q in sql_horas),
+      "o recorte 'depois do ultimo commit' pegou os SELECT de leitura da resposta (a medicao enxerga o pos-commit)")
+check(not any("FROM users" in q for q in sql_frase + sql_horas),
+      f"nenhum SELECT em users depois do commit: o id do usuario foi lido antes (got {[q for q in sql_frase + sql_horas if 'FROM users' in q]!r})")
 
 # --- Resultado ---
 main.app.dependency_overrides.clear()

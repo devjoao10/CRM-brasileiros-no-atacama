@@ -23,11 +23,16 @@ Prova que:
      chamada — nem a resposta nem o fallback saem, nenhum campo muda — e o pre-check do
      debounce nem chama o agente para uma conversa ja encerrada.
 
+Os testes que passam pelo debounce (6 e o pre-check de 7) conferem TAMBEM a linha INFO do
+descarte/skip e a AUSENCIA de log ERROR: `_debounce_then_forward` engole qualquer excecao num
+`logger.error`, e "nada foi enviado" seria verdade num crash — passaria de graca.
+
 n8n e Meta mockados (`_fetch_agent_parts` substituido por um fake assincrono);
 nenhuma rede, nenhuma credencial.
 Roda standalone:  python tests/test_conversas_bia_agente_fila.py
 """
 import asyncio
+import contextlib
 import logging
 import os
 import pathlib
@@ -212,6 +217,34 @@ class _CapturaLog(logging.Handler):
         self.registros.append((record.levelname, record.getMessage()))
 
 
+@contextlib.contextmanager
+def _capturando_logs():
+    """Captura TUDO que chega ao logger raiz, com o logger do webhook em INFO.
+
+    `_debounce_then_forward` engole qualquer excecao num `logger.error(...)`: sem olhar o log, um
+    crash no meio do descarte deixaria as asserts negativas ("nada enviado", "estado intacto")
+    passarem de graca. Os testes do debounce conferem a linha INFO do descarte E a ausencia de ERROR.
+    """
+    captura = _CapturaLog()
+    raiz = logging.getLogger()
+    nivel_anterior = wh.logger.level
+    raiz.addHandler(captura)
+    wh.logger.setLevel(logging.INFO)
+    try:
+        yield captura
+    finally:
+        raiz.removeHandler(captura)
+        wh.logger.setLevel(nivel_anterior)
+
+
+def _erros(captura):
+    return [m for nivel, m in captura.registros if nivel in ("ERROR", "CRITICAL")]
+
+
+def _infos(captura, trecho):
+    return [m for nivel, m in captura.registros if nivel == "INFO" and trecho in m]
+
+
 # =====================================================================
 # 1. Bia desligada DURANTE a chamada -> resposta descartada
 # =====================================================================
@@ -342,7 +375,8 @@ agente["chamadas"] = 0
 agente["durante"] = _vendedora_desliga_bia
 agente["resultado"] = (list(PARTES), False)
 antes = len(enviados)
-asyncio.run(wh._debounce_then_forward(cid, None))
+with _capturando_logs() as captura:
+    asyncio.run(wh._debounce_then_forward(cid, None))
 agente["durante"] = None
 wh.AGENT_DEBOUNCE_SECONDS = _deb_orig
 
@@ -353,6 +387,11 @@ check(_outbound(cid) == [], f"nada persistido (got {_outbound(cid)})")
 check(est["bia"] is False and est["atendente"] == ATENDENTE and est["queued_at"] == ENTROU_NA_FILA,
       f"estado operacional intacto (got {est})")
 check(not wh._agent_locks[cid].locked(), "o lock da conversa foi liberado")
+# O debounce engole excecao num logger.error: sem este par de asserts, um crash passaria como "descartou".
+descartes = _infos(captura, "resposta descartada")
+check(len(descartes) == 1 and re.search(rf"\b{cid}\b", descartes[0]) is not None,
+      f"o descarte da resposta tardia foi logado em INFO com o id da conversa (got {descartes!r})")
+check(_erros(captura) == [], f"nenhum ERROR no log: o debounce nao engoliu um crash (got {_erros(captura)!r})")
 
 
 # =====================================================================
@@ -408,7 +447,8 @@ agente["chamadas"] = 0
 agente["durante"] = None
 agente["resultado"] = (list(PARTES), False)
 antes = len(enviados)
-asyncio.run(wh._debounce_then_forward(cid, None))
+with _capturando_logs() as captura:
+    asyncio.run(wh._debounce_then_forward(cid, None))
 wh.AGENT_DEBOUNCE_SECONDS = _deb_orig
 
 est = _estado(cid)
@@ -418,6 +458,11 @@ check(enviados[antes:] == [] and _outbound(cid) == [],
 check(est["status"] == "encerrada" and est["bia"] is True and est["atendente"] == ATENDENTE
       and est["queued_at"] == ENTROU_NA_FILA, f"estado intacto (got {est})")
 check(not wh._agent_locks[cid].locked(), "o lock da conversa foi liberado")
+# O "agente nem e chamado" tambem seria verdade num crash engolido: a linha INFO do skip e a ausencia de ERROR provam o caminho.
+pulos = _infos(captura, "encerrada, ignorando")
+check(len(pulos) == 1 and re.search(rf"\b{cid}\b", pulos[0]) is not None,
+      f"o skip da conversa encerrada foi logado em INFO com o id da conversa (got {pulos!r})")
+check(_erros(captura) == [], f"nenhum ERROR no log: o debounce nao engoliu um crash (got {_erros(captura)!r})")
 
 
 # ─── Resultado ──────────────────────────────────────────────────────────

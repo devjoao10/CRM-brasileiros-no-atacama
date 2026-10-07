@@ -428,7 +428,9 @@ def _resolve_auto_reply(
     )
 
 
-def _aviso_fora_do_expediente_recente(db: Session, conversation_id: int, texto: str) -> bool:
+def _aviso_fora_do_expediente_recente(
+    db: Session, conversation_id: int, texto: str, agora: datetime | None = None
+) -> bool:
     """
     CONV-EXPEDIENTE-01 (D7) — o MESMO aviso ja foi enviado nesta conversa dentro
     de `OUT_OF_HOURS_COOLDOWN`?
@@ -437,7 +439,14 @@ def _aviso_fora_do_expediente_recente(db: Session, conversation_id: int, texto: 
     a Meta recusou nao chegou ao cliente e e tentado de novo na proxima mensagem.
     `NOT_FAILED_STATUSES` NAO serve aqui — ele nao inclui `delivered`/`read`, e um
     aviso entregue ou lido tambem ja foi enviado.
+
+    `agora` e o relogio (UTC, com tzinfo) e por padrao e o instante atual. Existe para
+    os testes fixarem a fronteira EXATA — enviado ha 12h nao bloqueia, ha 12h menos 1
+    microssegundo bloqueia — e o caminho tz-aware do PostgreSQL, sem mexer no relogio.
     """
+    if agora is None:
+        agora = datetime.now(tz.utc)
+
     ultimo = db.query(Message).filter(
         Message.conversation_id == conversation_id,
         Message.direction == "outbound",
@@ -451,7 +460,64 @@ def _aviso_fora_do_expediente_recente(db: Session, conversation_id: int, texto: 
     if enviado_em.tzinfo is None:
         # SQLite devolve datetime sem tzinfo; o que se grava e sempre UTC.
         enviado_em = enviado_em.replace(tzinfo=tz.utc)
-    return datetime.now(tz.utc) - enviado_em < OUT_OF_HOURS_COOLDOWN
+    return agora - enviado_em < OUT_OF_HOURS_COOLDOWN
+
+
+async def _enviar_aviso_fora_do_expediente(
+    conversation: Conversation,
+    message: str,
+    db: Session,
+    *,
+    bia_vai_responder: bool,
+) -> None:
+    """
+    CONV-EXPEDIENTE-01 (D6/D7) — decide se o aviso "Fora do expediente" sai e, saindo, envia e grava.
+
+    Cede, nesta ordem: (1) a Bia vai responder esta mensagem (D6); (2) outro aviso desta
+    conversa esta em envio (guarda em memoria, ver `_avisos_fora_do_expediente_em_voo`); (3) o
+    mesmo aviso ja foi gravado dentro de `OUT_OF_HOURS_COOLDOWN` (D7). Cada cessao loga em INFO,
+    identificando a conversa so pelo id.
+    """
+    # O id e o telefone sao lidos UMA vez, antes de qualquer commit: `_save_outbound_message`
+    # commita e o commit EXPIRA `conversation`. Reler `conversation.id` no `finally` custaria um
+    # SELECT que, com o banco fora do ar, levantaria DENTRO do `finally` — mascara o erro original
+    # e pula o `discard`, deixando o id preso na guarda ate o processo reiniciar.
+    conversation_id = conversation.id
+    phone = conversation.whatsapp
+
+    if bia_vai_responder:
+        logger.info(
+            f"Aviso de fora do expediente nao enviado na conversa "
+            f"{conversation_id}: a Bia vai responder esta mensagem"
+        )
+        return
+
+    if conversation_id in _avisos_fora_do_expediente_em_voo:
+        logger.info(
+            f"Aviso de fora do expediente nao enviado na conversa "
+            f"{conversation_id}: outro aviso desta conversa esta em envio"
+        )
+        return
+
+    if _aviso_fora_do_expediente_recente(db, conversation_id, message):
+        logger.info(
+            f"Aviso de fora do expediente nao enviado na conversa "
+            f"{conversation_id}: ja enviado nas ultimas "
+            f"{OUT_OF_HOURS_COOLDOWN.total_seconds() / 3600:g}h"
+        )
+        return
+
+    # O `add` vem ANTES do `await`, e entre o teste de pertinencia acima e ele so ha codigo
+    # sincrono (a consulta do cooldown): o laco de eventos nao troca de tarefa ali, entao dois
+    # inbounds da mesma conversa nunca passam juntos pela decisao. O registro so e salvo depois da
+    # Meta responder; o `finally` solta a guarda mesmo se o envio ou o salvamento falharem.
+    _avisos_fora_do_expediente_em_voo.add(conversation_id)
+    try:
+        wa_response = await whatsapp.send_text_message(phone, message, db)
+        _save_outbound_message(conversation, message, db, wa_response)
+    finally:
+        _avisos_fora_do_expediente_em_voo.discard(conversation_id)
+    logger.info(f"Auto-reply (fora do expediente) processado para {phone}")
 
 
 async def _send_auto_reply_if_needed(
@@ -460,7 +526,7 @@ async def _send_auto_reply_if_needed(
     db: Session,
     *,
     bia_vai_responder: bool,
-):
+) -> None:
     """
     Determine and send the appropriate auto-reply based on:
     1. Business hours (out_of_hours if outside)
@@ -482,39 +548,15 @@ async def _send_auto_reply_if_needed(
     if not _is_within_business_hours(db):
         configured, message = _resolve_auto_reply("out_of_hours", db, conversation)
         if configured:
-            # CONV-EXPEDIENTE-01 (D6/D7): o aviso so sai se a Bia NAO vai responder
-            # e se o mesmo aviso nao foi enviado dentro de OUT_OF_HOURS_COOLDOWN.
-            # Em qualquer caso o `return` abaixo se mantem: fora do horario com
-            # `out_of_hours` configurado, greeting/waiting continuam suprimidos.
+            # CONV-EXPEDIENTE-01 (D6/D7): o aviso so sai se a Bia NAO vai responder, se nenhum
+            # outro aviso desta conversa esta em envio e se o mesmo aviso nao foi enviado dentro
+            # de OUT_OF_HOURS_COOLDOWN (a decisao e do helper). Em qualquer caso o `return`
+            # abaixo se mantem: fora do horario com `out_of_hours` configurado,
+            # greeting/waiting continuam suprimidos.
             if message:
-                if bia_vai_responder:
-                    logger.info(
-                        f"Aviso de fora do expediente nao enviado na conversa "
-                        f"{conversation.id}: a Bia vai responder esta mensagem"
-                    )
-                elif (
-                    conversation.id in _avisos_fora_do_expediente_em_voo
-                    or _aviso_fora_do_expediente_recente(db, conversation.id, message)
-                ):
-                    # Aviso igual ja gravado nas ultimas 12h OU em envio por outro inbound
-                    # da mesma conversa (guarda em memoria, ver `_avisos_fora_do_expediente_em_voo`).
-                    logger.info(
-                        f"Aviso de fora do expediente nao enviado na conversa "
-                        f"{conversation.id}: ja enviado nas ultimas "
-                        f"{OUT_OF_HOURS_COOLDOWN.total_seconds() / 3600:g}h"
-                    )
-                else:
-                    # O `add` vem ANTES do `await` e logo apos o teste de pertinencia acima, sem
-                    # nenhum `await` no meio: o laco de eventos nao troca de tarefa ali, entao dois
-                    # inbounds da mesma conversa nunca passam juntos pela decisao. O registro so e
-                    # salvo depois da Meta responder; o `finally` solta a guarda mesmo se o envio falhar.
-                    _avisos_fora_do_expediente_em_voo.add(conversation.id)
-                    try:
-                        wa_response = await whatsapp.send_text_message(phone, message, db)
-                        _save_outbound_message(conversation, message, db, wa_response)
-                    finally:
-                        _avisos_fora_do_expediente_em_voo.discard(conversation.id)
-                    logger.info(f"Auto-reply (fora do expediente) processado para {phone}")
+                await _enviar_aviso_fora_do_expediente(
+                    conversation, message, db, bia_vai_responder=bia_vai_responder,
+                )
             return
 
     # New conversation — send greeting
