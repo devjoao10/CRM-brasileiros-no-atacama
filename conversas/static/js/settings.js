@@ -361,9 +361,9 @@
                     <span class="bh-day-name">${WEEKDAYS[h.weekday]}</span>
                 </div>
                 <div class="bh-times">
-                    <input type="time" class="bh-time bh-open-time" value="${h.open_time || '09:00'}" ${!h.is_open ? 'disabled' : ''}>
+                    <input type="time" class="bh-time bh-open-time" value="${escapeHtml(h.open_time || '09:00')}" ${!h.is_open ? 'disabled' : ''}>
                     <span class="bh-separator">ate</span>
-                    <input type="time" class="bh-time bh-close-time" value="${h.close_time || '18:00'}" ${!h.is_open ? 'disabled' : ''}>
+                    <input type="time" class="bh-time bh-close-time" value="${escapeHtml(h.close_time || '18:00')}" ${!h.is_open ? 'disabled' : ''}>
                 </div>
             </div>
         `).join('');
@@ -647,6 +647,9 @@
         if (typeof err.detail === 'string') return err.detail;
         if (Array.isArray(err.detail) && err.detail.length) {
             const first = err.detail[0];
+            // CONV-EXPEDIENTE-01: o `msg` de um erro de padrao do Pydantic e a regex crua. O unico
+            // `pattern` destas telas e o HH:MM do horario comercial, entao a frase e fixa.
+            if (first && first.type === 'string_pattern_mismatch') return 'Horario invalido: use o formato HH:MM';
             if (first && typeof first.msg === 'string') return first.msg.replace(/^Value error, /, '');
         }
         return fallback;

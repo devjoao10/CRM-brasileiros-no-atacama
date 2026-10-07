@@ -1244,8 +1244,9 @@ async def update_conversation(
     `{"is_bot_active": false}` (botao "Desativar Bot") desliga; `{"atendente_id": N}`
     sozinho preserva o flag.
 
-    Agora os dois campos operacionais passam por `_apply_human_state`, o alvo e
-    validado como `/assign` valida, e o PUT inteiro (status + estado operacional
+    Agora os dois campos operacionais passam por `_apply_human_state`, o atendente
+    NOMEADO no payload e validado como `/assign` valida (o dono atual, que so e
+    preservado, nao — CONV-BIA-FILA-01), e o PUT inteiro (status + estado operacional
     + responsavel + sync no CRM) commita UMA vez.
 
     CONV-HOTFIX-LOCK-01 (correcao aprovada nesta rodada) — ESTA rota era a UNICA
@@ -1287,8 +1288,11 @@ async def update_conversation(
             conversation.primeira_resposta_humana_at = None
         else:
             alvo = data.atendente_id if data.atendente_id is not None else conversation.atendente_id
-            if alvo is not None:
-                _require_active_user(db, alvo)
+            # CONV-BIA-FILA-01: so valida o atendente que o PAYLOAD nomeia. O dono ATUAL entra no
+            # `alvo` apenas para ser preservado (botao "Desativar Bot" nao nomeia ninguem); validar
+            # tambem esse fazia o botao falhar com 404 quando a vendedora dona foi desativada.
+            if data.atendente_id is not None:
+                _require_active_user(db, data.atendente_id)
             # CONV-BIA-FILA-01: so `{"is_bot_active": false}` (botao "Desativar
             # Bot") desliga a Bia; trocar apenas o atendente preserva o flag.
             _apply_human_state(

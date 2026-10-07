@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.auth import get_current_user, User
+from app.auth import get_current_user, require_admin, User
 from app.models.auto_reply import AUTO_REPLY_PADROES, AutoReply, BusinessHours
 from app.schemas.settings import (
     AutoReplyUpdate,
@@ -58,14 +58,20 @@ async def update_auto_reply(
     trigger: str,
     data: AutoReplyUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
-    """Editar uma frase automática pelo trigger (cria a linha se for um gatilho do catálogo)."""
+    """Editar uma frase automática pelo trigger (cria a linha se for um gatilho do catálogo).
+
+    CONV-EXPEDIENTE-01: só administrador salva. Como o PUT agora cria e ativa frases que o
+    webhook envia a clientes, deixá-lo aberto a qualquer usuário logado (achado F-320) deixaria
+    qualquer vendedora mudar o texto que sai em nome da empresa. O GET segue liberado.
+    """
     reply = db.query(AutoReply).filter(AutoReply.trigger == trigger).first()
     criada = reply is None
     if criada:
         # CONV-EXPEDIENTE-01: só gatilho do catálogo vira linha; qualquer outro continua 404.
         # Nasce com título/texto padrão e INATIVA; os campos do payload são aplicados abaixo.
+        # Só entra na sessão (`db.add`) depois da validação do estado efetivo, mais abaixo.
         padrao = next((p for p in AUTO_REPLY_PADROES if p["trigger"] == trigger), None)
         if padrao is None:
             raise HTTPException(status_code=404, detail=f"Frase automática '{trigger}' não encontrada")
@@ -75,25 +81,36 @@ async def update_auto_reply(
             message=padrao["message"],
             is_active=False,
         )
-        db.add(reply)
 
+    # CONV-EXPEDIENTE-01: frase ativa sem texto é frase que o webhook pula em silêncio. Decide ANTES
+    # de alterar a linha, pelo estado EFETIVO (payload + linha atual): sem `rollback`, a linha só
+    # muda se a combinação for válida. A orientação depende do que o usuário estava fazendo:
+    # apagar o texto de uma frase que JÁ estava ativa, ou ativar uma frase sem texto.
+    mensagem_final = reply.message if data.message is None else data.message
+    ativa_final = reply.is_active if data.is_active is None else data.is_active
+    if ativa_final and not (mensagem_final or "").strip():
+        if reply.is_active and data.message is not None:
+            detail = (
+                "A mensagem de uma frase ativa nao pode ficar vazia. "
+                "Desative a frase antes de apagar o texto."
+            )
+        else:
+            detail = "Escreva a mensagem antes de ativar a frase automatica."
+        raise HTTPException(status_code=422, detail=detail)
+
+    if criada:
+        db.add(reply)
     if data.message is not None:
         reply.message = data.message
     if data.is_active is not None:
         reply.is_active = data.is_active
 
-    # CONV-EXPEDIENTE-01: frase ativa sem texto é frase que o webhook pula em silêncio.
-    # Barra aqui e desfaz o que foi aplicado (a linha nova some; a existente mantém o texto).
-    if reply.is_active and not (reply.message or "").strip():
-        db.rollback()
-        raise HTTPException(
-            status_code=422,
-            detail="Escreva a mensagem antes de ativar a frase automatica.",
-        )
-
     db.commit()
     db.refresh(reply)
-    logger.info(f"✅ Frase automática '{trigger}' {'criada' if criada else 'atualizada'}")
+    logger.info(
+        f"✅ Frase automática '{trigger}' {'criada' if criada else 'atualizada'} "
+        f"(usuário {current_user.id})"
+    )
     return AutoReplyResponse.model_validate(reply)
 
 
@@ -130,11 +147,19 @@ async def list_business_hours(
 async def update_business_hours(
     data: BusinessHoursUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
-    """Atualizar horário comercial (batch — 7 dias de uma vez)."""
+    """Atualizar horário comercial (batch — 7 dias de uma vez).
+
+    CONV-EXPEDIENTE-01: só administrador salva (mesmo motivo do PUT de frases): o horário decide
+    quando o aviso "Fora do expediente" sai para o cliente. O GET segue liberado.
+    """
+    # CONV-EXPEDIENTE-01: lê as linhas existentes UMA vez. A sessão tem `autoflush=False`
+    # (database.py), então um `query().first()` por item não enxergaria o INSERT ainda pendente
+    # de um item anterior do mesmo dia; o dict enxerga (o novo é registrado nele).
+    por_dia = {h.weekday: h for h in db.query(BusinessHours).all()}
     for day in data.days:
-        hours = db.query(BusinessHours).filter(BusinessHours.weekday == day.weekday).first()
+        hours = por_dia.get(day.weekday)
         if hours:
             hours.is_open = day.is_open
             hours.open_time = day.open_time
@@ -147,8 +172,9 @@ async def update_business_hours(
                 close_time=day.close_time,
             )
             db.add(hours)
+            por_dia[day.weekday] = hours
 
     db.commit()
-    logger.info("✅ Horário comercial atualizado")
+    logger.info(f"✅ Horário comercial atualizado (usuário {current_user.id})")
 
     return _business_hours_da_semana(db)

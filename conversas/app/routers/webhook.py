@@ -128,6 +128,22 @@ def _verify_meta_signature(raw_body: bytes, signature_header: str) -> bool:
 # novo (ver `_aviso_fora_do_expediente_recente`).
 OUT_OF_HOURS_COOLDOWN = timedelta(hours=12)
 
+# CONV-EXPEDIENTE-01 (D7) — GUARDA DE ENVIO EM VOO do aviso "Fora do expediente".
+#
+# O cooldown acima consulta o aviso JA GRAVADO, mas o registro so e salvo DEPOIS do `await`
+# da Meta (`send_text_message` + `_save_outbound_message`). Quando o cliente manda 2-3
+# mensagens em sequencia, as seguintes chegam NESSA janela, nao enxergam aviso nenhum e cada
+# uma envia o seu (provado: 3 inbounds concorrentes = 3 avisos). O id da conversa entra neste
+# conjunto ANTES do `await` e sai no `finally`: quem chega com o primeiro envio em voo cede.
+# Um envio que falha libera a guarda, e a proxima mensagem tenta de novo.
+#
+# ponytail: estado de UM processo, no mesmo padrao e com a mesma ressalva de `_agent_locks` /
+# `_agent_delivered_until` (mais abaixo): com mais de um worker uvicorn dois inbounds da mesma
+# conversa podem cair em processos diferentes e a guarda nao os enxerga — para valer entre
+# workers isto precisaria virar marcador no banco. Sem TTL de proposito: a entrada so existe
+# durante o `await` do envio e e removida no `finally`.
+_avisos_fora_do_expediente_em_voo: set[int] = set()
+
 
 # ─── Debounce system for batching rapid messages ─────────────
 AGENT_DEBOUNCE_SECONDS = 15  # Wait 15s after last message before sending to agent
@@ -342,8 +358,6 @@ def _is_within_business_hours(db: Session) -> bool:
     Check if current time falls within configured business hours.
     Uses UTC-3 (Brasilia timezone) for checking.
     """
-    from datetime import timedelta
-
     now_utc = datetime.now(tz.utc)
     # Convert to BRT (UTC-3)
     brt_offset = timedelta(hours=-3)
@@ -399,10 +413,12 @@ def _resolve_auto_reply(
 
     # CONV-EXPEDIENTE-01 (D8): o contexto saia com `user=None`, entao as variaveis
     # do atendente eram SEMPRE insoluveis no webhook e a frase era pulada em
-    # silencio. A consulta e por id e so acontece quando ha atendente.
+    # silencio. A consulta e por id e so acontece quando ha atendente. Carrega SO
+    # nome e email (o que `VariableContext` le): a linha inteira de `users` traz o
+    # hash da senha e a API key, que nao tem por que passar por este caminho.
     atendente = None
     if conversation is not None and conversation.atendente_id:
-        atendente = db.query(User).filter(User.id == conversation.atendente_id).first()
+        atendente = db.query(User.nome, User.email).filter(User.id == conversation.atendente_id).first()
 
     return True, variables_service.render_auto_reply(
         db,
@@ -476,15 +492,28 @@ async def _send_auto_reply_if_needed(
                         f"Aviso de fora do expediente nao enviado na conversa "
                         f"{conversation.id}: a Bia vai responder esta mensagem"
                     )
-                elif _aviso_fora_do_expediente_recente(db, conversation.id, message):
+                elif (
+                    conversation.id in _avisos_fora_do_expediente_em_voo
+                    or _aviso_fora_do_expediente_recente(db, conversation.id, message)
+                ):
+                    # Aviso igual ja gravado nas ultimas 12h OU em envio por outro inbound
+                    # da mesma conversa (guarda em memoria, ver `_avisos_fora_do_expediente_em_voo`).
                     logger.info(
                         f"Aviso de fora do expediente nao enviado na conversa "
                         f"{conversation.id}: ja enviado nas ultimas "
                         f"{OUT_OF_HOURS_COOLDOWN.total_seconds() / 3600:g}h"
                     )
                 else:
-                    wa_response = await whatsapp.send_text_message(phone, message, db)
-                    _save_outbound_message(conversation, message, db, wa_response)
+                    # O `add` vem ANTES do `await` e logo apos o teste de pertinencia acima, sem
+                    # nenhum `await` no meio: o laco de eventos nao troca de tarefa ali, entao dois
+                    # inbounds da mesma conversa nunca passam juntos pela decisao. O registro so e
+                    # salvo depois da Meta responder; o `finally` solta a guarda mesmo se o envio falhar.
+                    _avisos_fora_do_expediente_em_voo.add(conversation.id)
+                    try:
+                        wa_response = await whatsapp.send_text_message(phone, message, db)
+                        _save_outbound_message(conversation, message, db, wa_response)
+                    finally:
+                        _avisos_fora_do_expediente_em_voo.discard(conversation.id)
                     logger.info(f"Auto-reply (fora do expediente) processado para {phone}")
             return
 
@@ -510,7 +539,6 @@ async def _send_auto_reply_if_needed(
             ).order_by(Message.created_at.desc()).first()
 
             if recent_outbound:
-                from datetime import timedelta
                 time_since = datetime.now(tz.utc) - (recent_outbound.created_at.replace(tzinfo=tz.utc) if recent_outbound.created_at.tzinfo is None else recent_outbound.created_at)
                 if time_since < timedelta(hours=1):
                     return  # Don't spam the same waiting message
@@ -945,6 +973,13 @@ async def _debounce_then_forward(conversation_id: int, cutoff=None):
             logger.info(f"Bot desativado para conversa {conversation_id}, ignorando")
             return
 
+        # CONV-BIA-FILA-01 (D5): conversa encerrada enquanto o lote esperava (os 15s do debounce
+        # ou a fila do lock) — a Bia nao responde num atendimento fechado. Mesma regra do
+        # descarte de `_forward_to_agent`, que cobre o fechamento DURANTE a chamada ao agente.
+        if conversation.status == "encerrada":
+            logger.info(f"Conversa {conversation_id} encerrada, ignorando")
+            return
+
         # AUDIT-2026-08-W1D (F2) — o lote pendente vem do CORTE fotografado no
         # webhook, nao do ultimo outbound consultado agora. Consultar agora
         # incluiria a resposta automatica que acabou de ser commitada, que e
@@ -1246,9 +1281,15 @@ async def _forward_to_agent(conversation: Conversation, message_text: str, db: S
     # disso pertence a uma decisao vencida: envia-la seria a Bia atropelando a
     # humana, e o fallback degradado idem. Descarta TUDO, sem tocar em nenhum
     # campo e sem commit — o que a vendedora decidiu vale.
-    if not conversation.is_bot_active:
+    #
+    # A mesma regra vale quando a conversa foi ENCERRADA durante a espera: encerrar nao
+    # mexe em `is_bot_active`, entao a Bia ainda parece ligada, mas responder (ou mandar o
+    # fallback, que ainda poria a conversa na fila) num atendimento fechado e falar por cima
+    # da decisao de quem o encerrou.
+    if not conversation.is_bot_active or conversation.status == "encerrada":
+        motivo = "Bia desligada" if not conversation.is_bot_active else "Conversa encerrada"
         logger.info(
-            f"Bia desligada durante a chamada ao agente na conversa {conversation_id}: "
+            f"{motivo} durante a chamada ao agente na conversa {conversation_id}: "
             f"resposta descartada"
         )
         return

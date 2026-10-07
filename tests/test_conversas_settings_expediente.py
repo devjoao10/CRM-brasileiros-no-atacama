@@ -12,18 +12,26 @@ Prova (HTTP real sobre SQLite, tabelas VAZIAS no inicio):
   2. PUT cria a linha que faltar (texto padrao do catalogo) e o GET passa a devolve-la com id;
   3. gatilho fora do catalogo -> 404;
   4. ativar frase com mensagem vazia (greeting) -> 422 e NADA e criado;
-  5. mensagem so com espacos numa frase ativa -> 422 e o texto anterior permanece;
+  5. texto vazio/so espacos numa frase JA ativa -> 422 (orientacao de desativar antes) e o texto
+     anterior permanece; ativar sem texto -> 422 (orientacao de escrever); desativar e apagar no
+     mesmo PUT -> 200; mensagem acima de 4096 caracteres ou com \\x00 -> 422;
   6. GET /api/settings/business-hours devolve sempre 7 dias (dia sem linha = aberto, sem horario);
-  7. PUT business-hours valida HH:MM e fechamento > abertura (so em dia aberto);
+  7. PUT business-hours valida HH:MM (so digitos ASCII), fechamento > abertura (so em dia aberto),
+     no maximo 7 dias e nenhum weekday repetido (antes: 500 por IntegrityError);
   8. seed_auto_replies continua criando as mesmas 7 linhas (fonte unica AUTO_REPLY_PADROES);
   9. guards estaticos do settings.js/settings.html (toast de sucesso so com resp.ok; toggle manda o
-     texto da tela e no erro desfaz so o checkbox; aviso de horario nao salvo; nome do dia no 422);
- 10. as rotas continuam exigindo login.
+     texto da tela e no erro desfaz so o checkbox; aviso de horario nao salvo; nome do dia no 422;
+     horarios escapados no value=; erro de padrao HH:MM vira frase clara em vez da regex crua);
+ 10. as rotas continuam exigindo login;
+ 11. salvar (os dois PUTs) exige administrador: usuario comum recebe 403 e nada e gravado,
+     o GET segue liberado, e o log de sucesso diz QUEM alterou.
 
 Roda standalone:  python tests/test_conversas_settings_expediente.py
 """
+import logging
 import os
 import pathlib
+import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -46,6 +54,7 @@ sys.path.insert(0, str(CONVERSAS_DIR))
 from fastapi.testclient import TestClient  # noqa: E402
 
 import app.main as main  # noqa: E402
+import app.routers.settings as settings_router  # noqa: E402
 from app import seed  # noqa: E402
 from app.auth import get_current_user  # noqa: E402
 from app.database import Base, SessionLocal, engine  # noqa: E402
@@ -69,14 +78,24 @@ class _User:
     id = 1
     email = "tester@local"
     is_admin = True
+    # CONV-EXPEDIENTE-01: os PUTs de Configuracoes exigem `require_admin`, que le `role`. Usa a
+    # forma REAL de producao ("ADMIN": o NOME do membro do enum, o que o SQLAlchemy grava), como
+    # tests/test_conversas_variables.py — so `get_current_user` e substituido, o `require_admin` roda.
+    role = "ADMIN"
 
 
 main.app.dependency_overrides[get_current_user] = lambda: _User()
 client = TestClient(main.app)
+# Para os checks cujo defeito original era um 500: o cliente padrao RELANCA a excecao do servidor e
+# derrubaria o script em vez de reprovar o check com o status que o servidor devolveria.
+client_sem_excecao = TestClient(main.app, raise_server_exceptions=False)
 
 URL_FRASES = "/api/settings/auto-replies"
 URL_HORARIOS = "/api/settings/business-hours"
 MSG_ATIVAR_VAZIA = "Escreva a mensagem antes de ativar a frase automatica."
+# frase que JA esta ativa e cujo PUT apaga o texto: a orientacao e outra (desativar antes de apagar)
+MSG_APAGAR_ATIVA = ("A mensagem de uma frase ativa nao pode ficar vazia. "
+                    "Desative a frase antes de apagar o texto.")
 GATILHOS = ["greeting", "start_service", "waiting", "end_service", "out_of_hours", "break_time", "paused"]
 # Padrao do SEED por gatilho: so greeting e break_time nascem desligados (e sem texto).
 ATIVO_NO_SEED = {
@@ -119,8 +138,22 @@ def _dia(weekday, is_open=True, open_time=None, close_time=None):
 
 def _msg_validacao(resp):
     """Texto do primeiro erro de validacao do Pydantic (422 com lista em `detail`)."""
-    detail = resp.json().get("detail")
+    try:
+        detail = resp.json().get("detail")
+    except ValueError:      # corpo que nao e JSON (ex.: 500 do servidor): devolve o texto cru
+        return resp.text
     return detail[0].get("msg", "") if isinstance(detail, list) and detail else str(detail)
+
+
+class _CapturaLog(logging.Handler):
+    """Guarda (nivel, mensagem JA FORMATADA) do logger do router de Configuracoes."""
+
+    def __init__(self):
+        super().__init__()
+        self.registros = []
+
+    def emit(self, record):
+        self.registros.append((record.levelname, record.getMessage()))
 
 
 # ============ 0. CATALOGO — fonte unica dos textos padrao ============
@@ -242,23 +275,35 @@ check(resp.status_code == 200 and linha is not None and linha["is_active"] is Tr
       "texto + ativar no mesmo PUT -> 200 e criada ativa")
 
 # ============ 5. texto vazio em frase ativa / rollback ============
-print("\nSETTINGS 5 — mensagem vazia numa frase ativa e rollback")
+print("\nSETTINGS 5 — mensagem vazia numa frase ativa (decisao pelo estado efetivo, sem desfazer nada)")
 resp = client.put(f"{URL_FRASES}/out_of_hours", json={"message": "   "})
-check(resp.status_code == 422 and resp.json().get("detail") == MSG_ATIVAR_VAZIA,
-      f"{{message: '   '}} numa frase ativa -> 422 (got {resp.status_code})")
+check(resp.status_code == 422 and resp.json().get("detail") == MSG_APAGAR_ATIVA,
+      f"{{message: '   '}} numa frase JA ativa -> 422 com a orientacao de desativar antes (got {resp.status_code}, "
+      f"{resp.json().get('detail')!r})")
 check(_linha("out_of_hours")["message"] == ooh["message"] and _linha("out_of_hours")["is_active"] is True,
       "texto anterior permanece e a frase continua ativa")
 resp = client.put(f"{URL_FRASES}/out_of_hours", json={"message": ""})
-check(resp.status_code == 422 and _linha("out_of_hours")["message"] == ooh["message"],
-      "{message: ''} numa frase ativa -> 422 e texto anterior permanece")
+check(resp.status_code == 422 and resp.json().get("detail") == MSG_APAGAR_ATIVA
+      and _linha("out_of_hours")["message"] == ooh["message"],
+      "{message: ''} numa frase ativa -> 422 (mesma orientacao) e texto anterior permanece")
+resp = client.put(f"{URL_FRASES}/out_of_hours", json={"message": "", "is_active": True})
+check(resp.status_code == 422 and resp.json().get("detail") == MSG_APAGAR_ATIVA,
+      "{message: '', is_active: true} numa frase ja ativa -> 422 com a orientacao de apagar")
+
+# a decisao vem do estado EFETIVO (payload + linha atual): desativar e apagar no MESMO PUT e valido
+resp = client.put(f"{URL_FRASES}/start_service", json={"message": "", "is_active": False})
+check(resp.status_code == 200 and _linha("start_service")["is_active"] is False
+      and _linha("start_service")["message"] == "",
+      "{message: '', is_active: false} numa frase ativa -> 200 (desativa e apaga no mesmo PUT)")
 
 # frase INATIVA pode ficar com texto vazio, mas nao pode ser ativada assim
 resp = client.put(f"{URL_FRASES}/waiting", json={"message": ""})
 check(resp.status_code == 200 and _linha("waiting")["message"] == "" and _linha("waiting")["is_active"] is False,
       "frase inativa aceita texto vazio")
 resp = client.put(f"{URL_FRASES}/waiting", json={"is_active": True})
-check(resp.status_code == 422 and _linha("waiting")["is_active"] is False,
-      "ativar frase existente sem texto -> 422 e o rollback mantem inativa")
+check(resp.status_code == 422 and resp.json().get("detail") == MSG_ATIVAR_VAZIA
+      and _linha("waiting")["is_active"] is False,
+      "ativar frase existente sem texto -> 422 (orientacao de escrever a mensagem) e continua inativa")
 resp = client.put(f"{URL_FRASES}/waiting", json={"message": "Voltamos ja", "is_active": True})
 check(resp.status_code == 200 and _linha("waiting")["is_active"] is True
       and _linha("waiting")["message"] == "Voltamos ja", "texto + ativar na linha existente -> 200")
@@ -269,6 +314,23 @@ check(resp.status_code == 200 and resp.json().get("id") == ooh_id
       and _linha("out_of_hours")["message"] == "Estamos fora do horario, respondemos amanha.",
       "editar o texto de linha existente continua funcionando (mesmo id)")
 check(_contagem(AutoReply) == 4, f"nenhuma linha duplicada ao editar (got {_contagem(AutoReply)})")
+
+# ============ 5b. limites da mensagem ============
+print("\nSETTINGS 5b — tamanho maximo e caractere nulo na mensagem")
+texto_antes = _linha("out_of_hours")["message"]
+resp = client.put(f"{URL_FRASES}/out_of_hours", json={"message": "x" * 4097})
+check(resp.status_code == 422, f"mensagem de 4097 caracteres -> 422 (got {resp.status_code})")
+check(_linha("out_of_hours")["message"] == texto_antes, "mensagem longa demais: o texto anterior permanece")
+resp = client.put(f"{URL_FRASES}/out_of_hours", json={"message": "x" * 4096})
+check(resp.status_code == 200 and len(_linha("out_of_hours")["message"]) == 4096,
+      f"exatamente 4096 caracteres (limite do texto no WhatsApp) -> 200 (got {resp.status_code})")
+resp = client.put(f"{URL_FRASES}/out_of_hours", json={"message": texto_antes})
+check(resp.status_code == 200 and _linha("out_of_hours")["message"] == texto_antes,
+      "texto anterior restaurado para os proximos checks")
+# o PostgreSQL recusa NUL em texto (viraria 500 em producao); o SQLite aceitaria em silencio
+resp = client.put(f"{URL_FRASES}/out_of_hours", json={"message": "oi\x00tchau"})
+check(resp.status_code == 422, f"mensagem com caractere nulo (\\x00) -> 422 (got {resp.status_code})")
+check(_linha("out_of_hours")["message"] == texto_antes, "mensagem com caractere nulo: o texto anterior permanece")
 
 # ============ 6. GET /business-hours com tabela vazia ============
 print("\nSETTINGS 6 — GET /business-hours devolve sempre 7 dias")
@@ -308,6 +370,29 @@ r = client.put(URL_HORARIOS, json={"days": [_dia(0, True, "09:00", "18:00"), _di
 loc = r.json()["detail"][0]["loc"]
 check(r.status_code == 422 and loc[:3] == ["body", "days", 1],
       f"erro de formato aponta a POSICAO em days (1), nao o weekday (2) (loc={loc})")
+
+# `days`: no maximo 7 itens e nenhum weekday repetido (a coluna weekday e UNIQUE: o repetido virava 500).
+# Estes checks vem ANTES de qualquer PUT valido: a tabela ainda esta vazia, que e o caso do defeito.
+r = client_sem_excecao.put(URL_HORARIOS, json={"days": [_dia(d % 7, True, "09:00", "18:00") for d in range(8)]})
+check(r.status_code == 422, f"8 itens em days -> 422 (got {r.status_code})")
+check(_contagem(BusinessHours) == 0, "8 itens em days: nada foi salvo")
+r = client_sem_excecao.put(URL_HORARIOS, json={"days": [_dia(2, True, "09:00", "18:00"), _dia(2, True, "10:00", "17:00")]})
+check(r.status_code == 422, f"weekday repetido em tabela vazia -> 422, nao 500 (got {r.status_code})")
+check("Dia da semana repetido no envio." in _msg_validacao(r),
+      f"mensagem do 422 diz que o dia veio repetido (got {_msg_validacao(r)!r})")
+check(_contagem(BusinessHours) == 0, "weekday repetido: nada foi salvo")
+
+# O padrao e ASCII: o `\d` do Pydantic aceitaria digitos de outros alfabetos, que passariam pela
+# validacao e quebrariam a comparacao de TEXTO do webhook. U+0669 = ARABIC-INDIC DIGIT NINE e
+# U+FF15 = FULLWIDTH DIGIT FIVE, em posicoes onde o padrao pede um digito qualquer (`\d`).
+r = client.put(URL_HORARIOS, json={"days": [_dia(0, True, "0\N{ARABIC-INDIC DIGIT NINE}:00", "18:00")]})
+check(r.status_code == 422, f"open_time com digito nao-ASCII na hora -> 422 (got {r.status_code})")
+r = client.put(URL_HORARIOS, json={"days": [_dia(0, True, "09:00", "18:0\N{FULLWIDTH DIGIT FIVE}")]})
+check(r.status_code == 422, f"close_time com digito nao-ASCII no minuto -> 422 (got {r.status_code})")
+# contrato que o settings.js usa para trocar a regex crua do toast por uma frase clara
+check(r.status_code == 422 and r.json()["detail"][0]["type"] == "string_pattern_mismatch",
+      "o erro de formato do horario chega com type 'string_pattern_mismatch'")
+check(_contagem(BusinessHours) == 0, "digito nao-ASCII: nada foi salvo")
 
 # dia FECHADO com horarios nulos -> aceito; resposta traz os 7 dias
 r = client.put(URL_HORARIOS, json={"days": [_dia(3, False)]})
@@ -413,6 +498,12 @@ check(f"textContent = '{AVISO}'" in render,
       "horario: aviso montado com textContent (texto fixo, sem HTML interpolado)")
 check("h.open_time || '09:00'" in render and "h.close_time || '18:00'" in render,
       "horario: preenchimento padrao 09:00/18:00 mantido (o aviso o explica)")
+# defesa em profundidade (o backend ja so aceita HH:MM): dado do servidor nunca entra cru em innerHTML
+check("value=\"${escapeHtml(h.open_time || '09:00')}\"" in render
+      and "value=\"${escapeHtml(h.close_time || '18:00')}\"" in render,
+      "horario: open_time/close_time entram no value=\"...\" via escapeHtml")
+check("value=\"${h.open_time" not in render and "value=\"${h.close_time" not in render,
+      "horario: nenhum horario e interpolado cru no value=\"...\"")
 
 b_ini = js.find("async function saveBusinessHours")
 b_fim = js.find("// ─── Quick Replies", b_ini)
@@ -433,6 +524,18 @@ check("loc[0] !== 'body'" in dia_erro and "loc[1] !== 'days'" in dia_erro
       "nome do dia vem de days[loc[2]].weekday so quando o loc tem o formato body/days/<posicao>")
 check("async function showBackendError(resp, fallback, labelFor)" in js and "labelFor(err)" in js,
       "helper unico aceita um rotulo opcional que prefixa a mensagem")
+
+# erro de PADRAO do Pydantic (o HH:MM do horario) vira uma frase clara: o `msg` dele e a regex crua
+e_ini = js.find("function backendError(")
+e_fim = js.find("async function showBackendError(", e_ini)
+backend_error = js[e_ini:e_fim]
+check(e_ini != -1 and e_fim > e_ini and js.count("function backendError(") == 1,
+      "backendError localizado no settings.js (definido uma vez)")
+check("first.type === 'string_pattern_mismatch'" in backend_error
+      and "Horario invalido: use o formato HH:MM" in backend_error,
+      "backendError: erro 'string_pattern_mismatch' vira 'Horario invalido: use o formato HH:MM'")
+check(0 <= backend_error.find("string_pattern_mismatch") < backend_error.find("first.msg"),
+      "backendError: a troca do padrao vem ANTES de devolver first.msg (que carrega a regex)")
 check("businessHoursErrorDay(err, days)" in save_horarios,
       "salvar horarios: o erro do backend ganha o nome do dia")
 
@@ -454,6 +557,63 @@ check(anon.get(URL_HORARIOS).status_code == 401, "GET business-hours sem login -
 check(anon.put(URL_HORARIOS, json={"days": [_dia(0, True, "09:00", "18:00")]}).status_code == 401,
       "PUT business-hours sem login -> 401")
 check(_contagem(AutoReply) == antes, "tentativa sem login nao altera o banco")
+main.app.dependency_overrides[get_current_user] = lambda: _User()
+
+# ============ 11. SALVAR EXIGE ADMINISTRADOR ============
+print("\nSETTINGS 11 — PUT de frases e horarios exige administrador (GET segue liberado)")
+
+
+class _Vendedora:
+    """Usuario autenticado que NAO e admin (papel em caixa alta, como o SQLAlchemy grava)."""
+    id = 2
+    email = "vendedora@local"
+    role = "USER"
+
+
+class _AdminAuditado(_User):
+    id = 4242      # id que nao aparece em mais nada do log: o assert de auditoria nao casa por acaso
+
+
+def _horarios_no_banco():
+    db = SessionLocal()
+    try:
+        return [(h.weekday, h.is_open, h.open_time, h.close_time)
+                for h in db.query(BusinessHours).order_by(BusinessHours.weekday).all()]
+    finally:
+        db.close()
+
+
+main.app.dependency_overrides[get_current_user] = lambda: _Vendedora()
+frases_antes = [_linha(t) for t in GATILHOS]
+horarios_antes = _horarios_no_banco()
+check(len(horarios_antes) == 7 and all(f is not None for f in frases_antes),
+      "pre-condicao: 7 frases e 7 dias gravados (para provar que o 403 nao toca em nada)")
+r = client.put(f"{URL_FRASES}/out_of_hours", json={"message": "Texto de quem nao e admin", "is_active": False})
+check(r.status_code == 403, f"PUT de frase por usuario comum -> 403 (got {r.status_code})")
+r = client.put(URL_HORARIOS, json={"days": [_dia(0, False)]})
+check(r.status_code == 403, f"PUT de horarios por usuario comum -> 403 (got {r.status_code})")
+check([_linha(t) for t in GATILHOS] == frases_antes and _horarios_no_banco() == horarios_antes,
+      "o 403 nao grava nada: frases e horarios intactos")
+check(client.get(URL_FRASES).status_code == 200 and client.get(URL_HORARIOS).status_code == 200,
+      "GET de frases e de horarios continua liberado para usuario comum")
+
+# o log de sucesso diz QUEM alterou (id do usuario autenticado)
+main.app.dependency_overrides[get_current_user] = lambda: _AdminAuditado()
+captura = _CapturaLog()
+settings_router.logger.addHandler(captura)
+nivel_anterior = settings_router.logger.level
+settings_router.logger.setLevel(logging.INFO)
+try:
+    r_frase = client.put(f"{URL_FRASES}/out_of_hours", json={"message": "Texto do admin"})
+    r_horas = client.put(URL_HORARIOS, json={"days": [_dia(0, True, "09:00", "18:00")]})
+finally:
+    settings_router.logger.removeHandler(captura)
+    settings_router.logger.setLevel(nivel_anterior)
+check(r_frase.status_code == 200 and r_horas.status_code == 200,
+      f"administrador continua salvando frase e horario (got {r_frase.status_code} / {r_horas.status_code})")
+sucessos = [m for nivel, m in captura.registros if nivel == "INFO"]
+check(len(sucessos) == 2 and all(re.search(r"\b4242\b", m) for m in sucessos),
+      f"o log de sucesso dos dois PUTs inclui o id de quem alterou (got {sucessos!r})")
 main.app.dependency_overrides[get_current_user] = lambda: _User()
 
 # --- Resultado ---

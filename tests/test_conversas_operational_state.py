@@ -47,10 +47,13 @@ Prova que:
   5. Claim: atendente=usuario autenticado, bot=False, queued_at PRESERVADO
      (assumir nao e atender).
   6. Claim concorrente continua 409 (trava anti-duplo-atendimento intacta).
-  7. Assign: atendente=destino, bot=False, continua fora do universo da BIA e
-     dentro da fila (prh continua NULL ate a primeira resposta).
-  8. Release: atendente=NULL, bot=False, prh=NULL, queued_at=NOVO timestamp
-     (fim da fila) — inclusive quando libera uma conversa ja atendida.
+  7. Assign: atendente=destino e PRESERVA o flag da Bia (CONV-BIA-FILA-01; aqui ela ja
+     estava desligada pelo claim da secao 5, entao segue False). Usa
+     keep_queue_position=True e continua dentro da fila (prh continua NULL ate a
+     primeira resposta).
+  8. Release: atendente=NULL, PRESERVA o flag da Bia (aqui ja desligada pelo claim),
+     prh=NULL, queued_at=NOVO timestamp (fim da fila) — inclusive quando libera uma
+     conversa ja atendida.
   9. Initiate: quem inicia assume E ja atendeu (prh preenchido), sem fila.
  10. Reabertura (encerrada + inbound): volta para a BIA, SEM herdar atendente
      nem a resposta humana anterior (prh volta a NULL).
@@ -392,13 +395,15 @@ r = client.post(f"/api/conversations/{c1}/assign", json={"user_id": 2})
 check(r.status_code == 200, f"assign responde 200 (got {r.status_code})")
 bot, at, q, prh, st = state(c1)
 check(at == 2, "assign: atendente_id = destino")
-check(bot is False, "assign: is_bot_active=False")
+check(bot is False,
+      "assign: is_bot_active continua False (assign preserva o flag; a Bia ja estava desligada pelo claim da secao 5)")
 # AUDIT-2026-08-WA — inverte "assign: queued_at=NULL": atribuir nao tira da
-# fila. ACHADO: assign_conversation (conversas/app/routers/conversations.py)
-# chama _apply_human_state SEM keep_queue_position=True (diferente de claim e
-# handoff), entao na pratica ele troca queued_at por um NOVO "agora" em vez de
-# preservar o antigo. O que esta suite pode garantir e que ele NAO fica NULL;
-# a divergencia de posicao exata esta reportada no resumo final.
+# fila. assign_conversation (conversas/app/routers/conversations.py) chama
+# _apply_human_state com keep_queue_position=True e desligar_bia=False: preserva
+# a posicao na fila (queued_at) E o flag da Bia — por isso o bot segue False aqui,
+# onde o claim da secao 5 ja o tinha desligado. Este check so exige queued_at
+# preenchido (NAO NULL); a preservacao exata da posicao e do flag e provada em
+# tests/test_conversas_bia_ativa_fila.py (secao 3).
 check(q is not None, "assign: queued_at continua preenchido (NAO fica NULL)")
 check(prh is None, "assign: primeira_resposta_humana_at continua NULL (ainda nao foi atendida)")
 

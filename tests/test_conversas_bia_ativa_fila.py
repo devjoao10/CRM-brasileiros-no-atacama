@@ -40,6 +40,10 @@ Prova que (tudo via HTTP real, TestClient sobre SQLite):
  10. Contrato de `aplicar_estado_humano`: o padrao desliga (a Bia degradada do
      webhook depende disso); `desligar_bia=False` preserva e nunca religa.
  11. Invariante D4: bia e todos sao disjuntas e juntas cobrem toda conversa aberta.
+ 12. "Desativar Bot" (`PUT {"is_bot_active": false}`) nao depende de o DONO ATUAL estar ativo:
+     um dono desativado nao pode travar o botao (200, Bia desligada, dono e queued_at
+     preservados). So o atendente NOMEADO no payload e validado como ativo (404 se nao for).
+     E o conversas.js so mostra o toast de sucesso e recarrega a conversa quando o PUT deu certo.
 
 Roda standalone:  python tests/test_conversas_bia_ativa_fila.py
 """
@@ -112,6 +116,10 @@ for uid, nome, email in ((1, "Julia", "julia@local"), (2, "Joao", "joao@local"))
     if not _db.query(User).filter(User.id == uid).first():
         _db.add(User(id=uid, nome=nome, email=email,
                      hashed_password="x", role="user", is_active=True))
+# Usuario 3: vendedora DESATIVADA depois de receber conversas (secao 12 — o dono atual inativo).
+if not _db.query(User).filter(User.id == 3).first():
+    _db.add(User(id=3, nome="Maria", email="maria@local",
+                 hashed_password="x", role="USER", is_active=False))
 _db.commit()
 _db.close()
 
@@ -398,6 +406,47 @@ _db.close()
 ids_bia, ids_todos = ids_da_aba("bia"), ids_da_aba("todos")
 check(ids_bia.isdisjoint(ids_todos), "nenhuma conversa aparece em bia E em todos")
 check(ids_bia | ids_todos == abertas, "bia + todos cobrem todas as conversas abertas")
+
+# ============ 12. 'DESATIVAR BOT' COM O DONO ATUAL DESATIVADO ============
+print("12 — 'Desativar Bot' nao falha porque o dono atual foi desativado")
+# O dono (usuario 3) foi desativado depois de receber a conversa. O botao so desliga a Bia: nao
+# nomeia atendente nenhum, entao nao ha ninguem a validar.
+c12 = nova_conversa("5511900070015", atendente_id=3, queued_at=dt.datetime.now(dt.timezone.utc))
+e12 = estado(c12)
+check(e12["bot"] is True and e12["atendente"] == 3 and e12["queued_at"] is not None,
+      "pre-condicao: na fila com a Bia ligada e dono 3 (usuario inativo)")
+r = put(c12, {"is_bot_active": False})
+check(r.status_code == 200, f"PUT is_bot_active=false com dono inativo responde 200 (got {r.status_code})")
+e = estado(c12)
+check(e["bot"] is False, "dono inativo: a Bia foi desligada")
+check(e["atendente"] == 3, "dono inativo: o dono continua o mesmo (nada foi reatribuido)")
+check(e["queued_at"] == e12["queued_at"], "dono inativo: queued_at preservado")
+check(abas(c12) == {"fila", "todos"}, f"dono inativo: a conversa continua em fila e todos (got {sorted(abas(c12))})")
+
+# A validacao continua valendo quando o payload NOMEIA o atendente.
+r = put(c12, {"atendente_id": 3})
+check(r.status_code == 404, f"nomear um atendente inativo no payload -> 404 (got {r.status_code})")
+r = put(c12, {"is_bot_active": False, "atendente_id": 3})
+check(r.status_code == 404, f"desligar a Bia nomeando um atendente inativo -> 404 (got {r.status_code})")
+check(estado(c12)["atendente"] == 3, "o 404 nao altera a conversa")
+r = put(c12, {"atendente_id": 2})
+check(r.status_code == 200 and estado(c12)["atendente"] == 2,
+      f"nomear um atendente ativo continua funcionando (got {r.status_code})")
+
+# JS do botao (guard estatico, no estilo da suite): antes, o toast de sucesso saia mesmo com 404/500.
+js = (CONVERSAS_DIR / "static" / "js" / "conversas.js").read_text(encoding="utf-8")
+b_ini = js.find("document.getElementById('btnToggleBot').addEventListener(")
+b_fim = js.find("// Mobile back", b_ini)
+botao = js[b_ini:b_fim]
+check(b_ini != -1 and b_fim > b_ini, "handler do botao 'Desativar Bot' localizado no conversas.js")
+check("const resp = await Auth.apiRequest(" in botao and "resp && resp.ok" in botao,
+      "botao: le a resposta do PUT e testa resp.ok")
+check(0 <= botao.find("resp && resp.ok") < botao.find("showToast(newValue ? 'Bot ativado' : 'Bot desativado')"),
+      "botao: o toast de sucesso so aparece DEPOIS de checar resp.ok")
+check(0 <= botao.find("resp && resp.ok") < botao.find("loadChat("),
+      "botao: a conversa so e recarregada (UI atualizada) no sucesso")
+check("else {" in botao and "e.detail" in botao and botao.count("showToast(") == 2,
+      "botao: no erro mostra o detail do backend (um toast de sucesso e um de erro)")
 
 main.app.dependency_overrides.clear()
 

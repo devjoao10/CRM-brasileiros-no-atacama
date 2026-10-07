@@ -12,6 +12,10 @@ Fixa as decisoes D6, D7 e D8 da rodada CONV-BIA-FILA-01 / CONV-EXPEDIENTE-01:
   D8  `@NOMEATENDENTE` / `@EMAILATENDENTE` resolvem para o atendente da conversa;
       sem atendente a frase continua insoluvel e e PULADA, sem promover outra.
 
+Fecho da rodada final: o cooldown so conta o MESMO texto (mensagem da vendedora, com outro texto,
+nao bloqueia o aviso) e uma corrida de inbounds da mesma conversa (o aviso so e gravado DEPOIS do
+await da Meta) gera um unico envio — a guarda em memoria e liberada mesmo quando o envio falha.
+
 Webhook real (POST /webhook), Meta e n8n neutralizados, SEM patch de relogio:
 "aberto/fechado agora" vem das 7 linhas de BusinessHours — todas fechadas = fora
 do horario; todas 00:00-23:59 = dentro. Escrever os 7 dias (e nao so o de hoje)
@@ -20,6 +24,7 @@ do aviso anterior no banco.
 
 Roda standalone:  python tests/test_conversas_fora_expediente.py
 """
+import asyncio
 import logging
 import os
 import pathlib
@@ -47,6 +52,7 @@ os.environ["N8N_AGENT_ENABLED"] = "true"
 sys.path.insert(0, str(CONVERSAS_DIR))
 
 from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import event  # noqa: E402
 
 import app.main as main  # noqa: E402
 import app.routers.webhook as wh  # noqa: E402
@@ -424,6 +430,31 @@ _inbound(N8B)
 check(sent == [], f"sem atendente a frase e PULADA e NADA e promovido no lugar (got {sent})")
 check(_outbound(cid8b) == [], f"nada persistido (got {_outbound(cid8b)})")
 
+# O atendente entra so com nome e email: a linha inteira de `users` traz o hash da senha e a
+# API key, que nao tem por que passar pela memoria do webhook so para preencher uma variavel.
+consultas = []
+
+
+def _registra_sql(conn, cursor, statement, parameters, context, executemany):
+    consultas.append(statement)
+
+
+db_var = SessionLocal()
+conv_var = db_var.query(Conversation).filter(Conversation.id == cid8a).first()
+event.listen(engine, "before_cursor_execute", _registra_sql)
+try:
+    configurada, texto_var = wh._resolve_auto_reply("out_of_hours", db_var, conv_var)
+finally:
+    event.remove(engine, "before_cursor_execute", _registra_sql)
+    db_var.close()
+check(configurada is True and texto_var == esperado, f"o texto resolve igual com a consulta enxuta (got {texto_var!r})")
+consultas_users = [q for q in consultas if "FROM users" in q]
+check(len(consultas_users) == 1, f"o atendente e lido com UMA consulta a users (got {len(consultas_users)})")
+check(all("hashed_password" not in q and "api_key" not in q for q in consultas_users),
+      "a consulta nao traz hashed_password nem api_key")
+check(all("users.nome" in q and "users.email" in q for q in consultas_users),
+      "a consulta traz nome e email, que e o que as variaveis usam")
+
 
 # =====================================================================
 # Prioridade preservada: aviso barrado pelo cooldown NAO promove waiting/greeting
@@ -481,6 +512,107 @@ check(all(re.search(rf"\b{cid11b}\b", m) for m in ooh),
       f"o log identifica a conversa pelo id {cid11b} (got {ooh!r})")
 check(all(N11B not in m for m in ooh), f"o log nao carrega o telefone (got {ooh!r})")
 _agente(True)
+
+
+# =====================================================================
+# D7 — a clausula "MESMO texto": a mensagem da vendedora nao e aviso
+# =====================================================================
+print("\nD7 — mensagem recente da vendedora (outro texto) NAO conta como aviso")
+
+_horario(False)
+_frases(out_of_hours=AVISO)
+_agente(True)
+N12 = "5511911000015"
+MSG_VENDEDORA = "Oi, aqui e a Julia"
+cid12 = _conversa(N12, bia=False, atendente_id=JULIA_ID)
+s = SessionLocal()
+s.add(Message(conversation_id=cid12, direction="outbound", content=MSG_VENDEDORA, msg_type="text",
+              status="sent", created_at=datetime.now(tz.utc) - timedelta(hours=1)))
+s.commit()
+s.close()
+_inbound(N12, "ola, voces atendem hoje?")
+check(sent == [AVISO],
+      f"Bia desligada + atendente + fora do horario, com uma mensagem da vendedora de 1h atras: o aviso E enviado (got {sent})")
+check(_outbound(cid12) == [(MSG_VENDEDORA, "sent"), (AVISO, "sent")],
+      f"a mensagem da vendedora e o aviso coexistem no historico (got {_outbound(cid12)})")
+_inbound(N12, "alguem?")
+check(sent == [], f"o aviso, esse sim, passa a bloquear o seguinte (got {sent})")
+
+
+# =====================================================================
+# D7 — corrida: o aviso so e GRAVADO depois do await da Meta
+# =====================================================================
+print("\nD7 — 3 inbounds concorrentes da mesma conversa (Meta lenta): exatamente 1 aviso")
+
+
+async def _envio_lento(to, message, db=None):
+    # A Meta demora: o aviso so e persistido DEPOIS deste await — e a janela da corrida.
+    sent.append(message)
+    await asyncio.sleep(0.05)
+    _wamid["n"] += 1
+    return {"messages": [{"id": f"wamid.OOH{_wamid['n']}"}]}
+
+
+async def _envio_explode(to, message, db=None):
+    raise RuntimeError("falha simulada de rede")
+
+
+async def _chamadas_juntas(cid, n):
+    """`n` execucoes de `_send_auto_reply_if_needed` da MESMA conversa, cada uma com a sua sessao."""
+    sessoes = [SessionLocal() for _ in range(n)]
+    try:
+        conversas = [sessao.query(Conversation).filter(Conversation.id == cid).first() for sessao in sessoes]
+        await asyncio.gather(*(
+            wh._send_auto_reply_if_needed(conversa, False, sessao, bia_vai_responder=False)
+            for conversa, sessao in zip(conversas, sessoes)
+        ))
+    finally:
+        for sessao in sessoes:
+            sessao.close()
+
+
+_horario(False)
+_frases(out_of_hours=AVISO)
+N13 = "5511911000016"
+cid13 = _conversa(N13, bia=False, atendente_id=JULIA_ID)
+sent.clear()
+captura = _CapturaLog()
+nivel_anterior = wh.logger.level
+wh.logger.addHandler(captura)
+wh.logger.setLevel(logging.INFO)
+wh.whatsapp.send_text_message = _envio_lento
+try:
+    asyncio.run(_chamadas_juntas(cid13, 3))
+finally:
+    wh.whatsapp.send_text_message = _fake_send
+    wh.logger.removeHandler(captura)
+    wh.logger.setLevel(nivel_anterior)
+check(sent == [AVISO], f"3 chamadas concorrentes enviam UM so aviso (got {len(sent)}: {sent})")
+check(_outbound(cid13) == [(AVISO, "sent")], f"e UM so outbound e gravado (got {_outbound(cid13)})")
+check(wh._avisos_fora_do_expediente_em_voo == set(), "a guarda em memoria e liberada ao final")
+pulos = [m for nivel, m in captura.registros if nivel == "INFO" and "nao enviado" in m]
+check(len(pulos) == 2 and all(re.search(rf"\b{cid13}\b", m) for m in pulos) and all(N13 not in m for m in pulos),
+      f"as 2 que cederam logam o skip em INFO com o id da conversa e sem o telefone (got {pulos!r})")
+
+# Um envio que EXPLODE tambem libera a guarda: se ela vazasse, a conversa ficaria sem aviso ate
+# o processo reiniciar. O erro continua subindo (o `finally` so garante a limpeza).
+N14 = "5511911000017"
+cid14 = _conversa(N14, bia=False, atendente_id=JULIA_ID)
+wh.whatsapp.send_text_message = _envio_explode
+explodiu = False
+try:
+    asyncio.run(_chamadas_juntas(cid14, 1))
+except RuntimeError:
+    explodiu = True
+finally:
+    wh.whatsapp.send_text_message = _fake_send
+check(explodiu, "o erro do envio continua subindo para o chamador")
+check(wh._avisos_fora_do_expediente_em_voo == set(), "envio que explode libera a guarda")
+check(_outbound(cid14) == [], "e nada foi gravado")
+sent.clear()
+asyncio.run(_chamadas_juntas(cid14, 1))
+check(sent == [AVISO] and _outbound(cid14) == [(AVISO, "sent")],
+      f"a tentativa seguinte envia o aviso normalmente (got {sent}, {_outbound(cid14)})")
 
 
 # ─── Resultado ──────────────────────────────────────────────────────────

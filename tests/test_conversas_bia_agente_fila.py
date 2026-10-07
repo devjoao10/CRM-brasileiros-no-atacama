@@ -18,7 +18,10 @@ Prova que:
      e a posicao na fila sao preservados, e a Bia e desligada (D2);
   5. o payload enviado ao agente carrega `na_fila_humana` (True com `queued_at`,
      False sem);
-  6. o mesmo descarte vale pelo caminho real do debounce.
+  6. o mesmo descarte vale pelo caminho real do debounce;
+  7. o descarte vale tambem quando a conversa e ENCERRADA (por outra sessao) durante a
+     chamada — nem a resposta nem o fallback saem, nenhum campo muda — e o pre-check do
+     debounce nem chama o agente para uma conversa ja encerrada.
 
 n8n e Meta mockados (`_fetch_agent_parts` substituido por um fake assincrono);
 nenhuma rede, nenhuma credencial.
@@ -168,6 +171,17 @@ def _vendedora_desliga_bia(cid):
     try:
         s.query(Conversation).filter(Conversation.id == cid).update(
             {Conversation.is_bot_active: False})
+        s.commit()
+    finally:
+        s.close()
+
+
+def _encerra_conversa(cid):
+    """OUTRA sessao encerra a conversa (PUT status='encerrada') no meio da chamada ao agente."""
+    s = SessionLocal()
+    try:
+        s.query(Conversation).filter(Conversation.id == cid).update(
+            {Conversation.status: "encerrada"})
         s.commit()
     finally:
         s.close()
@@ -338,6 +352,71 @@ check(enviados[antes:] == [], f"nada foi a Meta (got {enviados[antes:]})")
 check(_outbound(cid) == [], f"nada persistido (got {_outbound(cid)})")
 check(est["bia"] is False and est["atendente"] == ATENDENTE and est["queued_at"] == ENTROU_NA_FILA,
       f"estado operacional intacto (got {est})")
+check(not wh._agent_locks[cid].locked(), "o lock da conversa foi liberado")
+
+
+# =====================================================================
+# 7. Conversa ENCERRADA durante a chamada -> o mesmo descarte
+# =====================================================================
+print("\n7 — a conversa e encerrada durante a chamada: a resposta e descartada")
+
+cid = _conversa(bia=True, atendente_id=ATENDENTE, queued_at=ENTROU_NA_FILA)
+captura = _CapturaLog()
+wh.logger.addHandler(captura)
+_nivel = wh.logger.level
+wh.logger.setLevel(logging.INFO)
+try:
+    chamadas, textos = _roda(cid, durante=_encerra_conversa)
+finally:
+    wh.logger.removeHandler(captura)
+    wh.logger.setLevel(_nivel)
+
+est = _estado(cid)
+check(chamadas == 1, f"o agente FOI chamado (got {chamadas})")
+check(textos == [], f"NADA foi a Meta: a Bia nao fala numa conversa encerrada (got {textos})")
+check(_outbound(cid) == [], f"nenhuma outbound persistida (got {_outbound(cid)})")
+check(est["status"] == "encerrada", f"a conversa continua encerrada (got {est['status']})")
+check(est["bia"] is True and est["atendente"] == ATENDENTE and est["queued_at"] == ENTROU_NA_FILA
+      and est["primeira_resposta"] is None, f"nenhum campo operacional foi tocado (got {est})")
+check(est["ultimo_msg"] == "preview antigo" and est["unread"] == 3,
+      f"preview e unread intactos (got {est['ultimo_msg']!r}, {est['unread']})")
+descartes = [m for nivel, m in captura.registros if nivel == "INFO" and "descartada" in m]
+check(len(descartes) == 1 and re.search(rf"\b{cid}\b", descartes[0]) is not None,
+      f"o descarte e registrado em INFO com o id da conversa (got {captura.registros!r})")
+
+# resposta DEGRADADA: nem o fallback sai, e o ramo que manda a conversa para a fila nao roda
+cid = _conversa(bia=True, atendente_id=None, queued_at=None)
+chamadas, textos = _roda(cid, durante=_encerra_conversa, resultado=([], False))
+est = _estado(cid)
+check(textos == [], f"nem o FALLBACK vai ao cliente de uma conversa encerrada (got {textos})")
+check(_outbound(cid) == [], f"nenhuma outbound persistida (got {_outbound(cid)})")
+check(est["status"] == "encerrada" and est["bia"] is True and est["queued_at"] is None
+      and est["atendente"] is None,
+      f"o ramo degradado NAO rodou: a conversa nao entrou na fila nem perdeu a Bia (got {est})")
+
+# pre-check do debounce: conversa JA encerrada quando o lote chega a vez -> o agente nem e chamado
+_deb_orig = wh.AGENT_DEBOUNCE_SECONDS
+wh.AGENT_DEBOUNCE_SECONDS = 0
+cid = _conversa(bia=True, atendente_id=ATENDENTE, queued_at=ENTROU_NA_FILA)
+s = SessionLocal()
+s.add(Message(conversation_id=cid, direction="inbound", content="oi, ainda ai?",
+              msg_type="text", status="received"))
+s.commit()
+s.close()
+_encerra_conversa(cid)
+agente["chamadas"] = 0
+agente["durante"] = None
+agente["resultado"] = (list(PARTES), False)
+antes = len(enviados)
+asyncio.run(wh._debounce_then_forward(cid, None))
+wh.AGENT_DEBOUNCE_SECONDS = _deb_orig
+
+est = _estado(cid)
+check(agente["chamadas"] == 0, f"conversa encerrada antes do lote: o agente nem e chamado (got {agente['chamadas']})")
+check(enviados[antes:] == [] and _outbound(cid) == [],
+      f"nada enviado nem persistido (got {enviados[antes:]}, {_outbound(cid)})")
+check(est["status"] == "encerrada" and est["bia"] is True and est["atendente"] == ATENDENTE
+      and est["queued_at"] == ENTROU_NA_FILA, f"estado intacto (got {est})")
 check(not wh._agent_locks[cid].locked(), "o lock da conversa foi liberado")
 
 
