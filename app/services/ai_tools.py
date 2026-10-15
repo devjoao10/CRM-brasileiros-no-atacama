@@ -862,6 +862,25 @@ def _safe_document_target(filename: str, extension: str):
     return safe_filename, str(filepath)
 
 
+# SEC-XLSX-01: cabeçalho e dados da planilha vêm do LLM, que pode ser conduzido
+# por texto de lead escrito por terceiros. O openpyxl marca string que começa com
+# "=" como fórmula (data_type "f"), então `=HYPERLINK(...)` ou `=WEBSERVICE(...)`
+# virava fórmula viva no arquivo que o operador baixa. Forçar "s" grava a célula
+# como texto (inlineStr) com o valor intacto; XLSX tem tipo de célula, então não
+# precisa do prefixo `'` do export CSV da Segmentação (SEC-CSV-01). Nas que
+# começam com = + - @, `quotePrefix` (o `'` invisível do Excel) impede que uma
+# edição do operador (F2+Enter) reative a fórmula.
+_FORMULA_PREFIXES = ("=", "+", "-", "@")
+
+
+def _write_text_cell(ws, row: int, column: int, value: str):
+    """Grava `value` como texto literal, nunca fórmula, e devolve a célula."""
+    cell = ws.cell(row=row, column=column, value=value)
+    cell.data_type = "s"
+    cell.quotePrefix = value.startswith(_FORMULA_PREFIXES)
+    return cell
+
+
 def generate_excel_document(filename: str, sheet_name: str, headers: str, rows: str) -> str:
     """
     Gera um arquivo Excel (.xlsx) com os dados fornecidos e retorna o link para download.
@@ -897,14 +916,7 @@ def generate_excel_document(filename: str, sheet_name: str, headers: str, rows: 
         )
 
         for col_idx, header in enumerate(header_list, 1):
-            cell = ws.cell(row=1, column=col_idx, value=header)
-            # SEC-XLSX-01: cabeçalho e dados vêm do LLM, que pode ser conduzido por
-            # texto de lead escrito por terceiros. O openpyxl marca toda string que
-            # começa com "=" como fórmula (data_type "f"), então `=HYPERLINK(...)` ou
-            # `=WEBSERVICE(...)` virava fórmula viva no arquivo que o operador baixa.
-            # Forçar "s" grava a célula como texto (inlineStr) com o valor intacto;
-            # XLSX tem tipo de célula, então não precisa do prefixo `'` do CSV (SEC-CSV-01).
-            cell.data_type = "s"
+            cell = _write_text_cell(ws, 1, col_idx, header)
             cell.font = header_font
             cell.fill = header_fill
             cell.alignment = Alignment(horizontal='center')
@@ -916,8 +928,7 @@ def generate_excel_document(filename: str, sheet_name: str, headers: str, rows: 
             for row_idx, row_data in enumerate(row_list, 2):
                 cols = [c.strip() for c in row_data.split("|")]
                 for col_idx, value in enumerate(cols, 1):
-                    cell = ws.cell(row=row_idx, column=col_idx, value=value)
-                    cell.data_type = "s"  # SEC-XLSX-01: texto, nunca fórmula (ver cabeçalho)
+                    cell = _write_text_cell(ws, row_idx, col_idx, value)
                     cell.border = thin_border
 
         # Auto-ajustar largura das colunas
