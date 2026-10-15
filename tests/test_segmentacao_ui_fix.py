@@ -1,5 +1,5 @@
 """
-AUDIT-2026-08-WG — regressao de dois bugs da tela de Segmentacao.
+AUDIT-2026-08-WG + SEG-UI-01 — regressao de tres bugs da tela de Segmentacao.
 
 BUG 1: viewSegment() adicionava .show/.open ao overlay/painel ANTES dos dois
 fetches resolverem. Em qualquer falha (401 -> Auth.apiRequest devolve r nulo
@@ -18,16 +18,26 @@ bater com os filtros selecionados. Prova que (a) nenhum onchange chama
 previewCount() direto e (b) existe uma guarda de sequencia em
 previewCount() que descarta respostas obsoletas.
 
-So faz assercoes estaticas sobre o source do template — nao sobe o app, nao
-toca rede/banco.
+BUG 3 (SEG-UI-01): mesmo no caminho de SUCESSO de viewSegment() o painel de
+leads nunca aparecia — desde 9afa7ea o .detail-panel declarava
+z-index:calc(var(--z-modal)+1). Em calc() o "+" PRECISA de espaco dos dois
+lados; sem ele a declaracao e invalida, o z-index computado vira auto e o
+painel abre ATRAS do proprio overlay borrado (z-index var(--z-modal)): a tela
+inteira fica desfocada e o primeiro clique cai no overlay, que fecha tudo.
+Prova que o z-index do painel e valido e fica acima do overlay.
+
+So faz assercoes estaticas sobre o source do template (e o --z-modal de
+static/css/variables.css) — nao sobe o app, nao toca rede/banco.
 
 Roda standalone:  python tests/test_segmentacao_ui_fix.py
 """
 import pathlib
+import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 TEMPLATE = ROOT / "templates" / "segmentacao.html"
+VARIABLES_CSS = ROOT / "static" / "css" / "variables.css"
 
 failures = []
 
@@ -102,6 +112,44 @@ check(preview_body.count("!==") >= 2,
       "mesma guarda de sequencia do listRequestSeq em conversas/static/js/conversas.js")
 check("return" in preview_body,
       "a guarda de sequencia efetivamente interrompe o fluxo (return) quando a resposta esta obsoleta")
+
+
+# ============ BUG 3 — painel de leads acima do overlay borrado ============
+print("\nSegmentacao — BUG 3: painel de leads acima do overlay borrado (SEG-UI-01)")
+
+m_z = re.search(r"--z-modal:\s*(\d+)\s*;", VARIABLES_CSS.read_text(encoding="utf-8"))
+check(m_z is not None, "--z-modal e um inteiro literal em static/css/variables.css")
+z_modal = int(m_z.group(1)) if m_z else None
+
+
+def z_index_computado(seletor):
+    """z-index da regra `seletor{...}` como o navegador computa, ou None quando
+    a declaracao e invalida (o navegador cai para auto). Resolve so inteiro,
+    var(--z-modal) e calc(A + B)/calc(A - B); qualquer outra forma devolve None
+    e o check falha fechado."""
+    regra = re.search(r"(?m)^\s*" + re.escape(seletor) + r"\s*\{([^}]*)\}", html)
+    check(regra is not None, f"regra CSS encontrada: {seletor}")
+    decl = re.search(r"z-index:([^;]+)", regra.group(1)) if regra else None
+    if not decl:
+        return None
+    valor = decl.group(1).strip().replace("var(--z-modal)", str(z_modal))
+    if valor.isdigit():
+        return int(valor)
+    # Em calc() o "+" e o "-" exigem espaco dos dois lados: calc(300+1) e invalido.
+    conta = re.fullmatch(r"calc\(\s*(\d+)\s+([+-])\s+(\d+)\s*\)", valor)
+    if not conta:
+        return None
+    a, op, b = int(conta.group(1)), conta.group(2), int(conta.group(3))
+    return a + b if op == "+" else a - b
+
+
+z_overlay = z_index_computado(".detail-panel-overlay")
+z_painel = z_index_computado(".detail-panel")
+check(z_painel is not None,
+      "z-index do .detail-panel e valido (se invalido, o navegador cai para auto "
+      "e o painel abre ATRAS do overlay borrado)")
+check(z_painel is not None and z_overlay is not None and z_painel > z_overlay,
+      f"painel ({z_painel}) acima do overlay borrado ({z_overlay}): os leads ficam visiveis e clicaveis")
 
 
 # --- Resultado ---
