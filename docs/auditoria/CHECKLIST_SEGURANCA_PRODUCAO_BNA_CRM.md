@@ -15,6 +15,7 @@ Estado: ✅ ok · ⚠️ parcial/atenção · ❌ pendente (WP)
 - ✅ **SEC-XSS-01 corrigido**: chat IA sanitizado com DOMPurify (user + markdown).
 - ✅ **SEC-XSS-02 corrigido**: `esc()`/`escapeHtml()` em 10 templates passam a escapar `'` e `"` (fecha quebra de literal em `onclick`).
 - ❌ **SEC-XSS-03**: `marked.min.js` sem versão fixa + sem SRI — WP-SEC-02.
+- ✅ **SEC-XSS-04 corrigido**: `email`/`whatsapp` (painel de leads da Segmentação), `dias_por_destino` (editor de lead) e cor da tag (chips de filtro) passam por `esc()`; regressão em `tests/test_xss_crud_templates.py` (seção 5).
 - ❌ **SEC-CSP-01**: sem `Content-Security-Policy` (amplifica XSS) — WP-SEC-02 (cuidado com inline JS).
 - ✅ Jinja2 autoescape ativo no SSR.
 
