@@ -447,6 +447,10 @@
 
         const destColors = { 'Atacama': '#e85d04', 'Uyuni': '#7b2cbf', 'Santiago': '#2b6cb0' };
 
+        // SEC-XSS-04: dias_por_destino tambem e JSON livre (Optional[dict], sem
+        // tipo nos valores) gravado pelo n8n a partir do WhatsApp e do formulario
+        // do site. savedVal ia cru para value="": a mesma injecao que a F5 fechou
+        // em renderDatasDestinos, alcancavel por /leads e pelo Pipeline.
         inputsDiv.innerHTML = destinos.map(dest => {
             const color = destColors[dest] || '#6c757d';
             const savedVal = _currentDiasDestino[dest] || '';
@@ -454,7 +458,7 @@
                 <div style="display:flex;align-items:center;gap:8px;background:#f8f9fa;border:1px solid #e2e8f0;border-left:4px solid ${color};border-radius:8px;padding:8px 14px;min-width:160px;">
                     <strong style="font-size:0.85em;color:${color};white-space:nowrap;">${dest}</strong>
                     <input type="number" class="form-input dias-destino-input" data-destino="${dest}" 
-                        value="${savedVal}" placeholder="dias" min="1" 
+                        value="${esc(savedVal)}" placeholder="dias" min="1"
                         style="width:70px;text-align:center;font-size:0.9em;"
                         oninput="onDiasDestinoChange()">
                     <span style="font-size:0.8em;color:#64748b;">dias</span>
