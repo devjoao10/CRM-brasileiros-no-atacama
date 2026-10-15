@@ -660,11 +660,23 @@ async function exportLeads() {
     if (!leads.length) { alert('Nenhum lead para exportar.'); return; }
     const h = ['ID','Nome','Email','WhatsApp','Destinos','Tags','Chegada','Partida'];
     const rows = leads.map(l => [l.id,l.nome,l.email||'',l.whatsapp||'',(l.destinos||[]).join('; '),(l.tags||[]).map(t=>t.nome).join('; '),l.data_chegada||'',l.data_partida||'']);
-    const csv = [h,...rows].map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const csv = [h,...rows].map(r=>r.map(celulaCsv).join(',')).join('\n');
     const blob = new Blob(['﻿'+csv], {type:'text/csv;charset=utf-8;'});
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href=url; a.download=`segmento_${currentDetailSegId}_${new Date().toISOString().slice(0,10)}.csv`;
     a.click(); URL.revokeObjectURL(url);
+}
+
+// SEC-CSV-01: aspas nao impedem a planilha de avaliar formula. Celula que comeca
+// com = + - @ TAB ou CR vira formula (HYPERLINK/WEBSERVICE exfiltram dados) e
+// nome, email e tags vem de terceiro (site e LLM do WhatsApp, via n8n): ganha um
+// ' na frente. Excecao: um + ou - inicial seguido so de digitos, espacos e - ( ) .
+// (telefone, ex.: +55 11 98765-4322) - sem letra nao ha funcao a chamar, e o
+// prefixo estragaria o WhatsApp.
+function celulaCsv(v) {
+    let s = String(v);
+    if (/^[=+\-@\t\r]/.test(s) && !/^[+\-]?[\d\s().\-]+$/.test(s)) s = "'" + s;
+    return `"${s.replace(/"/g,'""')}"`;
 }
 
 function getDestinosHtml(destinos) {
