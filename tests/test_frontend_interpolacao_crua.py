@@ -276,7 +276,7 @@ RE_NOME_NUMERICO = re.compile(
 RE_ID_DE_ETAPA = re.compile(r"(?:stage|etapa)_?id$", re.I)
 RE_TAG = re.compile(r"<[A-Za-z!/]")
 RE_SINK_ATRIB = re.compile(r"\.\s*(?:innerHTML|outerHTML)\s*\+?=(?![=>])")
-RE_SINK_CHAMADA = re.compile(r"\.\s*(insertAdjacentHTML)\s*\(|\bdocument\s*\.\s*writeln?\s*\(")
+RE_SINK_CHAMADA = re.compile(r"\.\s*(insertAdjacentHTML)\s*\(|\bdocument\s*\.\s*write(?:ln)?\s*\(")
 RE_FUNCTION = re.compile(r"\bfunction\b\s*\*?\s*((?:[^\W\d]|\$)[\w$]*)?\s*\(")
 RE_NOME_ATRIBUIDO = re.compile(r"\b(?:const|let|var)\s+((?:[^\W\d]|\$)[\w$]*)\s*=\s*(?:async\s+)?$")
 RE_DECL = re.compile(r"\b(const|let|var)\b")
@@ -1227,6 +1227,64 @@ ACUSA = [
      "el.innerHTML = `<i>${x.nome.toLocaleString()}</i>`;",
      [("x.nome.toLocaleString()", "x.nome.toLocaleString()")]),
     ("aspa dentro de regex nao descarrila o lexer", ESC_COM_REGEX, [("l.nome", "l.nome")]),
+    # -- um caso por sink, com template SEM tag: so a raiz do sink o torna markup.
+    # RE_SINK_ATRIB, o `\+?` de `.innerHTML +=`
+    ("sink innerHTML +=", "el.innerHTML += `${l.nome}`;", [("l.nome", "l.nome")]),
+    # RE_SINK_ATRIB, a alternativa `outerHTML`
+    ("sink outerHTML =", "el.outerHTML = `${l.nome}`;", [("l.nome", "l.nome")]),
+    # RE_SINK_CHAMADA, `insertAdjacentHTML(pos, html)`: o HTML e o 2o argumento
+    ("sink insertAdjacentHTML",
+     "el.insertAdjacentHTML('beforeend', `${l.nome}`);", [("l.nome", "l.nome")]),
+    # RE_SINK_CHAMADA, `document.write(`: o `writeln?` antigo nao casava `write(`
+    ("sink document.write", "document.write(`${l.nome}`);", [("l.nome", "l.nome")]),
+    # RE_SINK_CHAMADA, o `(?:ln)?` do mesmo token
+    ("sink document.writeln", "document.writeln(`${l.nome}`);", [("l.nome", "l.nome")]),
+    # -- um caso por ramo permissivo do classificador: o que e impresso tem que ser julgado.
+    # `a && b`: so o b pode carregar markup (o falsy de a imprime false/0/''), entao julga o b
+    ("a && b: o b e julgado", "el.innerHTML = `<td>${c && y.nome}</td>`;",
+     [("c && y.nome", "y.nome")]),
+    # `a || b`: qualquer operando pode ser impresso, o de depois do || tambem
+    ("esc(a) || b: o b e julgado", "el.innerHTML = `<td>${esc(a) || y.nome}</td>`;",
+     [("esc(a) || y.nome", "y.nome")]),
+    # `a ?? b`: idem; esc(a) na frente isola o b (um `a` solto ja seria cru por si so)
+    ("esc(a) ?? b: o b e julgado", "el.innerHTML = `<td>${esc(a) ?? y.nome}</td>`;",
+     [("esc(a) ?? y.nome", "y.nome")]),
+    # ternario `c ? a : b`: o 2o ramo e julgado
+    ("ternario: o 2o ramo e julgado", "el.innerHTML = `<td>${c ? 'a' : y.nome}</td>`;",
+     [("c ? 'a' : y.nome", "y.nome")]),
+    # ternario `c ? a : b`: o 1o ramo e julgado
+    ("ternario: o 1o ramo e julgado", "el.innerHTML = `<td>${c ? y.nome : 'a'}</td>`;",
+     [("c ? y.nome : 'a'", "y.nome")]),
+    # `X.map(cb)`: o veredito vem do que o callback devolve (aqui o campo cru, sem template)
+    (".map(cb): o retorno do callback e julgado",
+     "el.innerHTML = `<td>${rows.map(r => r.nome).join(', ')}</td>`;",
+     [("rows.map(r => r.nome).join(', ')", "r.nome")]),
+    # `X.join(sep)`: o receptor (o array) e julgado, nao so o separador
+    (".join(sep): o receptor e julgado", "el.innerHTML = `<td>${y.tags.join(', ')}</td>`;",
+     [("y.tags.join(', ')", "y.tags")]),
+    # METODOS_PRESERVAM: charAt/toUpperCase devolvem o texto do receptor (equipes.html:745)
+    ("charAt/toUpperCase: o receptor e julgado",
+     "el.innerHTML = `<td>${m.nome.charAt(0).toUpperCase()}</td>`;",
+     [("m.nome.charAt(0).toUpperCase()", "m.nome")]),
+    # `NOME(...)` do arquivo: o veredito vem do `return` da funcao (aqui, o parametro)
+    ("funcao do arquivo: o return e julgado",
+     "function fmt(x) { return x; }\nel.innerHTML = `<td>${fmt(y.nome)}</td>`;",
+     [("fmt(y.nome)", "x")]),
+    # _procura_escrita: `T[k] = ...` tira o status de constante da tabela
+    ("tabela const escrita (T[k] = ...) nao e constante",
+     "const T = { a: 'x' };\nT[k] = y.nome;\nel.innerHTML = `<td>${T[k]}</td>`;",
+     [("T[k]", "T[k]")]),
+    # _procura_escrita: `T.push(...)` (outro caminho) tambem
+    ("tabela const escrita (T.push) nao e constante",
+     "const T = ['a'];\nT.push(y.nome);\nel.innerHTML = `<td>${T[0]}</td>`;",
+     [("T[0]", "T[0]")]),
+    # _literal_puro: tabela com valor nao literal nao e constante do codigo
+    ("tabela const com valor nao literal nao e constante",
+     "const T = { a: y.nome };\nel.innerHTML = `<td>${T.a}</td>`;", [("T.a", "T.a")]),
+    # esc(...) so cobre o valor quando e a expressao INTEIRA: esc(a).concat(b) deixa o b
+    ("esc(a).concat(b): esc(...) so vale sozinho",
+     "el.innerHTML = `<td>${esc(a).concat(b)}</td>`;",
+     [("esc(a).concat(b)", "esc(a).concat(b)")]),
 ]
 for nome, codigo, esperado in ACUSA:
     obtido = crus(codigo)
