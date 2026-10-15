@@ -33,6 +33,7 @@ _(nenhum achado de severidade crítica não-mitigada no estado local atual)_
 |---|---|---|---|
 | **SEC-CSP-01** | Segurança | sem `Content-Security-Policy` em `main.py` (FRONT-06) | WP-SEC-02 (não aplicável agora: muito inline JS quebraria; exige nonces) |
 | **SEC-XSS-03** | Segurança | `ai.html` `marked.min.js` sem versão fixa nem SRI (FRONT-05) | ⚠️ **PARCIAL**: versão fixada (`marked@12.0.0`); SRI pendente (hash em CI) |
+| **SEC-CSV-01** | Segurança/FE | "Exportar CSV" da Segmentação (`exportLeads`) só envolvia as células em aspas: valor começando com `=`, `+`, `-`, `@`, TAB ou CR (nome/email/tags vindos do n8n) virava fórmula no Excel/Sheets | ✅ **CORRIGIDO** (prefixo `'`, exceto telefone/número puro; `tests/test_segmentacao_csv_formula.py`) |
 | **DEVOPS-01** | DevOps | `docker-compose.yml` CRM publicava `8000:8000` no host (bypass do TLS) | ✅ **CORRIGIDO** (`expose` só + healthcheck; valida no deploy) |
 | **DATA-02** | Banco | migrations inline no `lifespan` (sem Alembic, RM-12) | WP-DATA-02 |
 | **ARCH-02** | Arquitetura | `_build_lead_response`/`_json_list_contains` duplicados em `leads.py`+`segments.py` | WP-ARCH-02 (RM-02 LeadQueryService) |
