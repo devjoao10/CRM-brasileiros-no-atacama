@@ -59,6 +59,12 @@ A secao 4 usa parser de HTML, nao substring: depois de escapado, o texto
 TEXTO. So o parser separa texto de markup, que e a separacao que a
 vulnerabilidade apaga.
 
+SEC-XSS-04 (secao 5) — o mesmo buraco, nas linhas que PARECIAM escapadas
+
+email e whatsapp no painel de leads da Segmentacao, dias_por_destino no
+editor de lead compartilhado e a cor da tag nos chips de filtro: campos
+crus no meio de linhas onde o resto do dado vindo da API ja passava por esc().
+
 Rodar:  python tests/test_xss_crud_templates.py
 """
 import html
@@ -808,6 +814,499 @@ def test_wf2_os_cinco_sinks_continuam_escapados_na_fonte():
     transfer = _corpo(PIPE_SRC, "loadTransferStages")
     assert "${esc(s.id)}" in transfer, (
         "pipeline.html loadTransferStages: s.id voltou cru para o atributo value"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 5. SEC-XSS-04 - XSS ARMAZENADO em segmentacao.html e no editor de lead
+#
+# O sink: renderDetailTable monta o <tbody> do painel de detalhe de uma lista
+# (GET /api/segments/{id}/leads) com um template literal, e passava quase todo
+# campo da linha por esc() - nome, destinos (via getDestinosHtml), nome e cor
+# das tags. Menos dois:
+#
+#     <td>${l.email||'<span style="color:#aaa">-</span>'}</td>
+#     <td>${l.whatsapp||'<span style="color:#aaa">-</span>'}</td>
+#
+# E isso que os torna faceis de perder numa leitura: a linha em volta ja tem o
+# cuidado, entao o bloco inteiro PARECE escapado. A secao 4 achou o mesmo
+# padrao em leads.html e pipeline.html.
+#
+# A origem do dado: POST /api/leads aceita HTML nesses campos (`email` so tem um
+# validador que troca "" por None; `whatsapp` so tem max_length=30), e o lead e
+# gravado tambem por quem fica fora do CRM - workflows n8n (gerenciador_leads,
+# formulario_site, agente Bia) - ou seja, conteudo de terceiro NAO autenticado.
+# Um lead com email `<img src=x onerror=...>` executa no navegador de quem abrir
+# a lista na tela de Segmentacao: a CSP do CRM tem `script-src 'unsafe-inline'`
+# (app/main.py), a mesma da secao 4.
+#
+# Tecnica e detector da secao 4, pelo mesmo motivo: depois de escapado, o texto
+# `onerror=alert(1)` continua na marcacao - e certo que continue, como TEXTO.
+# Substring nao separa texto de markup; so o parser separa (`_acusacoes`), e e
+# essa separacao que a vulnerabilidade apaga.
+#
+# email e whatsapp sao sinks independentes: cada payload vai num lead proprio,
+# com o outro campo benigno, para que um teste vermelho aponte UM campo so.
+#
+# 5a/5b cobrem email e whatsapp. 5c e 5d cobrem dois sinks irmaos do mesmo WP,
+# achados na varredura das telas irmas: dias_por_destino no editor de lead e
+# t.cor nos chips de tag.
+# ─────────────────────────────────────────────────────────────────────────
+
+SEG_SRC = (RAIZ / "templates" / "segmentacao.html").read_text(encoding="utf-8")
+
+PAY_SEG_EMAIL = "<img src=x onerror=alert(1)>"
+# whatsapp tem max_length=30 no schema (LeadBase e LeadUpdate): um payload maior
+# seria barrado pela API com 422 e nunca chegaria ao banco. Este tem 28.
+PAY_SEG_WHATSAPP = "<img src=x onerror=alert(2)>"
+EMAIL_OK_SEG = "fulano@example.com"
+WHATSAPP_OK_SEG = "+56912345678"
+
+# O resto da linha (o_resto_da_linha_continua_inerte): um payload por campo que o
+# cabecalho diz ja escapado, todos validos no schema (Lead.nome ate 200; destinos
+# e list[str] sem limite; Tag.nome ate 100). Cada um acende o detector com um
+# motivo proprio (alert 11/12/13) se o esc() do seu campo sumir. A cor de tag e a
+# PAY_COR_TAG da 5d: so os 7 caracteres que o schema deixa passar.
+PAY_SEG_NOME = "<img src=x onerror=alert(11)>"
+PAY_SEG_DESTINO = "<img src=x onerror=alert(12)>"
+PAY_SEG_TAG_NOME = "<img src=x onerror=alert(13)>"
+
+# O travessao (U+2014) do placeholder; chr() mantem o fonte deste teste ASCII.
+TRAVESSAO = chr(0x2014)
+
+_cache_seg = {}
+
+
+def _render_segmentacao():
+    """renderDetailTable, do proprio segmentacao.html, com um lead por cenario.
+
+    UM processo node renderiza todos os cenarios (como _render_pipeline) e
+    devolve {cenario: innerHTML do #detailBody}.
+    """
+    if "r" not in _cache_seg:
+        base = {
+            "nome": "Fulano", "email": EMAIL_OK_SEG, "whatsapp": WHATSAPP_OK_SEG,
+            "destinos": ["Atacama"], "tags": [], "data_chegada": None,
+        }
+        cenarios = {
+            "preenchido": base,
+            "email_hostil": {**base, "email": PAY_SEG_EMAIL},
+            "whatsapp_hostil": {**base, "whatsapp": PAY_SEG_WHATSAPP},
+            "vazio_none": {**base, "email": None, "whatsapp": None},
+            "vazio_texto": {**base, "email": "", "whatsapp": ""},
+            # PAY_COR_TAG vem da 5d (resolvida na chamada, nao no import).
+            "resto_hostil": {
+                **base, "nome": PAY_SEG_NOME, "destinos": [PAY_SEG_DESTINO],
+                "tags": [{"nome": PAY_SEG_TAG_NOME, "cor": PAY_COR_TAG}],
+            },
+        }
+        script = (
+            _STUB_WF2
+            + _corpo(SEG_SRC, "esc", "\n") + "\n"
+            + _corpo(SEG_SRC, "getDestinosHtml", "\n}") + "\n"
+            + _corpo(SEG_SRC, "renderDetailTable", "\n}") + "\n"
+            + "const cenarios = " + json.dumps(cenarios) + ";\n"
+            + "const saida = {};\n"
+            + "for (const [nome, lead] of Object.entries(cenarios)) {\n"
+            + "  renderDetailTable([lead]);\n"
+            + "  saida[nome] = _el('detailBody').innerHTML;\n"
+            + "}\n"
+            + "console.log(JSON.stringify(saida));"
+        )
+        _cache_seg["r"] = _node(script)
+    return _cache_seg["r"]
+
+
+def _texto_visivel(cenario):
+    return "".join(_le(_render_segmentacao()[cenario]).texto)
+
+
+def _placeholders(markup):
+    """(<span> reais do placeholder cinza, nos de texto que sao so o travessao)."""
+    c = _le(markup)
+    spans = sum(
+        1 for tag, chave, valor in c.atributos
+        if tag == "span" and chave == "style" and "color:#aaa" in valor
+    )
+    return spans, c.texto.count(TRAVESSAO)
+
+
+# ── 5a. COMPORTAMENTO: a marcacao que o template produziu e inerte ────────
+# As mensagens usam {markup!a}, nao !r: a marcacao carrega o travessao da fonte
+# e o print do runner quebraria num console que nao fosse UTF-8.
+
+def test_sec_xss_04_email_hostil_nao_vira_markup_na_tabela_de_detalhe():
+    """Sink 1 - renderDetailTable, coluna Email -> tbody.innerHTML."""
+    markup = _render_segmentacao()["email_hostil"]
+    assert PAY_SEG_EMAIL in html.unescape(markup), (
+        "o payload de email nao chegou na marcacao: o teste esta CEGO, nao "
+        f"aprovado - markup: {markup!a}"
+    )
+    assert not _acusacoes(markup), (
+        f"segmentacao.html renderDetailTable/email: {_acusacoes(markup)} - "
+        f"markup: {markup!a}"
+    )
+
+
+def test_sec_xss_04_whatsapp_hostil_nao_vira_markup_na_tabela_de_detalhe():
+    """Sink 2 - renderDetailTable, coluna WhatsApp -> tbody.innerHTML."""
+    assert len(PAY_SEG_WHATSAPP) <= 30, (
+        f"payload de whatsapp com {len(PAY_SEG_WHATSAPP)} caracteres: o schema "
+        "(LeadBase e LeadUpdate, max_length=30) o barraria com 422 e ele nunca "
+        "chegaria ao banco - o teste provaria um ataque irreal"
+    )
+    markup = _render_segmentacao()["whatsapp_hostil"]
+    assert PAY_SEG_WHATSAPP in html.unescape(markup), (
+        "o payload de whatsapp nao chegou na marcacao: o teste esta CEGO, nao "
+        f"aprovado - markup: {markup!a}"
+    )
+    assert not _acusacoes(markup), (
+        f"segmentacao.html renderDetailTable/whatsapp: {_acusacoes(markup)} - "
+        f"markup: {markup!a}"
+    )
+
+
+def test_sec_xss_04_email_hostil_continua_visivel_como_texto():
+    """Escapar nao pode virar censura: o operador ainda le o que foi gravado."""
+    texto = _texto_visivel("email_hostil")
+    assert PAY_SEG_EMAIL in texto, (
+        "o email hostil nao aparece como TEXTO na tela (virou tag, ou sumiu): "
+        f"texto visivel = {texto.split()!a}"
+    )
+
+
+def test_sec_xss_04_whatsapp_hostil_continua_visivel_como_texto():
+    """Idem para o whatsapp: neutralizar nao e apagar."""
+    texto = _texto_visivel("whatsapp_hostil")
+    assert PAY_SEG_WHATSAPP in texto, (
+        "o whatsapp hostil nao aparece como TEXTO na tela (virou tag, ou sumiu): "
+        f"texto visivel = {texto.split()!a}"
+    )
+
+
+def test_sec_xss_04_o_resto_da_linha_continua_inerte():
+    """Pina o que o cabecalho da secao afirma: a linha em volta ja escapava.
+
+    nome, destino, nome e cor de tag hostis na MESMA linha (email e whatsapp
+    benignos). Nenhum outro teste enxerga a falta de esc() nesses quatro campos:
+    sem este, reverter qualquer um deles deixava a suite verde.
+    """
+    markup = _render_segmentacao()["resto_hostil"]
+    decodificada = html.unescape(markup)
+    payloads = {
+        "nome": PAY_SEG_NOME, "destino": PAY_SEG_DESTINO,
+        "tag.nome": PAY_SEG_TAG_NOME, "tag.cor": PAY_COR_TAG,
+    }
+    sumiram = [campo for campo, p in payloads.items() if p not in decodificada]
+    assert not sumiram, (
+        f"payload(s) de {sumiram} nao chegaram na marcacao: o teste esta CEGO "
+        "OU a correcao apagou/alterou o valor em vez de escapar - "
+        f"markup: {markup!a}"
+    )
+    assert not _acusacoes(markup), (
+        f"segmentacao.html renderDetailTable/resto da linha: {_acusacoes(markup)}"
+        " (alert(11)=nome, alert(12)=destino, alert(13)=nome da tag, svg=cor da "
+        f"tag) - markup: {markup!a}"
+    )
+    # A cor da tag e a unica em contexto de ATRIBUTO: escapar so < e > deixa a
+    # aspa fechar o style sem criar tag, e `_acusacoes` nao enxerga (ver a 5d).
+    esperado = f"background:{PAY_COR_TAG}"
+    estilo = _estilo_do_chip(markup)
+    assert estilo == esperado, (
+        f"style da tag da linha diferente do gravado: {estilo!a} != {esperado!a} "
+        f"- markup: {markup!a}"
+    )
+
+
+def test_sec_xss_04_campo_vazio_continua_mostrando_o_placeholder_como_span_real():
+    """Corrigir sem quebrar: email/whatsapp ausentes seguem mostrando o travessao cinza.
+
+    Guarda contra a correcao ingenua `esc(l.email||'<span...>')`, que escaparia o
+    proprio placeholder e mostraria `<span style=...>` como TEXTO na tela.
+
+    A comparacao e DIFERENCIAL contra o lead preenchido: as outras colunas (tags
+    vazias, data ausente) tambem desenham travessao, e este teste nao pode
+    depender delas. Os dois campos vazios, juntos, tem que somar +2 <span> reais
+    e +2 nos de texto cujo conteudo e so o travessao.
+    """
+    r = _render_segmentacao()
+    base_spans, base_tracos = _placeholders(r["preenchido"])
+    for cenario in ("vazio_none", "vazio_texto"):
+        spans, tracos = _placeholders(r[cenario])
+        assert spans - base_spans == 2, (
+            f"{cenario}: esperados +2 <span> de placeholder (email e whatsapp), "
+            f"vieram {spans - base_spans:+d} - o placeholder deixou de ser tag "
+            f"real. markup: {r[cenario]!a}"
+        )
+        assert tracos - base_tracos == 2, (
+            f"{cenario}: esperados +2 nos de texto so com o travessao, vieram "
+            f"{tracos - base_tracos:+d}. markup: {r[cenario]!a}"
+        )
+        visivel = "".join(_le(r[cenario]).texto)
+        assert "<" not in visivel, (
+            f"{cenario}: marcacao do placeholder apareceu como TEXTO na tela "
+            f"(escapada duas vezes?): {visivel.split()!a}"
+        )
+
+
+def test_sec_xss_04_o_detector_acusa_a_marcacao_ANTIGA():
+    """Controle de mutacao - sem isto a secao 5a inteira seria decorativa.
+
+    Reconstroi a celula como o template a produzia ANTES da correcao (o valor
+    cru dentro do <td>) e exige que `_acusacoes` ACUSE.
+    """
+    antigos = {
+        "email": f"<td>{PAY_SEG_EMAIL}</td>",
+        "whatsapp": f"<td>{PAY_SEG_WHATSAPP}</td>",
+    }
+    for nome, markup in antigos.items():
+        assert _acusacoes(markup), (
+            f"o detector NAO acusa a marcacao vulneravel de {nome} - logo ele "
+            f"nao prova nada sobre a corrigida. Markup: {markup!a}"
+        )
+
+
+# ── 5b. ESTATICO - a grafia perigosa nao pode reaparecer ───────────────────
+
+def test_sec_xss_04_email_e_whatsapp_continuam_escapados_na_fonte():
+    """Grafia, como rede. O que PROVA e a secao 5a; isto localiza a regressao."""
+    corpo = _sem_comentarios_wf2(_corpo(SEG_SRC, "renderDetailTable", "\n}"))
+    sem_escape = [c for c in ("email", "whatsapp") if f"${{esc(l.{c})" not in corpo]
+    crus = [c for c in ("email", "whatsapp") if f"${{l.{c}" in corpo]
+    assert not sem_escape and not crus, (
+        "segmentacao.html renderDetailTable: sem ${esc(l.X)} para "
+        f"{sem_escape}; interpolacao crua ${{l.X}} sobrando para {crus} - "
+        "email e whatsapp voltaram a entrar no innerHTML sem escape"
+    )
+
+
+# ── 5c. SINK IRMAO: dias_por_destino no editor de lead compartilhado ───────
+# templates/partials/_lead_edit_modal.html, renderDiasDestino(). O parcial e
+# incluido por leads.html e pipeline.html e roda quando qualquer usuario abre o
+# editor com 2+ destinos. `savedVal` vem de lead.dias_por_destino (GET
+# /api/leads/{id}) e ia CRU para `value="${savedVal}"`. O schema nao tipa os
+# valores (`Optional[dict]`; os validadores so fazem json.loads de string) e
+# quem grava e POST/PUT /api/leads e o n8n (Tool Criar/Atualizar Lead, formulario
+# do site), com o que o LLM ou o visitante escreveu. A vizinha renderDatasDestinos
+# ja escapa (AUDIT-2026-08-W2B F5); esta ficou para tras.
+# O parcial nao define esc(): usa o da pagina hospedeira (as duas definem; aqui
+# roda o do leads.html).
+
+PARTIAL_SRC = (RAIZ / "templates" / "partials" / "_lead_edit_modal.html").read_text(encoding="utf-8")
+
+# A aspa inicial fecha o value="" e o resto vira tag nova.
+PAY_DIAS_DESTINO = '"><img src=x onerror=alert(3)>'
+
+
+def _render_dias_destino():
+    """renderDiasDestino, do parcial real: Atacama (hostil) + Uyuni (4) marcados."""
+    if "dias" not in _cache_seg:
+        dias = {"Atacama": PAY_DIAS_DESTINO, "Uyuni": 4}
+        script = (
+            _STUB_WF2
+            + _corpo(LEADS_SRC, "esc", "\n    }") + "\n"
+            + _corpo(PARTIAL_SRC, "getSelectedDestinos", "\n    }") + "\n"
+            + _corpo(PARTIAL_SRC, "renderDiasDestino", "\n    }") + "\n"
+            # O que o parcial assume fora das funcoes: o `let` do topo, as opcoes
+            # marcadas no dropdown (e nenhum input antigo) e o container com style.
+            + "let _currentDiasDestino = " + json.dumps(dias) + ";\n"
+            + "document.querySelectorAll = sel => sel.includes('.multi-select-option.selected')\n"
+            + "    ? ['Atacama', 'Uyuni'].map(v => ({ dataset: { value: v } })) : [];\n"
+            + "_el('diasDestinoContainer').style = {};\n"
+            + "renderDiasDestino();\n"
+            + "console.log(JSON.stringify({ markup: _el('diasDestinoInputs').innerHTML }));"
+        )
+        _cache_seg["dias"] = _node(script)["markup"]
+    return _cache_seg["dias"]
+
+
+def _valores_por_destino(markup):
+    """{data-destino: value} dos <input> da marcacao, ja DECODIFICADOS pelo parser."""
+    atributos = _le(markup).atributos
+    destinos = [v for tag, k, v in atributos if tag == "input" and k == "data-destino"]
+    valores = [v for tag, k, v in atributos if tag == "input" and k == "value"]
+    assert len(destinos) == len(valores) == 2, (
+        f"esperados 2 inputs com data-destino e value, vieram {destinos!a} e "
+        f"{valores!a} - markup: {markup!a}"
+    )
+    return dict(zip(destinos, valores))
+
+
+def test_sec_xss_04_dias_por_destino_hostil_nao_vira_markup_no_editor_de_lead():
+    """Sink 3 - renderDiasDestino, value="${savedVal}" -> #diasDestinoInputs."""
+    markup = _render_dias_destino()
+    assert PAY_DIAS_DESTINO in html.unescape(markup), (
+        "o payload de dias_por_destino nao chegou na marcacao: o teste esta "
+        "CEGO (o editor so desenha os inputs com 2+ destinos marcados) OU a "
+        f"correcao apagou/alterou o valor em vez de escapar - markup: {markup!a}"
+    )
+    assert not _acusacoes(markup), (
+        f"_lead_edit_modal.html renderDiasDestino: {_acusacoes(markup)} - "
+        f"markup: {markup!a}"
+    )
+
+
+def test_sec_xss_04_dias_por_destino_hostil_volta_inteiro_no_value_do_input():
+    """Corrigir sem censurar: o value DECODIFICADO e exatamente o que foi gravado.
+
+    O parser desfaz o escape do atributo: com esc() certo o payload volta byte a
+    byte e o numero (Uyuni) segue intacto. Sem o esc(), a aspa do payload fecha
+    o atributo e o value do Atacama chega vazio. Tirar caracteres tambem reprova.
+    """
+    esperado = {"Atacama": PAY_DIAS_DESTINO, "Uyuni": "4"}
+    markup = _render_dias_destino()
+    obtido = _valores_por_destino(markup)
+    assert obtido == esperado, (
+        f"value decodificado diferente do gravado: {obtido!a} != {esperado!a} "
+        f"- markup: {markup!a}"
+    )
+
+
+def test_sec_xss_04_o_detector_acusa_o_input_ANTIGO_do_editor_de_lead():
+    """Controle de mutacao - sem isto os testes de 5c seriam decorativos."""
+    antigo = (
+        '<input type="number" class="form-input dias-destino-input" '
+        f'data-destino="Atacama" value="{PAY_DIAS_DESTINO}" placeholder="dias">'
+    )
+    assert _acusacoes(antigo), (
+        "o detector NAO acusa o input vulneravel de renderDiasDestino - logo "
+        f"ele nao prova nada sobre o corrigido. Markup: {antigo!a}"
+    )
+
+
+def test_sec_xss_04_dias_por_destino_continua_escapado_na_fonte():
+    """Grafia, como rede. O que PROVA e o teste comportamental acima."""
+    corpo = _sem_comentarios_wf2(_corpo(PARTIAL_SRC, "renderDiasDestino", "\n    }"))
+    assert 'value="${esc(savedVal)}"' in corpo and 'value="${savedVal}"' not in corpo, (
+        '_lead_edit_modal.html renderDiasDestino: esperado value="${esc(savedVal)}" '
+        'e nenhum value="${savedVal}" cru - dias_por_destino voltou a entrar no '
+        "innerHTML sem escape"
+    )
+
+
+# ── 5d. SINK IRMAO: t.cor nos chips de tag da Segmentacao ──────────────────
+# segmentacao.html, renderTagChips(). Com a tag SELECIONADA, `t.cor` ia CRU para
+# `style="background:${...}"` (nao selecionada usa '#eee' fixo); as linhas irmas
+# do arquivo ja usam esc(t.cor). O schema so limita `cor` a max_length=7
+# (TagBase/TagUpdate, sem pattern de hex), entao o payload realista cabe em 7
+# caracteres: nao ha espaco para um on*=..., mas `"><svg>` fecha o atributo e
+# injeta TAG - e e isso que o detector mede (svg esta em TAGS_INTRUSAS). E
+# injecao de HTML na tela de Segmentacao, nao execucao de script.
+
+# Exatamente os 7 caracteres que o schema deixa passar.
+PAY_COR_TAG = '"><svg>'
+COR_OK_TAG = "#ff0000"
+
+
+def _render_tag_chips():
+    """renderTagChips, do segmentacao.html real: cor hostil, cor valida e nome hostil."""
+    if "tags" not in _cache_seg:
+        cenarios = {
+            "hostil": {"allTags": [{"id": 1, "nome": "VIP", "cor": PAY_COR_TAG}], "selTagIds": [1]},
+            "valida": {"allTags": [{"id": 2, "nome": "Quente", "cor": COR_OK_TAG}], "selTagIds": [2]},
+            "nome_hostil": {"allTags": [{"id": 3, "nome": PAY_SEG_TAG_NOME, "cor": COR_OK_TAG}], "selTagIds": [3]},
+        }
+        script = (
+            _STUB_WF2
+            + _corpo(SEG_SRC, "esc", "\n") + "\n"
+            + _corpo(SEG_SRC, "renderTagChips", "\n}") + "\n"
+            + "let allTags = [], selTagIds = [];\n"
+            + "const cenarios = " + json.dumps(cenarios) + ";\n"
+            + "const saida = {};\n"
+            + "for (const [nome, c] of Object.entries(cenarios)) {\n"
+            + "  allTags = c.allTags; selTagIds = c.selTagIds;\n"
+            + "  renderTagChips();\n"
+            + "  saida[nome] = _el('fbTags').innerHTML;\n"
+            + "}\n"
+            + "console.log(JSON.stringify(saida));"
+        )
+        _cache_seg["tags"] = _node(script)
+    return _cache_seg["tags"]
+
+
+def _estilo_do_chip(markup):
+    """O style do 1o <span> que tiver um (o chip; a tag da linha), ja DECODIFICADO."""
+    estilos = [v for tag, k, v in _le(markup).atributos if tag == "span" and k == "style"]
+    assert estilos, f"nenhum chip com atributo style na marcacao: {markup!a}"
+    return estilos[0]
+
+
+def test_sec_xss_04_cor_de_tag_hostil_nao_vira_markup_nos_chips_de_filtro():
+    """Sink 4 - renderTagChips, style="background:${t.cor}" com a tag selecionada."""
+    assert len(PAY_COR_TAG) <= 7, (
+        f"payload de cor com {len(PAY_COR_TAG)} caracteres: o schema (TagBase e "
+        "TagUpdate, max_length=7) o barraria com 422 e ele nunca chegaria ao "
+        "banco - o teste provaria um ataque irreal"
+    )
+    markup = _render_tag_chips()["hostil"]
+    assert PAY_COR_TAG in html.unescape(markup), (
+        "o payload de cor nao chegou na marcacao: o teste esta CEGO (so a tag "
+        "SELECIONADA usa t.cor) OU a correcao apagou/alterou o valor em vez de "
+        f"escapar - markup: {markup!a}"
+    )
+    assert not _acusacoes(markup), (
+        f"segmentacao.html renderTagChips: {_acusacoes(markup)} - markup: {markup!a}"
+    )
+
+
+def test_sec_xss_04_cor_de_tag_hostil_volta_inteira_no_style_do_chip():
+    """Escapar so < e > nao basta: a aspa tambem tem que ser escapada.
+
+    O teste comportamental acima so enxerga TAG nova. Com a aspa crua o style
+    fecha cedo e o resto do payload vira atributo solto - sem tag, sem alarme.
+    Por isso o style DECODIFICADO tem que ser, byte a byte, o que foi gravado.
+    """
+    markup = _render_tag_chips()["hostil"]
+    esperado = f"background:{PAY_COR_TAG};color:#fff"
+    obtido = _estilo_do_chip(markup)
+    assert obtido == esperado, (
+        f"style decodificado diferente do gravado: {obtido!a} != {esperado!a} "
+        f"- markup: {markup!a}"
+    )
+
+
+def test_sec_xss_04_cor_de_tag_valida_continua_pintando_o_chip():
+    """Corrigir sem quebrar: a cor da tag selecionada segue chegando ao style."""
+    markup = _render_tag_chips()["valida"]
+    estilo = _estilo_do_chip(markup)
+    assert f"background:{COR_OK_TAG}" in estilo, (
+        f"a cor da tag selecionada nao chega ao style do chip: {estilo!a} - "
+        f"markup: {markup!a}"
+    )
+
+
+def test_sec_xss_04_nome_de_tag_hostil_continua_inerte_e_visivel_nos_chips():
+    """Pina o esc(t.nome) do chip: sem tag nova e ainda legivel como TEXTO."""
+    markup = _render_tag_chips()["nome_hostil"]
+    assert not _acusacoes(markup), (
+        f"segmentacao.html renderTagChips/nome: {_acusacoes(markup)} - "
+        f"markup: {markup!a}"
+    )
+    texto = "".join(_le(markup).texto)
+    assert PAY_SEG_TAG_NOME in texto, (
+        "o nome da tag hostil nao aparece como TEXTO no chip (virou tag, ou "
+        f"sumiu): texto visivel = {texto.split()!a}"
+    )
+
+
+def test_sec_xss_04_o_detector_acusa_o_chip_ANTIGO():
+    """Controle de mutacao - sem isto os testes de 5d seriam decorativos."""
+    antigo = (
+        f'<span class="fb-tag-chip sel" style="background:{PAY_COR_TAG};color:#fff" '
+        'onclick="toggleTag(1)">VIP</span>'
+    )
+    assert _acusacoes(antigo), (
+        "o detector NAO acusa o chip vulneravel de renderTagChips - logo ele "
+        f"nao prova nada sobre o corrigido. Markup: {antigo!a}"
+    )
+
+
+def test_sec_xss_04_cor_de_tag_continua_escapada_na_fonte():
+    """Grafia, como rede. O que PROVA e o teste comportamental acima."""
+    corpo = _sem_comentarios_wf2(_corpo(SEG_SRC, "renderTagChips", "\n}"))
+    assert "${s?esc(t.cor):'#eee'}" in corpo and "${s?t.cor:" not in corpo, (
+        "segmentacao.html renderTagChips: esperado ${s?esc(t.cor):'#eee'} e "
+        "nenhum ${s?t.cor: cru - t.cor voltou a entrar no style sem escape"
     )
 
 

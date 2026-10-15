@@ -544,7 +544,10 @@ function renderTagChips() {
     if (!allTags.length) { c.innerHTML='<span style="font-size:12px;color:var(--color-dark-400)">Nenhuma tag</span>'; return; }
     c.innerHTML = allTags.map(t => {
         const s = selTagIds.includes(t.id);
-        return `<span class="fb-tag-chip${s?' sel':''}" style="background:${s?t.cor:'#eee'};color:${s?'#fff':'#555'}" onclick="toggleTag(${t.id})">${esc(t.nome)}</span>`;
+        // SEC-XSS-04: tag.cor so tem max_length=7 (sem pattern de hex) e ia crua
+        // para o style da tag selecionada: `"><svg>` fechava o atributo e
+        // injetava tag. As linhas irmas deste arquivo ja usavam esc(t.cor).
+        return `<span class="fb-tag-chip${s?' sel':''}" style="background:${s?esc(t.cor):'#eee'};color:${s?'#fff':'#555'}" onclick="toggleTag(${t.id})">${esc(t.nome)}</span>`;
     }).join('');
 }
 function toggleTag(id) {
@@ -627,10 +630,16 @@ function renderDetailTable(leads) {
     if (!leads.length) { tbody.innerHTML='<tr><td colspan="6"><div class="empty-state"><p>Nenhum lead nesta lista</p></div></td></tr>'; return; }
     tbody.innerHTML = leads.map(l => {
         const tags = (l.tags||[]).map(t=>`<span class="lead-tag" style="background:${esc(t.cor)}">${esc(t.nome)}</span>`).join('');
+        // SEC-XSS-04: email e whatsapp iam crus para o innerHTML enquanto o
+        // resto da linha ja passava por esc(). A API aceita HTML nos dois (email
+        // e str livre; whatsapp so tem max_length=30) e o n8n grava leads vindos
+        // do formulario do site e da conversa do WhatsApp: um <img onerror> no
+        // email rodava ao abrir a lista. esc() de vazio/null devolve '', entao o
+        // placeholder cinza continua saindo como tag real.
         return `<tr>
             <td><strong>${esc(l.nome)}</strong></td>
-            <td>${l.email||'<span style="color:#aaa">—</span>'}</td>
-            <td>${l.whatsapp||'<span style="color:#aaa">—</span>'}</td>
+            <td>${esc(l.email)||'<span style="color:#aaa">—</span>'}</td>
+            <td>${esc(l.whatsapp)||'<span style="color:#aaa">—</span>'}</td>
             <td>${getDestinosHtml(l.destinos)}</td>
             <td class="tags-cell">${tags||'<span style="color:#aaa">—</span>'}</td>
             <td>${l.data_chegada?new Date(l.data_chegada+'T00:00:00').toLocaleDateString('pt-BR'):'—'}</td>
