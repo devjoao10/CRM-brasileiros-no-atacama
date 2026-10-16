@@ -52,7 +52,7 @@ def test_admin_guards_present():
 def test_ai_chat_uses_dompurify():
     ai = _read(ROOT / "templates" / "ai.html")
     assert "dompurify" in ai.lower(), "ai.html: DOMPurify ausente (SEC-XSS-01)"
-    assert "DOMPurify.sanitize(marked.parse(content))" in ai, "ai.html: sanitize do markdown ausente"
+    assert "DOMPurify.sanitize(marked.parse(content), PERFIL_RESPOSTA_IA)" in ai, "ai.html: sanitize do markdown ausente"
 
 
 def test_esc_escapes_quotes():

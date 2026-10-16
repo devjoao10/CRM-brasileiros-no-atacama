@@ -206,8 +206,9 @@
         .chat-bubble code { background: rgba(0,0,0,0.05); padding: 2px 4px; border-radius: 4px; font-family: monospace; }
         .chat-message.user .chat-bubble code { background: rgba(255,255,255,0.2); }
 
-        /* Download links styling */
-        .chat-bubble a[href*="/api/ai/download/"] {
+        /* Download links styling (SEC-LINK-01: só o link que o hook aprovou como download;
+           href com prefixo exato e sem data-dominio, para link externo não imitar o botão) */
+        .chat-bubble a[href^="/api/ai/download/"]:not([data-dominio]) {
             display: inline-flex;
             align-items: center;
             gap: 6px;
@@ -222,9 +223,26 @@
             transition: all 0.2s;
             box-shadow: 0 2px 6px rgba(43,108,176,0.3);
         }
-        .chat-bubble a[href*="/api/ai/download/"]:hover {
+        .chat-bubble a[href^="/api/ai/download/"]:not([data-dominio]):hover {
             transform: translateY(-1px);
             box-shadow: 0 4px 12px rgba(43,108,176,0.4);
+        }
+
+        /* SEC-LINK-01: domínio real do link da resposta da IA, no INÍCIO do link e em
+           selo próprio, à mostra antes do clique (filtrarLinkIa grava data-dominio a
+           partir do href, nunca do texto do link). */
+        .chat-bubble a[data-dominio]::before {
+            content: "↗ " attr(data-dominio);
+            display: inline-block;
+            margin-right: 4px;
+            padding: 0 6px;
+            border: 1px solid var(--color-dark-200);
+            border-radius: 4px;
+            background: var(--color-dark-100);
+            color: var(--color-dark-700);
+            font-size: 11px;
+            overflow-wrap: anywhere;
+            text-decoration: none;
         }
 
         /* Input Area */
@@ -539,6 +557,60 @@
             // Configure marked
             marked.setOptions({ breaks: true, gfm: true });
 
+            // SEC-LINK-01: a IA lê texto de terceiros (campos de lead que chegam pelo
+            // WhatsApp/n8n), então a resposta pode trazer link enganoso. Duas camadas:
+            // 1) PERFIL_RESPOSTA_IA: só o HTML que o markdown gera (sem class, id, style,
+            //    data-*, SVG, form, dialog...), para a resposta não reaproveitar o CSS da
+            //    página para esconder o selo, imitar o botão de download ou cobrir a tela;
+            // 2) filtrarLinkIa, depois da limpeza do DOMPurify:
+            //    - download da própria IA (/api/ai/download/<nome>, no formato exato de
+            //      _safe_document_target em app/services/ai_tools.py) segue como botão;
+            //    - link http(s) continua clicável, mas em nova aba, sem opener/referrer e
+            //      com o host real (com porta) num selo no início (a[data-dominio]::before);
+            //    - mailto:/tel: ficam como estão; qualquer outro esquema perde o destino;
+            //    - fora de <a> HTML (tagName 'A'; o <a> de SVG vem minúsculo) nenhum
+            //      elemento mantém href; nenhum mantém xlink:href, action, formaction ou
+            //      data-dominio.
+            const PERFIL_RESPOSTA_IA = {
+                ALLOWED_TAGS: ['p', 'br', 'hr', 'strong', 'em', 'del', 'code', 'pre', 'blockquote',
+                               'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+                               'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a'],
+                ALLOWED_ATTR: ['href', 'title', 'align', 'start'],
+                ALLOW_DATA_ATTR: false,
+            };
+            const DOWNLOAD_IA_RE = /^\/api\/ai\/download\/([A-Za-z0-9_-]{1,64}_[0-9a-f]{6}\.(?:xlsx|pdf))$/;
+
+            function filtrarLinkIa(node) {
+                ['xlink:href', 'action', 'formaction', 'data-dominio'].forEach((attr) => node.removeAttribute(attr));
+                if (node.tagName !== 'A') {
+                    node.removeAttribute('href');
+                    return;
+                }
+                if (!node.hasAttribute('href')) return;
+                let destino;
+                try {
+                    destino = new URL(node.getAttribute('href'), window.location.origin);
+                } catch (_) {
+                    node.removeAttribute('href');
+                    return;
+                }
+                if (destino.origin === window.location.origin && DOWNLOAD_IA_RE.test(destino.pathname)) {
+                    node.setAttribute('href', destino.pathname);
+                    return;
+                }
+                if (destino.protocol === 'mailto:' || destino.protocol === 'tel:') return;
+                if (destino.protocol !== 'http:' && destino.protocol !== 'https:') {
+                    node.removeAttribute('href');
+                    return;
+                }
+                node.setAttribute('target', '_blank');
+                node.setAttribute('rel', 'noopener noreferrer');
+                // host longo: mostra o fim, onde fica o domínio registrável
+                const host = destino.host;
+                node.setAttribute('data-dominio', host.length > 48 ? '…' + host.slice(-47) : host);
+            }
+            DOMPurify.addHook('afterSanitizeAttributes', filtrarLinkIa);
+
             // ─── Sessions ─────────────────────────────────
 
             async function loadSessions() {
@@ -701,8 +773,8 @@
                 
                 const href = link.getAttribute('href') || '';
                 
-                // Detectar se é um link de download de arquivo gerado pela IA
-                const downloadMatch = href.match(/\/(?:api\/)?ai\/download\/([^\s\?\"#]+\.\w+)/);
+                // Detectar se é um link de download de arquivo gerado pela IA (formato exato, SEC-LINK-01)
+                const downloadMatch = href.match(DOWNLOAD_IA_RE);
                 if (!downloadMatch) return;
                 
                 // Bloquear navegação padrão
@@ -770,9 +842,10 @@
                 const bubble = document.createElement('div');
                 bubble.className = 'chat-bubble';
                 // SEC-XSS-01: sanitize all rendered chat content (user text + IA markdown) before innerHTML
+                // SEC-LINK-01: resposta da IA só com o HTML do markdown (PERFIL_RESPOSTA_IA)
                 bubble.innerHTML = isUser
                     ? DOMPurify.sanitize(content.replace(/\n/g, '<br>'), { ALLOWED_TAGS: ['br'] })
-                    : DOMPurify.sanitize(marked.parse(content));
+                    : DOMPurify.sanitize(marked.parse(content), PERFIL_RESPOSTA_IA);
                 
                 div.appendChild(avatar);
                 div.appendChild(bubble);
