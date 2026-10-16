@@ -19,6 +19,7 @@ Estado: ✅ ok · ⚠️ parcial/atenção · ❌ pendente (WP)
 - ❌ **SEC-CSP-01**: sem `Content-Security-Policy` (amplifica XSS) — WP-SEC-02 (cuidado com inline JS).
 - ✅ Jinja2 autoescape ativo no SSR.
 - ✅ **SEC-CSV-01 corrigido**: "Exportar CSV" da Segmentação prefixa `'` em célula que começa com `=`, `+`, `-`, `@`, TAB ou CR (exceto telefone/número puro, para não alterar o WhatsApp); regressão em `tests/test_segmentacao_csv_formula.py`.
+- ✅ **SEC-XLSX-01 corrigido**: a planilha gerada pela IA (`generate_excel_document`) grava toda célula como texto, então `=...` vindo do LLM não vira mais fórmula, e marca `quotePrefix` nas que começam com `=`, `+`, `-`, `@`, para uma edição do operador (F2+Enter) não reativar a fórmula; regressão em `tests/test_ai_excel_formula.py`.
 
 ## Headers / Transporte
 - ✅ `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`.
