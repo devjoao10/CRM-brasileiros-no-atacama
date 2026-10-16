@@ -10,9 +10,10 @@ bloco inteiro PARECIA escapado. Este arquivo transforma a varredura em regra:
 o quinto caso nao pode depender de alguem ler a tela certa.
 
 A regra: todo valor que chega a um sink de HTML (innerHTML / outerHTML /
-insertAdjacentHTML / document.write) e esc()/escapeHtml() - ou
-DOMPurify.sanitize() - cobrindo o valor inteiro, numero, constante do codigo ou
-uma entrada de PERMITIDAS (abaixo), que fixa o motivo e o numero de ocorrencias.
+insertAdjacentHTML / document.write) e esc()/escapeHtml() cobrindo o valor
+inteiro - ou DOMPurify.sanitize() so na raiz do sink -, numero, constante do
+codigo ou uma entrada de PERMITIDAS (abaixo), que fixa o motivo e o numero de
+ocorrencias.
 Quem julga isso e o analisador de tests/analisador_interpolacao_crua.py, e o
 docstring dele e o contrato: o que conta como valor seguro, as extensoes e o que
 a regra NAO pega.
@@ -319,9 +320,32 @@ ACUSA = [
     ("sink: o formato de pipeline.html:704-707 sem o esc(stageId)",
      "function loadStage(stageId, st) {\n    body.innerHTML = " + RHS_LOADSTAGE + ";\n}",
      [(" ".join(RHS_LOADSTAGE.split()), "stageId")]),
-    # DOMPurify.sanitize(...) so cobre o valor quando e a expressao INTEIRA
-    ("DOMPurify.sanitize(a) + b: o b e julgado",
-     "el.innerHTML = DOMPurify.sanitize(a) + l.nome;", [("DOMPurify.sanitize(a) + l.nome", "l.nome")]),
+    # DOMPurify.sanitize(...) so vale na raiz do sink: o HTML inteiro que ele recebe ou uma
+    # posicao que preserva esse valor (ver o Classificador). Em qualquer outro ponto e CRU.
+    ("DOMPurify.sanitize(a) + b: operando de + nao e a raiz do sink",
+     "el.innerHTML = DOMPurify.sanitize(a) + l.nome;",
+     [("DOMPurify.sanitize(a) + l.nome", "DOMPurify.sanitize(a)")]),
+    ("DOMPurify.sanitize(x) em ${...}: o contexto pode ser atributo",
+     "el.innerHTML = `<input value=\"${DOMPurify.sanitize(x)}\">`;",
+     [("DOMPurify.sanitize(x)", "DOMPurify.sanitize(x)")]),
+    ("DOMPurify.sanitize(x) no meio de concatenacao",
+     "el.innerHTML = '<a title=\"' + DOMPurify.sanitize(x) + '\">';",
+     [("'<a title=\"' + DOMPurify.sanitize(x) + '\">'", "DOMPurify.sanitize(x)")]),
+    ("DOMPurify.sanitize(x) por identificador",
+     "const h = DOMPurify.sanitize(x);\nel.innerHTML = h;", [("h", "DOMPurify.sanitize(x)")]),
+    ("DOMPurify.sanitize(a) como parte de .join",
+     "el.innerHTML = [DOMPurify.sanitize(a), '<hr>'].join('');",
+     [("[DOMPurify.sanitize(a), '<hr>'].join('')", "DOMPurify.sanitize(a)")]),
+    ("DOMPurify.sanitize(x) pelo retorno de funcao",
+     "function limpa(x) { return DOMPurify.sanitize(x); }\nel.innerHTML = limpa(y);",
+     [("limpa(y)", "DOMPurify.sanitize(x)")]),
+    # document.write(a, b) concatena os argumentos: nenhum deles e o HTML inteiro
+    ("DOMPurify.sanitize(x) como um de varios argumentos de document.write",
+     "document.write('<p>', DOMPurify.sanitize(x));",
+     [("DOMPurify.sanitize(x)", "DOMPurify.sanitize(x)")]),
+    # na raiz o sanitize vale, mas nao salva o outro operando
+    ("DOMPurify.sanitize(a) || b: o b e julgado",
+     "el.innerHTML = DOMPurify.sanitize(a) || l.nome;", [("DOMPurify.sanitize(a) || l.nome", "l.nome")]),
     # -- cantos que falhavam abertos: `{{` nao e objeto literal; funcao sem nome no indice
     ("{{ ... }} do Jinja num <script> e valor do servidor",
      "const nome = {{ nome|tojson }};\nel.innerHTML = `<b>${nome}</b>`;", [("nome", "{{ nome|tojson }}")]),
@@ -379,6 +403,10 @@ ACEITA = [
      "const CONST = { a: 'x', b: 'y' };\nel.innerHTML = `<i>${CONST[k]}</i>`;"),
     ("data formatada", "el.innerHTML = `<i>${new Date(x).toLocaleDateString('pt-BR')}</i>`;"),
     ("DOMPurify.sanitize() cobrindo o valor do sink", "el.innerHTML = DOMPurify.sanitize(l.nome);"),
+    ("DOMPurify.sanitize() nos dois ramos do ternario que e o valor do sink (ai.html)",
+     "el.innerHTML = c ? DOMPurify.sanitize(a) : DOMPurify.sanitize(b);"),
+    ("DOMPurify.sanitize() em cada posicao que preserva o valor do sink",
+     "el.innerHTML = (f(), c && (h = await DOMPurify.sanitize(a))) || (DOMPurify.sanitize(b) ?? '');"),
     ("as duas `pills` de segmentacao.html (escopo, nao nome)", PILLS),
 ]
 for nome, codigo in ACEITA:

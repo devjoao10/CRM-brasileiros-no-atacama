@@ -14,8 +14,8 @@ tests/test_frontend_interpolacao_crua.py (front do CRM). Pontos de entrada:
 A regra: todo valor que chega a um sink de HTML (innerHTML / outerHTML /
 insertAdjacentHTML / document.write) precisa ser
 
-  (a) uma chamada de esc()/escapeHtml() - ou de DOMPurify.sanitize() -
-      cobrindo o valor inteiro,
+  (a) uma chamada de esc()/escapeHtml() cobrindo o valor inteiro - ou de
+      DOMPurify.sanitize(), so na raiz do sink (ver Classificador),
   (b) numero ou campo numerico,
   (c) constante do codigo, ou
   (d) uma entrada da allowlist (PERMITIDAS, no teste da regra), que fixa o
@@ -78,7 +78,17 @@ Classificador. Sem espaco e parenteses externos, o valor e SEGURO quando e:
     literal;
   - template aninhado: seguro NESTE ponto, porque vira MARKUP e cada
     interpolacao dele e julgada no proprio ponto;
-  - a expressao INTEIRA e esc(...)/escapeHtml(...) ou DOMPurify.sanitize(...);
+  - a expressao INTEIRA e esc(...)/escapeHtml(...);
+  - DOMPurify.sanitize(...) so na raiz do sink: o proprio valor do sink (o
+    lado direito de `.innerHTML =`/`+=`, o argumento HTML quando e o unico)
+    ou uma posicao que preserva esse valor - parenteses, ramo de ternario,
+    operando de `||`/`??`, ultimo de `&&` e de virgula, lado direito de
+    `=`/`||=`/`??=`/`&&=`, `await X`. Fora dela e CRU: em `${...}` (o
+    contexto pode ser atributo, e a aspa sai dele), operando de `+` (e de um
+    `h += x` dentro do valor), parte de `.join` ou de array, um de varios
+    argumentos de document.write, por identificador e por retorno de funcao.
+    O identificador falha fechado de proposito: honra-lo exigiria memo
+    sensivel a posicao do sink;
   - `X.map(cb)` e `X.join(SEP)` com o que cb devolve, o receptor e SEP seguros;
   - campo numerico pelo NOME (`id`, `*_id`, `*Id`, `total`, `count`,
     `*_count`, `num_*`, `total_*`), menos IDS_TEXTO e o id de etapa;
@@ -105,7 +115,8 @@ Extensoes (decididas alem do plano original do SEC-XSS-05):
     trecho cru fora de template (concatenacao, variavel, `.join`) e achado no
     proprio sink;
   - `.join(SEP)` aceita qualquer separador seguro, nao so literal;
-  - document.writeln tambem e sink; DOMPurify.sanitize(...) e seguro;
+  - document.writeln tambem e sink; DOMPurify.sanitize(...) e seguro so na
+    raiz do sink (ver Classificador);
   - escrita no conteudo, de local e de tabela, com o mesmo vocabulario:
     `NOME[k] =`, `NOME.x =`, push/unshift/splice/fill, Object.assign(NOME, ...);
   - `{{ ... }}` do Jinja dentro de <script> e cru.
@@ -117,6 +128,8 @@ Limites conhecidos (o que a regra NAO pega):
     (test_frontend_injection_contract.py) so descobre `function esc(`: um
     `const esc = ...` falso passaria nas duas suites. E href, atributo sem
     aspas, <script> e string JS em on* nao sao julgados como contexto proprio;
+  - DOMPurify.sanitize(x, opcoes) na raiz vale sem ler as opcoes: ADD_ATTR,
+    ADD_TAGS ou ALLOWED_URI_REGEXP frouxos reabrem on* e javascript:;
   - sinks que a regra nao conhece: setHTMLUnsafe, createContextualFragment,
     DOMParser, srcdoc, `el['innerHTML'] =`, Object.assign(el, {innerHTML});
   - aliasing: escrita por uma copia (`const ref = arr; ref.push(x)`) nao conta
@@ -687,13 +700,16 @@ class Analise:
             self.marca(F)
 
     def raizes_de_sink(self):
-        """Valor de .innerHTML/.outerHTML =, += e argumento HTML de insertAdjacentHTML/write."""
-        out = [(mm.end(), self.fim_expr(mm.end())) for mm in RE_SINK_ATRIB.finditer(self.m)]
+        """(ini, fim, raiz) do valor de .innerHTML/.outerHTML =, += e do argumento HTML de
+        insertAdjacentHTML/write; raiz=False quando ele nao e o HTML inteiro do sink
+        (document.write(a, b) concatena os argumentos)."""
+        out = [(mm.end(), self.fim_expr(mm.end()), True) for mm in RE_SINK_ATRIB.finditer(self.m)]
         for mm in RE_SINK_CHAMADA.finditer(self.m):
             abre = mm.end() - 1
             if abre in self.par:
                 args = self._args(abre + 1, self.par[abre])
-                out += args[1:] if mm.group(1) else args
+                html = args[1:] if mm.group(1) else args
+                out += [(x, y, len(html) == 1) for x, y in html]
         return out
 
     def achados(self):
@@ -706,8 +722,8 @@ class Analise:
         # O valor que chega ao sink e julgado como uma interpolacao: todo template
         # que ele alcanca vira markup, e o trecho cru que ele carrega fora de
         # template (concatenacao, variavel, .join) e achado no proprio sink.
-        for x, y in self.raizes_de_sink():
-            culpado = self.julga(x, y)
+        for x, y, raiz in self.raizes_de_sink():
+            culpado = self.julga(x, y, raiz)
             if culpado is not None:
                 out.append(Achado(self.rel, self.t.count("\n", 0, self._ws(x, y)) + 1,
                                   self.norm(x, y), culpado))
@@ -721,10 +737,12 @@ class Analise:
         return sorted(out)
 
     # -- Classificador: None = SEGURO; senao o trecho cru culpado -------------
-    def julga(self, a, b):
+    def julga(self, a, b, raiz=False):
         """None se o valor em m[a:b] e SEGURO pelo Classificador do docstring do modulo; senao o
-        trecho CRU culpado. Efeito colateral: todo template que o valor alcanca vira
-        MARKUP (marca) e entra na fila, para cada interpolacao dele ser julgada no ponto."""
+        trecho CRU culpado. raiz=True: m[a:b] e o HTML inteiro do sink, ou uma posicao que
+        preserva esse valor - o unico ponto onde DOMPurify.sanitize(...) vale. Efeito
+        colateral: todo template que o valor alcanca vira MARKUP (marca) e entra na fila,
+        para cada interpolacao dele ser julgada no ponto."""
         a, b = self.apara(a, b)
         if a >= b:
             return None
@@ -733,14 +751,14 @@ class Analise:
         ops = [(k, tk) for k, tk in enumerate(toks) if tk.tipo == "op"]
         virgulas = [tk for _, tk in ops if tk.txt == ","]
         if virgulas:                                    # a, b: vale o ultimo
-            return self.julga(virgulas[-1].fim, b)
+            return self.julga(virgulas[-1].fim, b, raiz)
         if any(tk.txt == "=>" for _, tk in ops):        # funcao como valor imprime o codigo
             return texto
         for _, tk in ops:                               # atribuicao: vale o lado direito
             if tk.txt in ATRIBUICOES:
-                if tk.txt == "+=":
+                if tk.txt == "+=":                      # concatena: nenhum lado e a raiz
                     return self._primeiro(self.julga(a, tk.ini), self.julga(tk.fim, b))
-                return self.julga(tk.fim, b) if tk.txt in ("=", "||=", "??=", "&&=") else None
+                return self.julga(tk.fim, b, raiz) if tk.txt in ("=", "||=", "??=", "&&=") else None
         q = next((k for k, tk in ops if tk.txt == "?"), None)
         if q is not None:                               # c ? x : y -> x e y (c nao e impresso)
             prof = 0
@@ -752,14 +770,15 @@ class Analise:
                 elif prof:
                     prof -= 1
                 else:
-                    return self._primeiro(self.julga(toks[q].fim, tk.ini), self.julga(tk.fim, b))
+                    return self._primeiro(self.julga(toks[q].fim, tk.ini, raiz),
+                                          self.julga(tk.fim, b, raiz))
             return texto
         partes = self._divide(toks, a, b, ("||", "??"))
         if len(partes) > 1:                             # qualquer operando pode ser impresso
-            return self._primeiro(*[self.julga(x, y) for x, y in partes])
+            return self._primeiro(*[self.julga(x, y, raiz) for x, y in partes])
         partes = self._divide(toks, a, b, ("&&",))
         if len(partes) > 1:                             # o falsy de a imprime false/0/''/null
-            return self.julga(*partes[-1])
+            return self.julga(*partes[-1], raiz)
         if any(tk.txt in BINARIOS_SEGUROS for _, tk in ops) or any(
                 tk.tipo == "id" and tk.txt in ("instanceof", "in") for tk in toks):
             return None                                 # comparacao/bit a bit: bool ou numero
@@ -780,9 +799,9 @@ class Analise:
                 toks[-1].tipo == "op" and toks[-1].txt in ("++", "--")):
             return None                                 # unario/posfixo: bool, numero, tipo
         if t0.tipo == "id" and t0.txt == "await" and len(toks) > 1:
-            return self.julga(toks[1].ini, b)
+            return self.julga(toks[1].ini, b, raiz)
         cadeia = self._parse_cadeia(toks)
-        return texto if cadeia is None else self._valor_da_cadeia(*cadeia, a, texto)
+        return texto if cadeia is None else self._valor_da_cadeia(*cadeia, a, texto, raiz)
 
     @staticmethod
     def _fim_de_operando(tk):
@@ -864,7 +883,7 @@ class Analise:
         return ult.tipo == "prop" and (ult.txt in ("length", "size") or (
             self._nome_numerico(ult.txt, self._receptor(prim, suf)) and not self._id_de_etapa(prim, suf)))
 
-    def _valor_da_cadeia(self, prim, suf, a, texto):
+    def _valor_da_cadeia(self, prim, suf, a, texto, raiz):
         n = len(suf)
         if not n:
             return self._primario(prim, texto)
@@ -877,7 +896,7 @@ class Analise:
             return None                                 # esc(...) cobrindo o valor inteiro
         if (prim.tipo == "id" and prim.txt == "DOMPurify" and n == 2 and suf[0].tipo == "prop"
                 and suf[0].txt == "sanitize" and ult.tipo == "call"):
-            return None                                 # sanitizador de HTML cobrindo o valor inteiro
+            return None if raiz else texto              # sanitizador de HTML: so na raiz do sink
         if self._campo_numerico(prim, suf):
             return None
         if prim.tipo == "id" and all(s.tipo in ("prop", "idx") for s in suf):
