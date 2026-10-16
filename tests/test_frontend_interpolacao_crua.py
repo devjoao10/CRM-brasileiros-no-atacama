@@ -65,9 +65,9 @@ def check(cond, msg):
 
 Achado = namedtuple("Achado", "rel linha expr culpado")
 
-# Colunas `*_id` declaradas String em app/models: texto, nao PK/FK inteira. A
-# regra numerica pelo nome nao vale para elas (a secao 5 confere contra os
-# models: coluna String `*_id` nova reprova ate entrar aqui).
+# Nomes `*_id` que sao texto, nao PK/FK inteira: coluna String/Text em app/models,
+# campo str em app/schemas. A regra numerica pelo nome nao vale para eles (a secao 5
+# confere: `*_id` texto novo reprova ate entrar aqui ou casar o id de etapa).
 IDS_TEXTO = frozenset({"etapa_id", "google_calendar_event_id"})
 
 
@@ -77,6 +77,7 @@ IDS_TEXTO = frozenset({"etapa_id", "google_calendar_event_id"})
 
 # -- 1. Fontes: o .js inteiro; no .html, cada <script> inline (sem src=) ------
 RE_SCRIPT = re.compile(r"<script\b([^>]*)>(.*?)</script\s*>", re.S | re.I)
+RE_SCRIPT_ABRE = re.compile(r"<script\b([^>]*)>", re.I)     # contagem independente (sincronia)
 
 
 def regioes_de_script(rel, texto):
@@ -116,6 +117,7 @@ def lexa(t, a, b, masc, atomos, templates):
     interpolacao). Sobra so codigo - as buscas de declaracao, atribuicao,
     return e sink nunca casam dentro de string ou comentario.
     `atomos[ini] = (fim, tipo)` marca string, regex e template inteiros.
+    Devolve quantos templates e `${...}` ficaram abertos no fim (0 = em sincronia).
     """
     def apaga(x, y):
         for k in range(x, y):
@@ -238,6 +240,7 @@ def lexa(t, a, b, masc, atomos, templates):
         if fr[0] == "tpl" and fr[1].fim is None:
             fr[1].fim = b
             atomos[fr[1].ini] = (b, "tpl")
+    return len(pilha)
 
 
 # -- 3/4. Markup e classificador ----------------------------------------------
@@ -307,8 +310,9 @@ class Analise:
             masc[a:b] = texto[a:b]
         self.atomos = {}
         self.templates = []
+        self.abertos = 0        # templates e ${...} sem fechamento (ver dessincronias)
         for a, b in self.regioes:
-            lexa(texto, a, b, masc, self.atomos, self.templates)
+            self.abertos += lexa(texto, a, b, masc, self.atomos, self.templates)
         self.m = "".join(masc)
         self.tpl_por_ini = {T.ini: T for T in self.templates}
         self.interp = [(x, y) for T in self.templates for _, x, y in T.exprs]
@@ -1073,8 +1077,28 @@ class Analise:
 
 
 def analisa(rel, texto):
-    """Ponto de entrada unico: os achados CRUS de um arquivo (rel = caminho relativo)."""
+    """Os achados CRUS de um arquivo (rel = caminho relativo); a secao 1 usa a Analise direto."""
     return Analise(rel, texto).achados()
+
+
+def dessincronias(A):
+    """O lexer em sincronia com a fonte (lista vazia = ok): nenhum template ou ${...}
+    aberto no fim, todo ( [ { do codigo mascarado com par e, no .html, uma regiao
+    analisada por <script> inline. Lexer dessincronizado e regra verde e cega."""
+    probs = []
+    if A.abertos:
+        probs.append(f"{A.rel}: {A.abertos} template(s) ou ${{...}} sem fechamento")
+    soltos = [mm.start() for mm in re.finditer(r"[()\[\]{}]", A.m) if mm.start() not in A.par]
+    if soltos:
+        linha = A.t.count("\n", 0, soltos[0]) + 1
+        probs.append(f"{A.rel}:{linha}: {len(soltos)} ( [ {{ sem par no codigo")
+    if A.rel.endswith(".html"):
+        tags = [mm for mm in RE_SCRIPT_ABRE.finditer(A.t)
+                if not re.search(r"\bsrc\s*=", mm.group(1), re.I)]
+        if len(tags) != len(A.regioes):
+            probs.append(f"{A.rel}: {len(tags)} <script> inline, "
+                         f"{len(A.regioes)} regiao(oes) analisada(s)")
+    return probs
 
 
 def arquivos_do_front():
@@ -1187,14 +1211,26 @@ def confere_permitidas(achados, permitidas):
 print("1) todo ${...} de markup do CRM e esc(), numero, constante ou allowlist")
 
 arquivos = arquivos_do_front()
-achados = []
+achados, dessincronizados = [], []
 for p in arquivos:
     rel = p.relative_to(ROOT).as_posix()
     try:
-        achados += analisa(rel, p.read_text(encoding="utf-8"))
+        A = Analise(rel, p.read_text(encoding="utf-8"))
+        achados += A.achados()
+        dessincronizados += dessincronias(A)
     except Exception as exc:
         raise RuntimeError(f"analisador falhou em {rel}") from exc
 check(len(arquivos) >= MINIMO_DE_ARQUIVOS, f"arquivos de front analisados: {len(arquivos)}")
+check(not dessincronizados, f"lexer em sincronia com a fonte real: {dessincronizados!a}")
+# ...e o invariante reprova lexer dessincronizado (senao ele mesmo seria verde e cego).
+for rel, codigo, esperado in (
+    ("x.js", "el.innerHTML = `<b>${a", ["x.js: 2 template(s) ou ${...} sem fechamento"]),
+    ("x.js", "f(a;", ["x.js:1: 1 ( [ { sem par no codigo"]),
+    ("x.html", "<script>a()</script>\n<script>b()",
+     ["x.html: 2 <script> inline, 1 regiao(oes) analisada(s)"]),
+):
+    obtido = dessincronias(Analise(rel, codigo))
+    check(obtido == esperado, f"o invariante de sincronia reprova {codigo!a}: {obtido!a}")
 problemas = confere_permitidas(achados, PERMITIDAS)
 for linha in problemas:
     print(f"    {linha!a}")
@@ -1481,19 +1517,36 @@ check(not confere_permitidas([A1], {("x.html", "foo"): (1, BOM_MOTIVO)}),
       "aceita entrada com contagem certa e motivo concreto")
 
 # ---------------------------------------------------------------------------
-# 5. IDS_TEXTO x app/models: coluna String `*_id` nova reprova ate ser classificada
+# 5. IDS_TEXTO x app/models e app/schemas: `*_id` texto novo reprova ate ser classificado
 # ---------------------------------------------------------------------------
-print("\n5) excecoes de id texto conferidas contra app/models")
+print("\n5) excecoes de id texto conferidas contra app/models e app/schemas")
 
-RE_COLUNA_ID_TEXTO = re.compile(r"(\w+_id)\s*=\s*Column\(\s*String")
-colunas = set()
+RE_COLUNA_ID_TEXTO = re.compile(r"(\w+_id)\s*=\s*(?:Column|mapped_column)\(\s*(?:String|Text)")
+RE_CAMPO_ID_TEXTO = re.compile(r"(\w+_id)\s*:\s*(?:Optional\[)?str")
+
+
+def fora_da_regra(nomes):
+    """`*_id` texto que a regra numerica ainda aceitaria pelo nome (nem IDS_TEXTO, nem id de etapa)."""
+    return sorted(n for n in nomes if n not in IDS_TEXTO and not RE_ID_DE_ETAPA.search(n))
+
+
+colunas, campos = set(), set()
 for p in sorted((ROOT / "app" / "models").rglob("*.py")):
     colunas |= set(RE_COLUNA_ID_TEXTO.findall(p.read_text(encoding="utf-8")))
-check(bool(colunas), f"o scan acha as colunas String *_id dos models ({sorted(colunas)})")
-check(colunas <= IDS_TEXTO,
-      f"toda coluna String *_id esta em IDS_TEXTO (fora: {sorted(colunas - IDS_TEXTO)})")
-novo = set(RE_COLUNA_ID_TEXTO.findall("    codigo_id = Column(String(40), nullable=True)"))
-check(bool(novo - IDS_TEXTO), "controle: uma coluna String *_id nova fica fora de IDS_TEXTO")
+for p in sorted((ROOT / "app" / "schemas").rglob("*.py")):
+    campos |= set(RE_CAMPO_ID_TEXTO.findall(p.read_text(encoding="utf-8")))
+check(bool(colunas), f"o scan acha as colunas String/Text *_id dos models ({sorted(colunas)})")
+check(bool(campos), f"o scan acha os campos str *_id dos schemas ({sorted(campos)})")
+check(not fora_da_regra(colunas | campos),
+      f"todo *_id texto de models e schemas esta em IDS_TEXTO ou e id de etapa "
+      f"(fora: {fora_da_regra(colunas | campos)})")
+novo = RE_COLUNA_ID_TEXTO.findall("    codigo_id = Column(String(40), nullable=True)\n"
+                                  "    nota_id = Column(Text)\n    ref_id = mapped_column(String(20))\n")
+check(fora_da_regra(novo) == ["codigo_id", "nota_id", "ref_id"],
+      f"controle: coluna String/Text *_id nova (Column ou mapped_column) fica fora ({novo})")
+novo = RE_CAMPO_ID_TEXTO.findall("    codigo_id: Optional[str] = None\n    ref_id: str\n")
+check(fora_da_regra(novo) == ["codigo_id", "ref_id"],
+      f"controle: campo str *_id novo de schema fica fora ({novo})")
 check(crus("el.innerHTML = `<i>${t.google_calendar_event_id}</i>`;")
       == [("t.google_calendar_event_id", "t.google_calendar_event_id")],
       "a regra numerica respeita IDS_TEXTO")
