@@ -207,6 +207,49 @@ ACUSA = [
     # `.id` do parametro de callback sobre `.etapas`, seja qual for o nome dele
     ("s.id de funnel.etapas.map(s => ...) e id de etapa",
      "el.innerHTML = funnel.etapas.map(s => `<i>${s.id}</i>`).join('');", [("s.id", "s.id")]),
+    # o `.id` de uma ETAPA, elemento de uma lista de etapas (o modelo: Extensoes e _de_etapas)
+    ("lista de etapas entre parenteses com || []",
+     "el.innerHTML = (f.etapas || []).map(s => `<i>${s.id}</i>`).join('');", [("s.id", "s.id")]),
+    ("etapa de for (const s of f.etapas)",
+     "let h = ''; for (const s of f.etapas) { h += `<i>${s.id}</i>`; } el.innerHTML = h;",
+     [("s.id", "s.id")]),
+    ("lista de etapas depois de .filter(...)",
+     "el.innerHTML = f.etapas.filter(x => x.ativa).map(t => `<i>${t.id}</i>`).join('');",
+     [("t.id", "t.id")]),
+    ("lista de etapas entre parenteses e depois de .filter(...)",
+     "el.innerHTML = (f.etapas || []).filter(x => x.ativa).map(t => `<i>${t.id}</i>`).join('');",
+     [("t.id", "t.id")]),
+    ("etapa por indice: f.etapas[0].id", "el.innerHTML = `<i>${f.etapas[0].id}</i>`;",
+     [("f.etapas[0].id", "f.etapas[0].id")]),
+    ("etapa por indice no nome solto: etapas[0].id", "el.innerHTML = `<i>${etapas[0].id}</i>`;",
+     [("etapas[0].id", "etapas[0].id")]),
+    ("etapa por .find(...)", "el.innerHTML = `<i>${f.etapas.find(s => s.ordem === 1).id}</i>`;",
+     [("f.etapas.find(s => s.ordem === 1).id", "f.etapas.find(s => s.ordem === 1).id")]),
+    ("a grafia stages", "el.innerHTML = (b.stages || []).map(s => `<i>${s.id}</i>`).join('');",
+     [("s.id", "s.id")]),
+    ("lista de etapas como operando de && e ||",
+     "el.innerHTML = (f && f.etapas || []).map(s => `<i>${s.id}</i>`).join('');", [("s.id", "s.id")]),
+    ("lista de etapas como ramo de ternario",
+     "el.innerHTML = (f ? f.etapas : []).map(s => `<i>${s.id}</i>`).join('');", [("s.id", "s.id")]),
+    ("lista de etapas com ?.", "el.innerHTML = f?.etapas?.map(s => `<i>${s.id}</i>`).join('');",
+     [("s.id", "s.id")]),
+    ("etapa como operando de ||: (f.etapas[0] || {}).id",
+     "el.innerHTML = `<i>${(f.etapas[0] || {}).id}</i>`;",
+     [("(f.etapas[0] || {}).id", "(f.etapas[0] || {}).id")]),
+    ("lista de etapas depois de return (palavra antes do parentese)",
+     "function g(f) { return (f.etapas || []).map(s => `<i>${s.id}</i>`).join(''); }\n"
+     "el.innerHTML = g(x);", [("s.id", "s.id")]),
+    # o `...` antes da lista nao e acesso a membro (o template tem tag: e julgado onde estiver)
+    ("lista de etapas depois de spread: render(...f.etapas.map(...))",
+     "render(...f.etapas.map(s => `<i>${s.id}</i>`));", [("s.id", "s.id")]),
+    # comentario entre `map(` e o callback vira espaco no codigo mascarado e nao esconde a lista,
+    # seja qual for o tamanho (a regra textual de antes so olhava 200 caracteres para tras)
+    ("bloco de comentario entre .map( e o callback",
+     "el.innerHTML = funnel.etapas.map(\n" + ("    // " + "-" * 80 + "\n") * 3
+     + "    s => `<i>${s.id}</i>`).join('');", [("s.id", "s.id")]),
+    # desestruturar o id ja era cru (parametro): trava o caso
+    ("({id}) => desestruturado de f.etapas.map",
+     "el.innerHTML = f.etapas.map(({id}) => `<i>${id}</i>`).join('');", [("id", "id")]),
     # nome numerico LIGADO no arquivo: decide o valor, nao o nome
     ("const count = l.nome: o nome numerico nao salva o valor",
      "const count = l.nome;\nel.innerHTML = `<b>${count}</b>`;", [("count", "l.nome")]),
@@ -396,6 +439,8 @@ function renderFilterPills(f) {
 """
 ACEITA = [
     ("id inteiro", "el.innerHTML = `<i>${l.id}</i>`;"),
+    ("id inteiro de lead em callback aninhado no callback de uma lista de etapas",
+     "el.innerHTML = f.etapas.map(s => s.leads.map(l => `<i>${l.id}</i>`).join('')).join('');"),
     ("esc() cobrindo o valor", "el.innerHTML = `<i>${esc(l.nome)}</i>`;"),
     ("ternario de literais", "el.innerHTML = `<i>${x ? 'a' : 'b'}</i>`;"),
     ("tamanho de lista", "el.innerHTML = `<i>${list.length}</i>`;"),

@@ -108,8 +108,15 @@ reprovam.
 
 Extensoes (decididas alem do plano original do SEC-XSS-05):
   - id de etapa (StageSchema.id, texto livre) em qualquer grafia - stageId,
-    etapaId, destino_etapa_id - e como `.id` de `stage`/`etapa` ou do
-    parametro de callback sobre `.etapas`/`.stages`; e nome numerico LIGADO
+    etapaId, destino_etapa_id -, como `.id` de `stage`/`etapa` e como `.id`
+    de uma ETAPA, elemento de uma LISTA de etapas (Analise._de_etapas). LISTA
+    e a cadeia que termina no nome ou na propriedade `etapas`/`stages`,
+    tirados da direita os parenteses e os metodos que devolvem os mesmos
+    elementos (METODOS_PRESERVAM_LISTA: filter, slice, sort, concat...).
+    ETAPA e `LISTA[k]`, `LISTA.find(...)`/`.at(k)` (METODOS_ELEMENTO), o
+    parametro do callback que e o 1o argumento de `LISTA.metodo(` (qualquer
+    metodo) e a variavel de `for (... of LISTA)`. Nos dois basta um operando
+    de `||`/`??`/`&&`/ternario ser (falha fechado). E nome numerico LIGADO
     no arquivo vale pelo valor (o nome so vale para nome solto);
   - o valor do sink e julgado como uma interpolacao: propaga MARKUP, e o
     trecho cru fora de template (concatenacao, variavel, `.join`) e achado no
@@ -134,6 +141,13 @@ Limites conhecidos (o que a regra NAO pega):
     DOMParser, srcdoc, `el['innerHTML'] =`, Object.assign(el, {innerHTML});
   - aliasing: escrita por uma copia (`const ref = arr; ref.push(x)`) nao conta
     para arr;
+  - id de etapa fora do modelo de LISTA - o `.id` passa como numero: alias
+    por variavel (`const lista = f.etapas; lista.map(...)`,
+    `const s = f.etapas[0]; s.id`), lista com outro nome que nao
+    `etapas`/`stages`, copia que o modelo nao segue (`[...LISTA]`,
+    Array.from(LISTA), Object.values, `.entries()`, `.map(s => s)`),
+    callback passado por nome (`LISTA.map(render)`) e `for (s of LISTA)`
+    sem declaracao;
   - regex x divisao: `i++ / 2 ... /` na mesma linha e lido como regex, e o
     trecho entre as barras some da analise;
   - custo: resultado que depende de ciclo aberto nao vai para o memo, entao
@@ -360,10 +374,14 @@ RE_NOME_NUMERICO = re.compile(
 # secao 3 de test_frontend_injection_contract.py) em qualquer grafia - stageId,
 # etapaId, destino_etapa_id - e nao so como `.id` de `stage`/`etapa`.
 RE_ID_DE_ETAPA = re.compile(r"(?:stage|etapa)_?id$", re.I)
-# O mesmo id como `.id` do parametro de callback sobre a lista de etapas
-# (`funnel.etapas.map(s => ... s.id ...)`), seja qual for o nome do parametro.
-RE_CALLBACK_DE_ETAPAS = re.compile(
-    r"\b(?:etapas|stages)\s*\.\s*(?:map|forEach|filter|find|some|every)\s*\(\s*$")
+# O mesmo id como `.id` de uma ETAPA, elemento de uma LISTA de etapas (`funnel.etapas`,
+# `boardMeta.stages`): o modelo esta em Extensoes e em Analise._de_etapas.
+LISTAS_DE_ETAPAS = frozenset({"etapas", "stages"})
+METODOS_PRESERVAM_LISTA = frozenset(        # devolvem array com (parte d)os mesmos elementos
+    "filter slice splice sort reverse concat toSorted toReversed toSpliced".split())
+METODOS_ELEMENTO = frozenset("find findLast at pop shift".split())     # devolvem UM elemento
+RE_CALLBACK_ANTES = re.compile(r"\??\.\s*(?:[^\W\d]|\$)[\w$]*\s*\(\s*$")  # `.metodo(` antes do callback
+RE_IDENT_ANTES = re.compile(r"(?:[^\W\d]|\$)[\w$]*$")
 RE_TAG = re.compile(r"<[A-Za-z!/]")
 RE_SINK_ATRIB = re.compile(r"\.\s*(?:innerHTML|outerHTML)\s*\+?=(?![=>])")
 RE_SINK_CHAMADA = re.compile(r"\.\s*(insertAdjacentHTML)\s*\(|\bdocument\s*\.\s*write(?:ln)?\s*\(")
@@ -863,12 +881,76 @@ class Analise:
         return not (nome == "id" and receptor in ("stage", "etapa"))
 
     def _id_de_etapa(self, prim, suf):
-        """`X.id` com X parametro de callback sobre `.etapas`/`.stages`: id de etapa, texto."""
-        if not (prim.tipo == "id" and len(suf) == 1 and suf[0].tipo == "prop" and suf[0].txt == "id"):
+        """`E.id` com E uma ETAPA (ver _de_etapas): id de etapa, texto livre."""
+        return suf[-1].tipo == "prop" and suf[-1].txt == "id" and self._de_etapas(
+            prim.ini, suf[-2].fim if len(suf) > 1 else prim.fim, False)
+
+    def _de_etapas(self, a, b, lista):
+        """m[a:b] e uma LISTA de etapas (lista=True) ou uma ETAPA (lista=False)? Ver o id de
+        etapa em Extensoes, no docstring do modulo."""
+        a, b = self.apara(a, b)
+        toks = self.tokens(a, b)
+        partes = self._divide(toks, a, b, ("||", "??", "&&", "?", ":"))
+        if len(partes) > 1:
+            return any(self._de_etapas(x, y, lista) for x, y in partes)
+        cadeia = self._parse_cadeia(toks) if toks else None
+        if cadeia is None:
             return False
-        return any(L.tipo == "param" and RE_CALLBACK_DE_ETAPAS.search(
-                       self.m, max(0, L.extra.ini - 200), L.extra.ini)
-                   for L in self._visiveis(prim.txt, prim.ini))
+        prim, suf = cadeia
+        while lista and len(suf) >= 2 and suf[-1].tipo == "call" and (
+                suf[-2].tipo == "prop" and suf[-2].txt in METODOS_PRESERVAM_LISTA):
+            suf = suf[:-2]                              # LISTA.filter(...) ainda e LISTA
+        if not lista and suf and (suf[-1].tipo == "idx" or (
+                len(suf) >= 2 and suf[-1].tipo == "call" and suf[-2].tipo == "prop"
+                and suf[-2].txt in METODOS_ELEMENTO)):  # LISTA[k], LISTA.find(...)
+            k = len(suf) - (1 if suf[-1].tipo == "idx" else 2)
+            return self._de_etapas(a, suf[k - 1].fim if k else prim.fim, True)
+        if suf:
+            return lista and suf[-1].tipo == "prop" and suf[-1].txt in LISTAS_DE_ETAPAS
+        if prim.tipo == "grp" and prim.txt == "(":
+            return self._de_etapas(prim.ini + 1, prim.fim - 1, lista)
+        if prim.tipo != "id":
+            return False
+        if lista:
+            return prim.txt in LISTAS_DE_ETAPAS
+        return any(self._liga_etapa(L) for L in self._visiveis(prim.txt, prim.ini))
+
+    def _liga_etapa(self, L):
+        """L liga uma ETAPA: variavel de `for (... of LISTA)` ou parametro do callback que
+        e o 1o argumento de `LISTA.metodo(` (qualquer metodo)."""
+        if L.tipo == "forof":
+            return self._de_etapas(*L.extra, True)
+        if L.tipo != "param":
+            return False
+        k = L.extra.ini         # comentario entre `(` e o callback e espaco no codigo mascarado
+        while k and self.m[k - 1].isspace():
+            k -= 1
+        mm = RE_CALLBACK_ANTES.search(self.m, max(0, k - 80), k)
+        return bool(mm) and self._de_etapas(self._inicio_da_cadeia(mm.start()), mm.start(), True)
+
+    def _inicio_da_cadeia(self, fim):
+        """Onde comeca a cadeia `P.x?.y[k](a)` que termina em fim, lida de tras para frente."""
+        m, i = self.m, fim
+        while True:
+            j = i
+            while j and m[j - 1].isspace():
+                j -= 1
+            mi = RE_IDENT_ANTES.search(m, max(0, j - 80), j)
+            if j and m[j - 1] in ")]" and j - 1 in self.par:
+                ini = self.par[j - 1]                   # (args), [k] ou o grupo do inicio
+            elif mi and mi.group(0) not in PALAVRAS_PRE_REGEX:
+                ini = mi.start()
+            else:
+                return i                                # `return (`, `= (`...: comeca em i
+            k = ini
+            while k and m[k - 1].isspace():
+                k -= 1
+            if m[k - 1:k] == "." and m[k - 3:k] != "...":  # .x e ?.x: a cadeia segue antes
+                i = k - 2 if m[k - 2:k] == "?." else k - 1
+            elif m[ini] in "([" and k and (m[k - 1] in ")]" or RE_IDENT_ANTES.search(m, max(0, k - 80), k)):
+                i = k                                   # f(...) e a[k]: segue no que e chamado
+            else:
+                return ini
 
     def _nome_solto_numerico(self, prim):
         """Identificador SEM ligacao no arquivo (global, de outro arquivo) com nome de PK/FK
