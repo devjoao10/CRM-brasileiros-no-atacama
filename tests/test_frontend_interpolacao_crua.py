@@ -41,14 +41,14 @@ Por que isto nao e um grep:
     numerica ou vai para a allowlist, nunca para esc().
 
 Escopo: templates/**/*.html (blocos <script> inline, sem src=) e
-static/js/*.js. O app de conversas fica fora: e follow-up.
+static/js/**/*.js. O app de conversas fica fora: e follow-up.
 
 Rodar:  python tests/test_frontend_interpolacao_crua.py
 """
 import pathlib
 import re
 import sys
-from collections import namedtuple
+from collections import deque, namedtuple
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -99,13 +99,12 @@ PALAVRAS_PRE_REGEX = frozenset(
 class Template:
     """Template literal: quasis = texto estatico; exprs = (pos do `${`, ini, fim)."""
 
-    def __init__(self, ini, pai):
+    def __init__(self, ini):
         self.ini = ini
         self.fim = None
         self.quasis = [""]
         self.exprs = []
-        self.pai = pai          # (template, indice da interpolacao) se aninhado
-        self.filhos = []
+        self.filhos = []        # templates aninhados nas interpolacoes deste
 
 
 def lexa(t, a, b, masc, atomos, templates):
@@ -178,12 +177,9 @@ def lexa(t, a, b, masc, atomos, templates):
             prev = ")"
             continue
         if c == "`":
-            pai = None
+            T = Template(i)
             if pilha:   # o topo so pode ser "expr": template dentro de ${...}
-                pai = (pilha[-1][1], len(pilha[-1][1].exprs))
-            T = Template(i, pai)
-            if pai:
-                pai[0].filhos.append(T)
+                pilha[-1][1].filhos.append(T)
             templates.append(T)
             pilha.append(("tpl", T))
             i += 1
@@ -284,7 +280,7 @@ RE_CALLBACK_DE_ETAPAS = re.compile(
 RE_TAG = re.compile(r"<[A-Za-z!/]")
 RE_SINK_ATRIB = re.compile(r"\.\s*(?:innerHTML|outerHTML)\s*\+?=(?![=>])")
 RE_SINK_CHAMADA = re.compile(r"\.\s*(insertAdjacentHTML)\s*\(|\bdocument\s*\.\s*write(?:ln)?\s*\(")
-RE_FUNCTION = re.compile(r"\bfunction\b\s*\*?\s*((?:[^\W\d]|\$)[\w$]*)?\s*\(")
+RE_FUNCTION = re.compile(r"\bfunction\b\s*(?:\*\s*)?(?:((?:[^\W\d]|\$)[\w$]*)\s*)?\(")
 RE_NOME_ATRIBUIDO = re.compile(r"\b(?:const|let|var)\s+((?:[^\W\d]|\$)[\w$]*)\s*=\s*(?:async\s+)?$")
 RE_DECL = re.compile(r"\b(const|let|var)\b")
 RE_FOR = re.compile(r"\bfor\s*(?:await\s*)?(\()\s*$")
@@ -327,7 +323,7 @@ class Analise:
         self.ligacoes = {}
         self._indexa_ligacoes()
         self.markup = set()
-        self.fila = []
+        self.fila = deque()
         self.memo = {}
         self.visitando = set()
         self.ciclos = 0
@@ -366,8 +362,8 @@ class Analise:
             return Tok("grp", i, j + 1, c) if j is not None else Tok("op", i, i + 1, c)
         if c in ")]}":
             return Tok("fecha", i, i + 1, c)
-        if c.isdigit() or (c == "." and m[i + 1:i + 2].isdigit()):
-            mm = RE_NUM.match(m, i)
+        mm = RE_NUM.match(m, i)
+        if mm:
             return Tok("num", i, mm.end(), mm.group(0))
         mm = RE_IDENT.match(m, i)
         if mm:
@@ -626,6 +622,8 @@ class Analise:
         return out
 
     def achados(self):
+        """Os achados CRUS do arquivo. Uma chamada por Analise: ela consome a fila de
+        MARKUP, entao uma segunda chamada nao julga mais nenhuma interpolacao."""
         for T in self.templates:
             if any(RE_TAG.search(q) for q in T.quasis):
                 self.marca(T)
@@ -639,7 +637,7 @@ class Analise:
                 out.append(Achado(self.rel, self.t.count("\n", 0, self._ws(x, y)) + 1,
                                   self.norm(x, y), culpado))
         while self.fila:
-            T = self.fila.pop(0)
+            T = self.fila.popleft()
             for dolar, x, y in T.exprs:
                 culpado = self.julga(x, y)
                 if culpado is not None:
@@ -850,6 +848,8 @@ class Analise:
                 return self.julga(prim.ini + 1, prim.fim - 1)
             if prim.txt == "[":
                 return self._primeiro(*[self.julga(x, y) for x, y in self._args(prim.ini + 1, prim.fim - 1)])
+            if self.m.startswith("{{", prim.ini):
+                return texto                            # {{ ... }} do Jinja: valor do servidor
             return None                                 # objeto literal: [object Object]
         if prim.tipo == "id":
             if (prim.txt in LITERAIS or self._laco_constante(prim.txt, prim.ini, False)
@@ -928,8 +928,10 @@ class Analise:
                                                      and self._funcao_em(L.init[0]))
                                for L in ligs):
             return texto
-        return self._memoizado(("fn", nome), lambda: self._primeiro(
-            *[self._retorno_de(F) for F in self.funcoes_por_nome.get(nome, ())]))
+        fs = self.funcoes_por_nome.get(nome)
+        if not fs:      # funcao que o indice nao nomeou (`const a = 1, f = () => ...`)
+            return texto
+        return self._memoizado(("fn", nome), lambda: self._primeiro(*[self._retorno_de(F) for F in fs]))
 
     def _retorno_de(self, F):
         if not F.bloco:
@@ -1077,7 +1079,12 @@ def analisa(rel, texto):
 
 def arquivos_do_front():
     return sorted(list((ROOT / "templates").rglob("*.html"))
-                  + list((ROOT / "static" / "js").glob("*.js")))
+                  + list((ROOT / "static" / "js").rglob("*.js")))
+
+
+# Piso do scan (hoje sao 23 arquivos): um glob quebrado - pasta movida, padrao
+# errado - daria zero achados e a regra passaria verde e cega.
+MINIMO_DE_ARQUIVOS = 20
 
 
 # ---------------------------------------------------------------------------
@@ -1182,8 +1189,12 @@ print("1) todo ${...} de markup do CRM e esc(), numero, constante ou allowlist")
 arquivos = arquivos_do_front()
 achados = []
 for p in arquivos:
-    achados += analisa(p.relative_to(ROOT).as_posix(), p.read_text(encoding="utf-8"))
-check(len(arquivos) >= 20, f"arquivos de front analisados: {len(arquivos)}")
+    rel = p.relative_to(ROOT).as_posix()
+    try:
+        achados += analisa(rel, p.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"analisador falhou em {rel}") from exc
+check(len(arquivos) >= MINIMO_DE_ARQUIVOS, f"arquivos de front analisados: {len(arquivos)}")
 problemas = confere_permitidas(achados, PERMITIDAS)
 for linha in problemas:
     print(f"    {linha!a}")
@@ -1373,6 +1384,12 @@ ACUSA = [
     # DOMPurify.sanitize(...) so cobre o valor quando e a expressao INTEIRA
     ("DOMPurify.sanitize(a) + b: o b e julgado",
      "el.innerHTML = DOMPurify.sanitize(a) + l.nome;", [("DOMPurify.sanitize(a) + l.nome", "l.nome")]),
+    # -- cantos que falhavam abertos: `{{` nao e objeto literal; funcao sem nome no indice
+    ("{{ ... }} do Jinja num <script> e valor do servidor",
+     "const nome = {{ nome|tojson }};\nel.innerHTML = `<b>${nome}</b>`;", [("nome", "{{ nome|tojson }}")]),
+    ("funcao declarada junto com outra variavel (o indice nao a nomeia)",
+     "const a = 1, fmt = (x) => x;\nel.innerHTML = `<td>${fmt(y.nome)}</td>`;",
+     [("fmt(y.nome)", "fmt(y.nome)")]),
 ]
 for nome, codigo, esperado in ACUSA:
     obtido = crus(codigo)
