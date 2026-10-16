@@ -153,7 +153,9 @@ Achado = namedtuple("Achado", "rel linha expr culpado")
 # Nomes `*_id` que sao texto, nao PK/FK inteira: coluna String/Text em app/models,
 # campo str em app/schemas. A regra numerica pelo nome nao vale para eles (a secao 5
 # confere: `*_id` texto novo reprova ate entrar aqui ou casar o id de etapa).
-IDS_TEXTO = frozenset({"etapa_id", "google_calendar_event_id"})
+# `event_id` (String(36), UUID) existe so na linha V2: app/models/lead_handoff_operation.py
+# e app/schemas/lead_domain.py. Entrou no sync #52 para a regra valer nas duas linhas.
+IDS_TEXTO = frozenset({"etapa_id", "google_calendar_event_id", "event_id"})
 
 
 # ===========================================================================
