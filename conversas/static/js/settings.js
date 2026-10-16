@@ -348,9 +348,9 @@
                     <span class="bh-day-name">${WEEKDAYS[h.weekday]}</span>
                 </div>
                 <div class="bh-times">
-                    <input type="time" class="bh-time bh-open-time" value="${h.open_time || '09:00'}" ${!h.is_open ? 'disabled' : ''}>
+                    <input type="time" class="bh-time bh-open-time" value="${escapeHtml(h.open_time || '09:00')}" ${!h.is_open ? 'disabled' : ''}>
                     <span class="bh-separator">ate</span>
-                    <input type="time" class="bh-time bh-close-time" value="${h.close_time || '18:00'}" ${!h.is_open ? 'disabled' : ''}>
+                    <input type="time" class="bh-time bh-close-time" value="${escapeHtml(h.close_time || '18:00')}" ${!h.is_open ? 'disabled' : ''}>
                 </div>
             </div>
         `).join('');
@@ -557,7 +557,7 @@
                     ${author || when ? `<div class="var-meta-line">${author} ${when}</div>` : ''}
                 </div>
                 <div class="var-item-meta">
-                    <span class="var-kind-badge ${v.kind}">${kindLabel}</span>
+                    <span class="var-kind-badge ${escapeHtml(v.kind)}">${kindLabel}</span>
                     ${!v.is_active ? '<span class="var-kind-badge inactive">Inativa</span>' : ''}
                     <div class="var-item-actions">
                         <button class="btn-icon" title="Editar" onclick="window._editVar(${Number(v.id)})">
