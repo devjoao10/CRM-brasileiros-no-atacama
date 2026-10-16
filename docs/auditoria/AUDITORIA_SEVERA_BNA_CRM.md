@@ -47,6 +47,7 @@ _(nenhum achado de severidade crítica não-mitigada no estado local atual)_
 | **DATA-03** | Banco | soft-delete inconsistente (`is_active` Lead vs `is_archived` operacional; sem `deleted_at`) | DEC-08 / WP-DATA-02 |
 | **FE-03** | Frontend | botões-ícone sem `aria-label`, modais sem focus-trap, contraste não auditado | WP-FE-03 |
 | **F-02/F-03** | Repo | `scratch/` não ignorado; EOF blank lines | ✅ CORRIGIDO (WP-AUDIT-00) |
+| **SEC-LINK-01** | Segurança/FE | chat da IA (`templates/ai.html`): a resposta do LLM (que lê texto de lead vindo do WhatsApp/n8n) passava pelo DOMPurify no perfil padrão, então link enganoso abria na própria aba e `class`/`style`/`<style>` podiam esconder o destino, imitar o botão de download ou cobrir a tela; a regex do clique de download não tinha âncora (aceitava `/`, `..`, host alheio) | ✅ **CORRIGIDO** (perfil allowlist do markdown; link http(s) em nova aba com `noopener noreferrer` e selo do host real; download só no formato de `_safe_document_target`; `tests/test_ai_chat_links.py`) |
 
 ### DATA-01 (especial)
 | ID | Área | Evidência | Status |
