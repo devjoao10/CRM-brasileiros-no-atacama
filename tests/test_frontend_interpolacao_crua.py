@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-SEC-XSS-05 - nenhum `${...}` cru em template literal que vira markup (CRM).
+SEC-XSS-05 - nenhum valor cru chega a um sink de HTML no front do CRM.
 
 O SEC-XSS-04 achou quatro campos de lead crus em innerHTML so por varredura
 MANUAL: email e whatsapp em segmentacao.html renderDetailTable, t.cor em
@@ -43,6 +43,91 @@ Por que isto nao e um grep:
 Escopo: templates/**/*.html (blocos <script> inline, sem src=) e
 static/js/**/*.js. O app de conversas fica fora: e follow-up.
 
+Contrato do analisador
+----------------------
+Esta e a especificacao da regra; o codigo cita as partes pelo nome.
+
+Fontes. O .js inteiro; no .html, cada <script> sem src=. A linha do achado e a
+do `${` (ou a do inicio do valor do sink).
+
+Lexer. Um passe: comentario, string, regex literal (pelo token anterior) e
+template literal aninhado em qualquer profundidade. Devolve os templates e uma
+copia MASCARADA do codigo - comentario, string, corpo de regex e texto estatico
+de template viram espaco - para que as buscas de declaracao, atribuicao,
+return e sink nunca casem dentro de texto.
+
+Markup. Um template vira MARKUP quando o texto estatico abre tag, quando esta
+aninhado num template MARKUP ou quando o Classificador o alcanca a partir de
+uma interpolacao de MARKUP ou do valor de um sink. Cada interpolacao de MARKUP
+e cada valor de sink e julgado; o achado sai no `${` (ou no sink) onde a
+correcao vai, e nunca duas vezes.
+
+Classificador. Sem espaco e parenteses externos, o valor e SEGURO quando e:
+  - ternario com os dois ramos seguros; `||`/`??` com todo operando seguro;
+    `&&` com o ultimo seguro; `a + b` de topo com todo operando seguro (o que
+    vem antes do ultimo `-` e numero); virgula, pelo ultimo operando;
+    atribuicao, pelo lado direito (`+=`, pelos dois); `await X`, pelo X;
+  - numero ou booleano por construcao: `- * / % **`, comparacao, bit a bit,
+    `instanceof`/`in`, `! - + ~ typeof void delete`, `++`/`--`, `X.length`,
+    `X.size`, Math.*(), Number(), parseInt(), parseFloat(), Boolean(), os
+    metodos de METODOS_DATA_NUMERO, `new Date(...)`, e `.toLocaleString()` so
+    sobre Date ou numero (a String devolve o proprio texto);
+  - metodo que preserva o texto (METODOS_PRESERVAM e `.split(...)[N]`) sobre
+    receptor seguro;
+  - literal (string, numero, LITERAIS: true/null/undefined...) ou objeto
+    literal;
+  - template aninhado: seguro NESTE ponto, porque vira MARKUP e cada
+    interpolacao dele e julgada no proprio ponto;
+  - a expressao INTEIRA e esc(...)/escapeHtml(...) ou DOMPurify.sanitize(...);
+  - `X.map(cb)` e `X.join(SEP)` com o que cb devolve, o receptor e SEP seguros;
+  - campo numerico pelo NOME (`id`, `*_id`, `*Id`, `total`, `count`,
+    `*_count`, `num_*`, `total_*`), menos IDS_TEXTO e o id de etapa;
+  - consulta a tabela `const` so de literais e nunca escrita (`T[k]`, `T.x`),
+    ou variavel de laco/callback sobre array dessa tabela;
+  - identificador resolvido COM ESCOPO cujo valor possivel - inicializador e
+    toda escrita no escopo - e todo seguro (a referencia recursiva de um ciclo
+    `h += `...${h}...`` conta como segura); parametro, desestruturacao e nome
+    nao declarado sao crus, fora o nome numerico solto;
+  - `NOME(...)` de funcao do arquivo com todo `return` dela seguro.
+  O resto e CRU.
+
+Allowlist. PERMITIDAS fixa (arquivo, expressao) -> (ocorrencias, motivo).
+Achado sem entrada, contagem diferente, entrada sem achado e motivo curto
+reprovam.
+
+Extensoes (decididas alem do plano original do SEC-XSS-05):
+  - id de etapa (StageSchema.id, texto livre) em qualquer grafia - stageId,
+    etapaId, destino_etapa_id - e como `.id` de `stage`/`etapa` ou do
+    parametro de callback sobre `.etapas`/`.stages`; e nome numerico LIGADO
+    no arquivo vale pelo valor (o nome so vale para nome solto);
+  - o valor do sink e julgado como uma interpolacao: propaga MARKUP, e o
+    trecho cru fora de template (concatenacao, variavel, `.join`) e achado no
+    proprio sink;
+  - `.join(SEP)` aceita qualquer separador seguro, nao so literal;
+  - document.writeln tambem e sink; DOMPurify.sanitize(...) e seguro;
+  - escrita no conteudo, de local e de tabela, com o mesmo vocabulario:
+    `NOME[k] =`, `NOME.x =`, push/unshift/splice/fill, Object.assign(NOME, ...);
+  - `{{ ... }}` do Jinja dentro de <script> e cru.
+
+Limites conhecidos (o que a regra NAO pega):
+  - confianca pelo NOME em cadeia de JSON livre: `l.campos_personalizados.total`
+    passa como numero;
+  - esc()/escapeHtml() valem pelo NOME e sem contexto. O contrato
+    (test_frontend_injection_contract.py) so descobre `function esc(`: um
+    `const esc = ...` falso passaria nas duas suites. E href, atributo sem
+    aspas, <script> e string JS em on* nao sao julgados como contexto proprio;
+  - sinks que a regra nao conhece: setHTMLUnsafe, createContextualFragment,
+    DOMParser, srcdoc, `el['innerHTML'] =`, Object.assign(el, {innerHTML});
+  - aliasing: escrita por uma copia (`const ref = arr; ref.push(x)`) nao conta
+    para arr;
+  - regex x divisao: `i++ / 2 ... /` na mesma linha e lido como regex, e o
+    trecho entre as barras some da analise;
+  - custo: resultado que depende de ciclo aberto nao vai para o memo, entao
+    ciclos densos de `+=` mutuos sao reavaliados a cada visita;
+  - template sem tag passado a um helper que escreve innerHTML nao vira
+    MARKUP. Quem acusa e o sink do helper, com o parametro cru (o valor do
+    sink e julgado - ver Extensoes); a correcao vai no helper ou no chamador.
+
 Rodar:  python tests/test_frontend_interpolacao_crua.py
 """
 import pathlib
@@ -72,10 +157,10 @@ IDS_TEXTO = frozenset({"etapa_id", "google_calendar_event_id"})
 
 
 # ===========================================================================
-# Analisador (Python puro, so stdlib)
+# Analisador (Python puro, so stdlib): implementa o contrato do cabecalho
 # ===========================================================================
 
-# -- 1. Fontes: o .js inteiro; no .html, cada <script> inline (sem src=) ------
+# -- Fontes: o .js inteiro; no .html, cada <script> inline (sem src=) ---------
 RE_SCRIPT = re.compile(r"<script\b([^>]*)>(.*?)</script\s*>", re.S | re.I)
 RE_SCRIPT_ABRE = re.compile(r"<script\b([^>]*)>", re.I)     # contagem independente (sincronia)
 
@@ -87,7 +172,7 @@ def regioes_de_script(rel, texto):
             if not re.search(r"\bsrc\s*=", m.group(1), re.I)]
 
 
-# -- 2. Lexer minimo, um passe ------------------------------------------------
+# -- Lexer: minimo, um passe --------------------------------------------------
 RE_IDENT = re.compile(r"(?:[^\W\d]|\$)[\w$]*")
 RE_NUM = re.compile(r"\d[\w.]*|\.\d\w*")
 # Uma `/` abre regex no inicio, depois desta pontuacao ou destas palavras; no
@@ -243,7 +328,7 @@ def lexa(t, a, b, masc, atomos, templates):
     return len(pilha)
 
 
-# -- 3/4. Markup e classificador ----------------------------------------------
+# -- Markup e Classificador ---------------------------------------------------
 Tok = namedtuple("Tok", "tipo ini fim txt")
 # tipo: id | num | op | fecha | atom (txt: str, re, tpl) | grp (txt: ( [ {)
 #       e, montados pelo classificador: new | prop | call | idx
@@ -272,9 +357,9 @@ METODOS_PRESERVAM = frozenset(
     "slice substring substr charAt toUpperCase toLowerCase trim padStart padEnd".split())
 RE_NOME_NUMERICO = re.compile(
     r"id|[\w$]+_id|[a-z][\w$]*Id|total|count|[\w$]+_count|num_[\w$]+|total_[\w$]+")
-# Alem da spec: o id de etapa e texto livre (StageSchema.id; ver a secao 3 de
-# test_frontend_injection_contract.py) em qualquer grafia - stageId, etapaId,
-# destino_etapa_id - e nao so como `.id` de `stage`/`etapa`.
+# Extensao (ver o cabecalho): o id de etapa e texto livre (StageSchema.id; ver a
+# secao 3 de test_frontend_injection_contract.py) em qualquer grafia - stageId,
+# etapaId, destino_etapa_id - e nao so como `.id` de `stage`/`etapa`.
 RE_ID_DE_ETAPA = re.compile(r"(?:stage|etapa)_?id$", re.I)
 # O mesmo id como `.id` do parametro de callback sobre a lista de etapas
 # (`funnel.etapas.map(s => ... s.id ...)`), seja qual for o nome do parametro.
@@ -605,9 +690,9 @@ class Analise:
                     out.append((mi.group(0), x))
         return out
 
-    # -- 3. quem e MARKUP ------------------------------------------------------
+    # -- Markup: quem e MARKUP -------------------------------------------------
     def marca(self, T):
-        """T vira MARKUP e entra na fila; o que esta aninhado nele tambem (regra 3)."""
+        """T vira MARKUP e entra na fila; o que esta aninhado nele tambem (ver Markup)."""
         if T.ini in self.markup:
             return
         self.markup.add(T.ini)
@@ -649,8 +734,11 @@ class Analise:
                                       self.norm(x, y), culpado))
         return sorted(out)
 
-    # -- 4. classificador: None = SEGURO; senao o trecho cru culpado ----------
+    # -- Classificador: None = SEGURO; senao o trecho cru culpado -------------
     def julga(self, a, b):
+        """None se o valor em m[a:b] e SEGURO pelo Classificador do cabecalho; senao o
+        trecho CRU culpado. Efeito colateral: todo template que o valor alcanca vira
+        MARKUP (marca) e entra na fila, para cada interpolacao dele ser julgada no ponto."""
         a, b = self.apara(a, b)
         if a >= b:
             return None
@@ -824,7 +912,7 @@ class Analise:
                     return None if self._e_new_date(*rec) or self.numerico(*rec) else texto
                 if metodo in METODOS_PRESERVAM:
                     return self.julga(*rec)
-                if metodo == "join":            # alem da spec: qualquer separador seguro
+                if metodo == "join":            # extensao: qualquer separador seguro
                     seps = [self.julga(x, y) for x, y in self._args(ult.ini + 1, ult.fim - 1)]
                     return self._primeiro(self.julga(*rec), *seps)
                 if metodo == "map":             # array: imprime o que o callback devolve
@@ -1208,7 +1296,7 @@ def confere_permitidas(achados, permitidas):
 # ---------------------------------------------------------------------------
 # 1. A REGRA no front do CRM
 # ---------------------------------------------------------------------------
-print("1) todo ${...} de markup do CRM e esc(), numero, constante ou allowlist")
+print("1) todo valor que chega a um sink de HTML no CRM e esc(), numero, constante ou allowlist")
 
 arquivos = arquivos_do_front()
 achados, dessincronizados = [], []
@@ -1299,7 +1387,7 @@ ACUSA = [
      [("stage.id", "stage.id")]),
     ("etapa_id e coluna String", "el.innerHTML = `<i>${t.etapa_id}</i>`;",
      [("t.etapa_id", "t.etapa_id")]),
-    ("stageId (alem da spec: o mesmo id de etapa)", "el.innerHTML = `<i>${stageId}</i>`;",
+    ("stageId (extensao: o mesmo id de etapa)", "el.innerHTML = `<i>${stageId}</i>`;",
      [("stageId", "stageId")]),
     # `.id` do parametro de callback sobre `.etapas`, seja qual for o nome dele
     ("s.id de funnel.etapas.map(s => ...) e id de etapa",
@@ -1311,7 +1399,7 @@ ACUSA = [
      "const total = `${l.nome}`;\nel.innerHTML = `<b>${total}</b>`;", [("l.nome", "l.nome")]),
     ("aninhado: acusa o ponto de dentro, nao o de fora",
      "el.innerHTML = `<td>${ok ? `<b>${raw}</b>` : ''}</td>`;", [("raw", "raw")]),
-    ("template sem tag aninhado em argumento tambem vira markup (regra 3)",
+    ("template sem tag aninhado em argumento tambem vira markup (aninhado em MARKUP)",
      "el.innerHTML = `<td>${f(`${l.nome}`)}</td>`;",
      [("f(`${l.nome}`)", "f(`${l.nome}`)"), ("l.nome", "l.nome")]),
     ("corpo de .map().join()",
@@ -1556,4 +1644,4 @@ print()
 if falhas:
     print(f"{len(falhas)} FALHA(S)")
     sys.exit(1)
-print("OK: nenhum ${...} cru em markup do CRM fora da allowlist")
+print("OK: nenhum valor cru em sink de HTML do CRM fora da allowlist")
