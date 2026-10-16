@@ -248,6 +248,23 @@ ACUSA = [
     ("bloco de comentario entre .map( e o callback",
      "el.innerHTML = funnel.etapas.map(\n" + ("    // " + "-" * 80 + "\n") * 3
      + "    s => `<i>${s.id}</i>`).join('');", [("s.id", "s.id")]),
+    # o `)` do cabecalho de if/while/for/with sem chaves nao e chamado: a lista comeca depois dele
+    ("lista de etapas depois de if (c) sem chaves",
+     "if (c) (f.etapas || []).forEach(s => { el.innerHTML += `<i>${s.id}</i>`; });", [("s.id", "s.id")]),
+    ("lista de etapas depois de while (c) sem chaves",
+     "while (c) (f.etapas || []).forEach(s => { el.innerHTML += `<i>${s.id}</i>`; });", [("s.id", "s.id")]),
+    ("lista de etapas depois de for (;;) sem chaves",
+     "for (;;) (f.etapas || []).forEach(s => { el.innerHTML += `<i>${s.id}</i>`; });", [("s.id", "s.id")]),
+    ("lista de etapas depois de else if (c) sem chaves",
+     "if (a) {} else if (c) (f.etapas || []).forEach(s => { el.innerHTML += `<i>${s.id}</i>`; });",
+     [("s.id", "s.id")]),
+    ("a forma de segmentacao.html:568 com o idioma || []",
+     "if (fn && fn.etapas) (fn.etapas || []).forEach(e => "
+     "{ sel.innerHTML += `<option value=\"${e.id}\">x</option>`; });", [("e.id", "e.id")]),
+    ("lista de etapas depois de for await (...) e de with (...) sem chaves",
+     "for await (const x of xs) (f.etapas || []).forEach(a => { el.innerHTML += `<i>${a.id}</i>`; });\n"
+     "with (o) (f.etapas || []).forEach(b => { el.innerHTML += `<i>${b.id}</i>`; });",
+     [("a.id", "a.id"), ("b.id", "b.id")]),
     # desestruturar o id ja era cru (parametro): trava o caso
     ("({id}) => desestruturado de f.etapas.map",
      "el.innerHTML = f.etapas.map(({id}) => `<i>${id}</i>`).join('');", [("id", "id")]),

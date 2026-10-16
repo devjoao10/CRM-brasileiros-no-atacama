@@ -382,6 +382,8 @@ METODOS_PRESERVAM_LISTA = frozenset(        # devolvem array com (parte d)os mes
 METODOS_ELEMENTO = frozenset("find findLast at pop shift".split())     # devolvem UM elemento
 RE_CALLBACK_ANTES = re.compile(r"\??\.\s*(?:[^\W\d]|\$)[\w$]*\s*\(\s*$")  # `.metodo(` antes do callback
 RE_IDENT_ANTES = re.compile(r"(?:[^\W\d]|\$)[\w$]*$")
+# `(` de cabecalho cujo corpo pode vir sem chaves (switch e catch exigem bloco).
+RE_CABECALHO_ANTES = re.compile(r"(?<![\w$.])(?:if|while|for(?:\s+await)?|with)\s*$")
 RE_TAG = re.compile(r"<[A-Za-z!/]")
 RE_SINK_ATRIB = re.compile(r"\.\s*(?:innerHTML|outerHTML)\s*\+?=(?![=>])")
 RE_SINK_CHAMADA = re.compile(r"\.\s*(insertAdjacentHTML)\s*\(|\bdocument\s*\.\s*write(?:ln)?\s*\(")
@@ -947,10 +949,18 @@ class Analise:
                 k -= 1
             if m[k - 1:k] == "." and m[k - 3:k] != "...":  # .x e ?.x: a cadeia segue antes
                 i = k - 2 if m[k - 2:k] == "?." else k - 1
-            elif m[ini] in "([" and k and (m[k - 1] in ")]" or RE_IDENT_ANTES.search(m, max(0, k - 80), k)):
+            elif m[ini] in "([" and k and (RE_IDENT_ANTES.search(m, max(0, k - 80), k) or (
+                    m[k - 1] in ")]" and not self._fecha_cabecalho(k - 1))):
                 i = k                                   # f(...) e a[k]: segue no que e chamado
             else:
                 return ini
+
+    def _fecha_cabecalho(self, p):
+        """m[p] e o `)` de `if (...)`/`while (...)`/`for (...)`/`with (...)`? Depois dele vem
+        um comando novo, nao uma chamada: `if (c) (f.etapas || []).forEach(...)`."""
+        abre = self.par.get(p)
+        return self.m[p] == ")" and abre is not None and bool(
+            RE_CABECALHO_ANTES.search(self.m, max(0, abre - 12), abre))
 
     def _nome_solto_numerico(self, prim):
         """Identificador SEM ligacao no arquivo (global, de outro arquivo) com nome de PK/FK
