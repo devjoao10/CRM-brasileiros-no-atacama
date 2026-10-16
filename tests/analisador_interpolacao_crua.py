@@ -113,11 +113,14 @@ Extensoes (decididas alem do plano original do SEC-XSS-05):
     e a cadeia que termina no nome ou na propriedade `etapas`/`stages`,
     tirados da direita os parenteses e os metodos que devolvem os mesmos
     elementos (METODOS_PRESERVAM_LISTA: filter, slice, sort, concat...).
-    ETAPA e `LISTA[k]`, `LISTA.find(...)`/`.at(k)` (METODOS_ELEMENTO), o
-    parametro do callback que e o 1o argumento de `LISTA.metodo(` (qualquer
-    metodo) e a variavel de `for (... of LISTA)`. Nos dois basta um operando
-    de `||`/`??`/`&&`/ternario ser (falha fechado). E nome numerico LIGADO
-    no arquivo vale pelo valor (o nome so vale para nome solto);
+    ETAPA e `LISTA[k]`, `LISTA.find(...)`/`.at(k)` (METODOS_ELEMENTO), a
+    variavel de `for (... of LISTA)` e o parametro do callback que e o 1o
+    argumento de `LISTA.metodo(` (qualquer metodo) ou o 2o de uma chamada
+    cujo 1o e LISTA (`Array.from(LISTA, cb)`, `X.metodo.call(LISTA, cb)`,
+    `_.map(LISTA, cb)`), mesmo `async` ou entre parenteses. Nos dois basta
+    um operando de `||`/`??`/`&&`/ternario ser (falha fechado). E nome
+    numerico LIGADO no arquivo vale pelo valor (o nome so vale para nome
+    solto);
   - o valor do sink e julgado como uma interpolacao: propaga MARKUP, e o
     trecho cru fora de template (concatenacao, variavel, `.join`) e achado no
     proprio sink;
@@ -146,8 +149,11 @@ Limites conhecidos (o que a regra NAO pega):
     `const s = f.etapas[0]; s.id`), lista com outro nome que nao
     `etapas`/`stages`, copia que o modelo nao segue (`[...LISTA]`,
     Array.from(LISTA), Object.values, `.entries()`, `.map(s => s)`),
-    callback passado por nome (`LISTA.map(render)`) e `for (s of LISTA)`
-    sem declaracao;
+    callback passado por nome (`LISTA.map(render)`) ou dentro de array
+    (`X.metodo.apply(LISTA, [cb])`), LISTA fora do 1o argumento
+    (`foo(x, LISTA, cb)`) ou que nao e cadeia
+    (`Array.from(c ? f.etapas : [], cb)`) e `for (s of LISTA)` sem
+    declaracao;
   - regex x divisao: `i++ / 2 ... /` na mesma linha e lido como regex, e o
     trecho entre as barras some da analise;
   - custo: resultado que depende de ciclo aberto nao vai para o memo, entao
@@ -380,7 +386,7 @@ LISTAS_DE_ETAPAS = frozenset({"etapas", "stages"})
 METODOS_PRESERVAM_LISTA = frozenset(        # devolvem array com (parte d)os mesmos elementos
     "filter slice splice sort reverse concat toSorted toReversed toSpliced".split())
 METODOS_ELEMENTO = frozenset("find findLast at pop shift".split())     # devolvem UM elemento
-RE_CALLBACK_ANTES = re.compile(r"\??\.\s*(?:[^\W\d]|\$)[\w$]*\s*\(\s*$")  # `.metodo(` antes do callback
+RE_METODO_ANTES = re.compile(r"\??\.\s*(?:[^\W\d]|\$)[\w$]*\s*$")       # `.metodo`/`?.metodo` antes de `(`
 RE_IDENT_ANTES = re.compile(r"(?:[^\W\d]|\$)[\w$]*$")
 # `(` de cabecalho cujo corpo pode vir sem chaves (switch e catch exigem bloco).
 RE_CABECALHO_ANTES = re.compile(r"(?<![\w$.])(?:if|while|for(?:\s+await)?|with)\s*$")
@@ -919,24 +925,50 @@ class Analise:
 
     def _liga_etapa(self, L):
         """L liga uma ETAPA: variavel de `for (... of LISTA)` ou parametro do callback que
-        e o 1o argumento de `LISTA.metodo(` (qualquer metodo)."""
+        recebe os elementos de LISTA (ver _callback_de_lista). Um veredito por callback: o
+        recuo ate a chamada nao se repete a cada leitura de `.id`."""
         if L.tipo == "forof":
             return self._de_etapas(*L.extra, True)
         if L.tipo != "param":
             return False
-        k = L.extra.ini         # comentario entre `(` e o callback e espaco no codigo mascarado
-        while k and self.m[k - 1].isspace():
-            k -= 1
-        mm = RE_CALLBACK_ANTES.search(self.m, max(0, k - 80), k)
-        return bool(mm) and self._de_etapas(self._inicio_da_cadeia(mm.start()), mm.start(), True)
+        chave = ("etapa", L.extra.ini)
+        if chave not in self.memo:
+            self.memo[chave] = self._callback_de_lista(L.extra.ini)
+        return self.memo[chave]
+
+    def _callback_de_lista(self, ini):
+        """A funcao que comeca em ini e o 1o argumento de `LISTA.metodo(` ou o 2o de uma chamada
+        cujo 1o e LISTA (`Array.from(LISTA, cb)`, `X.metodo.call(LISTA, cb)`, `_.map(LISTA, cb)`)?
+        Espaco (o comentario mascarado), `async` e parenteses em volta dela nao contam."""
+        m, k = self.m, self._ws_antes(ini)
+        mi = RE_IDENT_ANTES.search(m, max(0, k - 80), k)
+        if mi and mi.group(0) == "async":               # async function (s) {...}
+            k = self._ws_antes(mi.start())
+        while m[k - 1:k] == "(":                        # ((s => ...)): sai do grupo em volta
+            g = self._ws_antes(k - 1)
+            if m[g - 1:g] not in ("(", ","):
+                break
+            k = g
+        if m[k - 1:k] == "(":
+            mm = RE_METODO_ANTES.search(m, max(0, k - 81), k - 1)
+            return bool(mm) and self._de_etapas(self._inicio_da_cadeia(mm.start()), mm.start(), True)
+        if m[k - 1:k] != ",":
+            return False
+        a = self._inicio_da_cadeia(k - 1)               # o 1o argumento, quando e cadeia
+        j = self._ws_antes(a)
+        return m[j - 1:j] == "(" and self._de_etapas(a, k - 1, True)
+
+    def _ws_antes(self, i):
+        """Inicio do espaco (o comentario mascarado incluso) que termina em i."""
+        while i and self.m[i - 1].isspace():
+            i -= 1
+        return i
 
     def _inicio_da_cadeia(self, fim):
         """Onde comeca a cadeia `P.x?.y[k](a)` que termina em fim, lida de tras para frente."""
         m, i = self.m, fim
         while True:
-            j = i
-            while j and m[j - 1].isspace():
-                j -= 1
+            j = self._ws_antes(i)
             mi = RE_IDENT_ANTES.search(m, max(0, j - 80), j)
             if j and m[j - 1] in ")]" and j - 1 in self.par:
                 ini = self.par[j - 1]                   # (args), [k] ou o grupo do inicio
@@ -944,9 +976,7 @@ class Analise:
                 ini = mi.start()
             else:
                 return i                                # `return (`, `= (`...: comeca em i
-            k = ini
-            while k and m[k - 1].isspace():
-                k -= 1
+            k = self._ws_antes(ini)
             if m[k - 1:k] == "." and m[k - 3:k] != "...":  # .x e ?.x: a cadeia segue antes
                 i = k - 2 if m[k - 2:k] == "?." else k - 1
             elif m[ini] in "([" and k and (RE_IDENT_ANTES.search(m, max(0, k - 80), k) or (

@@ -265,6 +265,23 @@ ACUSA = [
      "for await (const x of xs) (f.etapas || []).forEach(a => { el.innerHTML += `<i>${a.id}</i>`; });\n"
      "with (o) (f.etapas || []).forEach(b => { el.innerHTML += `<i>${b.id}</i>`; });",
      [("a.id", "a.id"), ("b.id", "b.id")]),
+    # o callback que recebe as etapas: async, entre parenteses, 2o argumento de .call e de Array.from
+    ("callback async function de f.etapas.forEach",
+     "f.etapas.forEach(async function (s) { el.innerHTML += `<i>${s.id}</i>`; });", [("s.id", "s.id")]),
+    ("callback entre parenteses: f.etapas.map((s => ...))",
+     "el.innerHTML = f.etapas.map((s => `<i>${s.id}</i>`)).join('');", [("s.id", "s.id")]),
+    ("callback de Array.prototype.forEach.call(f.etapas, cb) com o sink dentro",
+     "Array.prototype.forEach.call(f.etapas, s => { el.innerHTML += `<i>${s.id}</i>`; });",
+     [("s.id", "s.id")]),
+    ("callback de Array.from(f.etapas, cb) com o sink dentro",
+     "Array.from(f.etapas, s => { el.insertAdjacentHTML('beforeend', `<i>${s.id}</i>`); });",
+     [("s.id", "s.id")]),
+    ("callback de qualquer chamada com a lista no 1o argumento: _.forEach(f.etapas, cb)",
+     "_.forEach(f.etapas, s => { el.innerHTML += `<i>${s.id}</i>`; });", [("s.id", "s.id")]),
+    # o veredito e guardado por callback, nao por nome: o `s` de leads nao decide o de etapas
+    ("dois callbacks com o mesmo parametro s: so o de f.etapas e etapa",
+     "el.innerHTML = f.leads.map(s => `<i>${s.id}</i>`).join('');\n"
+     "el.innerHTML = f.etapas.map(s => `<i>${s.id}</i>`).join('');", [("s.id", "s.id")]),
     # desestruturar o id ja era cru (parametro): trava o caso
     ("({id}) => desestruturado de f.etapas.map",
      "el.innerHTML = f.etapas.map(({id}) => `<i>${id}</i>`).join('');", [("id", "id")]),
