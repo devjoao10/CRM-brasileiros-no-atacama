@@ -110,9 +110,10 @@ Extensoes (decididas alem do plano original do SEC-XSS-05):
   - id de etapa (StageSchema.id, texto livre) em qualquer grafia - stageId,
     etapaId, destino_etapa_id -, como `.id` de `stage`/`etapa` e como `.id`
     de uma ETAPA, elemento de uma LISTA de etapas (Analise._de_etapas). LISTA
-    e a cadeia que termina no nome ou na propriedade `etapas`/`stages`,
-    tirados da direita os parenteses e os metodos que devolvem os mesmos
-    elementos (METODOS_PRESERVAM_LISTA: filter, slice, sort, concat...).
+    e a cadeia que termina no nome ou na propriedade `etapas`/`stages`
+    (tambem `X['etapas']`), tirados da direita os parenteses e os metodos que
+    devolvem os mesmos elementos (METODOS_PRESERVAM_LISTA: filter, slice,
+    sort, concat...); `X.concat(LISTA)` tambem e LISTA.
     ETAPA e `LISTA[k]`, `LISTA.find(...)`/`.at(k)` (METODOS_ELEMENTO), a
     variavel de `for (... of LISTA)` e o parametro do callback que e o 1o
     argumento de `LISTA.metodo(` (qualquer metodo) ou o 2o de uma chamada
@@ -147,7 +148,8 @@ Limites conhecidos (o que a regra NAO pega):
   - id de etapa fora do modelo de LISTA - o `.id` passa como numero: alias
     por variavel (`const lista = f.etapas; lista.map(...)`,
     `const s = f.etapas[0]; s.id`), lista com outro nome que nao
-    `etapas`/`stages`, copia que o modelo nao segue (`[...LISTA]`,
+    `etapas`/`stages` ou com chave calculada (`f[k]`, `f['etapa' + 's']`),
+    copia que o modelo nao segue (`[...LISTA]`,
     Array.from(LISTA), Object.values, `.entries()`, `.map(s => s)`),
     callback passado por nome (`LISTA.map(render)`) ou dentro de array
     (`X.metodo.apply(LISTA, [cb])`), LISTA fora do 1o argumento
@@ -383,6 +385,7 @@ RE_ID_DE_ETAPA = re.compile(r"(?:stage|etapa)_?id$", re.I)
 # O mesmo id como `.id` de uma ETAPA, elemento de uma LISTA de etapas (`funnel.etapas`,
 # `boardMeta.stages`): o modelo esta em Extensoes e em Analise._de_etapas.
 LISTAS_DE_ETAPAS = frozenset({"etapas", "stages"})
+RE_CHAVE_DE_LISTA = re.compile(r"""\s*(['"`])(?:etapas|stages)\1\s*""")    # X['etapas'], X["stages"]
 METODOS_PRESERVAM_LISTA = frozenset(        # devolvem array com (parte d)os mesmos elementos
     "filter slice splice sort reverse concat toSorted toReversed toSpliced".split())
 METODOS_ELEMENTO = frozenset("find findLast at pop shift".split())     # devolvem UM elemento
@@ -907,14 +910,19 @@ class Analise:
         prim, suf = cadeia
         while lista and len(suf) >= 2 and suf[-1].tipo == "call" and (
                 suf[-2].tipo == "prop" and suf[-2].txt in METODOS_PRESERVAM_LISTA):
+            if suf[-2].txt == "concat" and any(         # X.concat(LISTA) tambem traz as etapas
+                    self._de_etapas(x, y, True) for x, y in self._args(suf[-1].ini + 1, suf[-1].fim - 1)):
+                return True
             suf = suf[:-2]                              # LISTA.filter(...) ainda e LISTA
         if not lista and suf and (suf[-1].tipo == "idx" or (
                 len(suf) >= 2 and suf[-1].tipo == "call" and suf[-2].tipo == "prop"
                 and suf[-2].txt in METODOS_ELEMENTO)):  # LISTA[k], LISTA.find(...)
             k = len(suf) - (1 if suf[-1].tipo == "idx" else 2)
             return self._de_etapas(a, suf[k - 1].fim if k else prim.fim, True)
-        if suf:
-            return lista and suf[-1].tipo == "prop" and suf[-1].txt in LISTAS_DE_ETAPAS
+        if suf:                                         # `.etapas` ou `['etapas']` (o texto original)
+            ult = suf[-1]
+            return lista and (ult.txt in LISTAS_DE_ETAPAS if ult.tipo == "prop" else (
+                ult.tipo == "idx" and bool(RE_CHAVE_DE_LISTA.fullmatch(self.t, ult.ini + 1, ult.fim - 1))))
         if prim.tipo == "grp" and prim.txt == "(":
             return self._de_etapas(prim.ini + 1, prim.fim - 1, lista)
         if prim.tipo != "id":

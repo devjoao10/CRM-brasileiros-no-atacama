@@ -278,6 +278,15 @@ ACUSA = [
      [("s.id", "s.id")]),
     ("callback de qualquer chamada com a lista no 1o argumento: _.forEach(f.etapas, cb)",
      "_.forEach(f.etapas, s => { el.innerHTML += `<i>${s.id}</i>`; });", [("s.id", "s.id")]),
+    # a lista como argumento de concat e por colchete com o nome literal
+    ("lista de etapas como argumento de [].concat(...)",
+     "el.innerHTML = [].concat(f.etapas).map(s => `<i>${s.id}</i>`).join('');", [("s.id", "s.id")]),
+    ("lista de etapas como argumento de outras.concat(...)",
+     "el.innerHTML = outras.concat(f.etapas).map(s => `<i>${s.id}</i>`).join('');", [("s.id", "s.id")]),
+    ("lista de etapas por colchete: f['etapas']",
+     "el.innerHTML = f['etapas'].map(s => `<i>${s.id}</i>`).join('');", [("s.id", "s.id")]),
+    ("etapa por indice da lista por colchete: f[\"stages\"][0].id",
+     "el.innerHTML = `<i>${f[\"stages\"][0].id}</i>`;", [("f[\"stages\"][0].id", "f[\"stages\"][0].id")]),
     # o veredito e guardado por callback, nao por nome: o `s` de leads nao decide o de etapas
     ("dois callbacks com o mesmo parametro s: so o de f.etapas e etapa",
      "el.innerHTML = f.leads.map(s => `<i>${s.id}</i>`).join('');\n"
