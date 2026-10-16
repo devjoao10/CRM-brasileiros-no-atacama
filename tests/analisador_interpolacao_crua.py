@@ -66,7 +66,9 @@ Classificador. Sem espaco e parenteses externos, o valor e SEGURO quando e:
   - ternario com os dois ramos seguros; `||`/`??` com todo operando seguro;
     `&&` com o ultimo seguro; `a + b` de topo com todo operando seguro (o que
     vem antes do ultimo `-` e numero); virgula, pelo ultimo operando;
-    atribuicao, pelo lado direito (`+=`, pelos dois); `await X`, pelo X;
+    atribuicao: `=` e `&&=` pelo lado direito (o falsy que `&&=` deixa no
+    esquerdo imprime false/0/''/null, nunca markup), `+=`, `||=` e `??=`
+    pelos dois lados; `await X`, pelo X;
   - numero ou booleano por construcao: `- * / % **`, comparacao, bit a bit,
     `instanceof`/`in`, `! - + ~ typeof void delete`, `++`/`--`, `X.length`,
     `X.size`, Math.*(), Number(), parseInt(), parseFloat(), Boolean(), os
@@ -787,7 +789,9 @@ class Analise:
             if tk.txt in ATRIBUICOES:
                 if tk.txt == "+=":                      # concatena: nenhum lado e a raiz
                     return self._primeiro(self.julga(a, tk.ini), self.julga(tk.fim, b))
-                return self.julga(tk.fim, b, raiz) if tk.txt in ("=", "||=", "??=", "&&=") else None
+                if tk.txt in ("||=", "??="):            # vale o esquerdo se ja e truthy/definido
+                    return self._primeiro(self.julga(a, tk.ini), self.julga(tk.fim, b, raiz))
+                return self.julga(tk.fim, b, raiz) if tk.txt in ("=", "&&=") else None
         q = next((k for k, tk in ops if tk.txt == "?"), None)
         if q is not None:                               # c ? x : y -> x e y (c nao e impresso)
             prof = 0

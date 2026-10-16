@@ -459,6 +459,12 @@ ACUSA = [
     # atribuicao como expressao: vale o lado direito
     ("atribuicao como expressao: o lado direito e julgado",
      "el.innerHTML = `<td>${(z = y.nome)}</td>`;", [("(z = y.nome)", "y.nome")]),
+    # `a ||= b` e `a ??= b` valem `a` quando ele ja e truthy/definido: o lado esquerdo e julgado
+    ("||=: o lado esquerdo e julgado", "el.innerHTML = (l.nome ||= 'x');", [("(l.nome ||= 'x')", "l.nome")]),
+    ("??=: o lado esquerdo e julgado", "el.innerHTML = (l.nome ??= 'x');", [("(l.nome ??= 'x')", "l.nome")]),
+    ("||= com DOMPurify.sanitize na direita: o esquerdo ainda e julgado",
+     "el.innerHTML = (l.nome ||= DOMPurify.sanitize(x));",
+     [("(l.nome ||= DOMPurify.sanitize(x))", "l.nome")]),
 ]
 for nome, codigo, esperado in ACUSA:
     obtido = crus(codigo)
@@ -491,6 +497,8 @@ ACEITA = [
     ("consulta a objeto literal const",
      "const CONST = { a: 'x', b: 'y' };\nel.innerHTML = `<i>${CONST[k]}</i>`;"),
     ("data formatada", "el.innerHTML = `<i>${new Date(x).toLocaleDateString('pt-BR')}</i>`;"),
+    ("&&=: o falsy do lado esquerdo imprime false/0/''/null, nunca markup",
+     "el.innerHTML = (l.nome &&= 'x');"),
     ("DOMPurify.sanitize() cobrindo o valor do sink", "el.innerHTML = DOMPurify.sanitize(l.nome);"),
     ("DOMPurify.sanitize() nos dois ramos do ternario que e o valor do sink (ai.html)",
      "el.innerHTML = c ? DOMPurify.sanitize(a) : DOMPurify.sanitize(b);"),
