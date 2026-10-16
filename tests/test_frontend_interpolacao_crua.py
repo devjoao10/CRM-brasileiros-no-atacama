@@ -1390,6 +1390,26 @@ ACUSA = [
     ("funcao declarada junto com outra variavel (o indice nao a nomeia)",
      "const a = 1, fmt = (x) => x;\nel.innerHTML = `<td>${fmt(y.nome)}</td>`;",
      [("fmt(y.nome)", "fmt(y.nome)")]),
+    # -- um caso por ramo do classificador que ainda nao tinha controle
+    # `.split(...)[N]`: o pedaco e texto do receptor (o primeiro nome de m.nome)
+    ("split(...)[N]: o receptor e julgado",
+     "el.innerHTML = `<td>${m.nome.split(' ')[0]}</td>`;", [("m.nome.split(' ')[0]", "m.nome")]),
+    # array literal: todo elemento e julgado (esc(a) na frente isola o 2o elemento)
+    ("array literal: todo elemento e julgado",
+     "el.innerHTML = `<td>${[esc(a), y.nome].join('')}</td>`;",
+     [("[esc(a), y.nome].join('')", "y.nome")]),
+    # `await X`: vale o X
+    ("await X: o X e julgado", "el.innerHTML = `<td>${await f(y.nome)}</td>`;",
+     [("await f(y.nome)", "f(y.nome)")]),
+    # `new X(...)`: so `new Date(...)` e seguro
+    ("new X(...) que nao e Date", "el.innerHTML = `<td>${new X(y.nome)}</td>`;",
+     [("new X(y.nome)", "new X(y.nome)")]),
+    # operador virgula: vale o ultimo operando
+    ("virgula: o ultimo operando e julgado", "el.innerHTML = `<td>${(a, y.nome)}</td>`;",
+     [("(a, y.nome)", "y.nome")]),
+    # atribuicao como expressao: vale o lado direito
+    ("atribuicao como expressao: o lado direito e julgado",
+     "el.innerHTML = `<td>${(z = y.nome)}</td>`;", [("(z = y.nome)", "y.nome")]),
 ]
 for nome, codigo, esperado in ACUSA:
     obtido = crus(codigo)
