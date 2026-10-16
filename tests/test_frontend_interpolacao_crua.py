@@ -9,15 +9,18 @@ Nos quatro a linha em volta ja passava os outros campos por esc(), entao o
 bloco inteiro PARECIA escapado. Este arquivo transforma a varredura em regra:
 o quinto caso nao pode depender de alguem ler a tela certa.
 
-A regra: todo `${...}` dentro de um template literal JS que vira markup
-(innerHTML / outerHTML / insertAdjacentHTML / document.write) precisa ser
+A regra: todo valor que chega a um sink de HTML (innerHTML / outerHTML /
+insertAdjacentHTML / document.write) precisa ser
 
-  (a) uma chamada de esc()/escapeHtml() cobrindo o valor inteiro,
+  (a) uma chamada de esc()/escapeHtml() - ou de DOMPurify.sanitize() -
+      cobrindo o valor inteiro,
   (b) numero ou campo numerico,
   (c) constante do codigo, ou
   (d) uma entrada de PERMITIDAS, que fixa o motivo e o numero de ocorrencias.
 
-Comentario `//` e `/* */` nao conta.
+Vale para cada `${...}` de template literal que vira markup e para o proprio
+valor do sink fora de template: concatenacao (`'<td>' + x`), variavel montada
+com `+=`, `[...].join('')`. Comentario `//` e `/* */` nao conta.
 
 Por que isto nao e um grep:
 
@@ -623,12 +626,15 @@ class Analise:
         for T in self.templates:
             if any(RE_TAG.search(q) for q in T.quasis):
                 self.marca(T)
-        # Alem da spec (que fala do RHS DIRETO): o valor que chega ao sink e
-        # julgado como uma interpolacao, so para propagar MARKUP - todo template
-        # que ele alcanca pela secao 4 vira markup. Achado e sempre um ${...}.
-        for x, y in self.raizes_de_sink():
-            self.julga(x, y)
         out = []
+        # O valor que chega ao sink e julgado como uma interpolacao: todo template
+        # que ele alcanca vira markup, e o trecho cru que ele carrega fora de
+        # template (concatenacao, variavel, .join) e achado no proprio sink.
+        for x, y in self.raizes_de_sink():
+            culpado = self.julga(x, y)
+            if culpado is not None:
+                out.append(Achado(self.rel, self.t.count("\n", 0, self._ws(x, y)) + 1,
+                                  self.norm(x, y), culpado))
         while self.fila:
             T = self.fila.pop(0)
             for dolar, x, y in T.exprs:
@@ -777,6 +783,9 @@ class Analise:
 
         if prim.tipo == "id" and prim.txt in ESCAPES and n == 1 and ult.tipo == "call":
             return None                                 # esc(...) cobrindo o valor inteiro
+        if (prim.tipo == "id" and prim.txt == "DOMPurify" and n == 2 and suf[0].tipo == "prop"
+                and suf[0].txt == "sanitize" and ult.tipo == "call"):
+            return None                                 # sanitizador de HTML cobrindo o valor inteiro
         if ult.tipo == "prop" and (ult.txt in ("length", "size")
                                    or (self._nome_numerico(ult.txt, self._receptor(prim, suf))
                                        and not self._id_de_etapa(prim, suf))):
@@ -1079,6 +1088,11 @@ PERMITIDAS = {
         1, "resp = await Auth.apiRequest('/api/tags'): Response.status, inteiro"),
     ("templates/tarefas.html", "resp.status"): (
         1, "resp = await Auth.apiRequest(url) em fetchTasks: Response.status, inteiro"),
+    ("templates/pipeline.html", "'<div style=\"padding:2rem;color:red\">Erro ao carregar o funil (' "
+                                "+ resp.status + ')</div>'"): (
+        1, "valor do innerHTML de erro em loadBoard: literal + resp.status, com resp = "
+           "await Auth.apiRequest('/api/pipeline/board/' + currentFunnelId + '/meta'): "
+           "Response.status, inteiro"),
     ("templates/equipes.html", "loadError"): (
         2, "loadError so recebe null (loadAllData) ou resp.status de Auth.apiRequest "
            "(fetchUsers, fetchTeams): Response.status, inteiro"),
@@ -1223,6 +1237,12 @@ def crus(codigo):
 
 ESC_COM_REGEX = ("function esc(s) { return String(s).replace(/'/g, '&#39;')"
                  ".replace(/\"/g, '&quot;'); } el.innerHTML = `<i>${l.nome}</i>`;")
+# O valor do innerHTML de loadStage (pipeline.html:704-707), com o stageId cru.
+RHS_LOADSTAGE = ("st.items.length === 0\n"
+                 "        ? '<div class=\"empty-column\">Nenhum lead</div>'\n"
+                 "        : st.items.map(l => `<div>${esc(l.nome)}</div>`).join('') +\n"
+                 "          (st.hasMore ? '<button data-stage=\"' + stageId + '\">Carregar mais</button>'"
+                 " : '')")
 
 ACUSA = [
     ("campo cru no <td>", "el.innerHTML = `<td>${l.nome}</td>`;", [("l.nome", "l.nome")]),
@@ -1317,6 +1337,26 @@ ACUSA = [
     ("esc(a).concat(b): esc(...) so vale sozinho",
      "el.innerHTML = `<td>${esc(a).concat(b)}</td>`;",
      [("esc(a).concat(b)", "esc(a).concat(b)")]),
+    # -- o valor do sink FORA de template tambem e julgado (e acusado no proprio sink)
+    ("sink: concatenacao", "el.innerHTML = '<td>' + l.nome + '</td>';",
+     [("'<td>' + l.nome + '</td>'", "l.nome")]),
+    ("sink: valor cru direto", "el.innerHTML = l.nome;", [("l.nome", "l.nome")]),
+    ("sink: += cru direto", "el.innerHTML += l.nome;", [("l.nome", "l.nome")]),
+    ("sink: insertAdjacentHTML com concatenacao",
+     "el.insertAdjacentHTML('beforeend', '<b>' + x);", [("'<b>' + x", "x")]),
+    ("sink: [...].join('')", "el.innerHTML = ['<b>', x, '</b>'].join('');",
+     [("['<b>', x, '</b>'].join('')", "x")]),
+    ("sink: variavel local montada com +=",
+     "let h = '';\nh += '<b>' + y.nome;\nel.innerHTML = h;", [("h", "y.nome")]),
+    ("sink: .map que devolve concatenacao",
+     "el.innerHTML = rows.map(r => '<i>' + r.nome + '</i>').join('');",
+     [("rows.map(r => '<i>' + r.nome + '</i>').join('')", "r.nome")]),
+    ("sink: o formato de pipeline.html:704-707 sem o esc(stageId)",
+     "function loadStage(stageId, st) {\n    body.innerHTML = " + RHS_LOADSTAGE + ";\n}",
+     [(" ".join(RHS_LOADSTAGE.split()), "stageId")]),
+    # DOMPurify.sanitize(...) so cobre o valor quando e a expressao INTEIRA
+    ("DOMPurify.sanitize(a) + b: o b e julgado",
+     "el.innerHTML = DOMPurify.sanitize(a) + l.nome;", [("DOMPurify.sanitize(a) + l.nome", "l.nome")]),
 ]
 for nome, codigo, esperado in ACUSA:
     obtido = crus(codigo)
@@ -1347,6 +1387,7 @@ ACEITA = [
     ("consulta a objeto literal const",
      "const CONST = { a: 'x', b: 'y' };\nel.innerHTML = `<i>${CONST[k]}</i>`;"),
     ("data formatada", "el.innerHTML = `<i>${new Date(x).toLocaleDateString('pt-BR')}</i>`;"),
+    ("DOMPurify.sanitize() cobrindo o valor do sink", "el.innerHTML = DOMPurify.sanitize(l.nome);"),
     ("as duas `pills` de segmentacao.html (escopo, nao nome)", PILLS),
 ]
 for nome, codigo in ACEITA:
