@@ -12,11 +12,12 @@ abertura e a de fechamento do expediente e o tipo de variavel. Esta regra impede
 a proxima.
 
 A regra: todo valor que chega a um sink de HTML (innerHTML / outerHTML /
-insertAdjacentHTML / document.write) e escapeHtml() - ou DOMPurify.sanitize() -
-cobrindo o valor inteiro, numero, constante do codigo ou uma entrada de
-PERMITIDAS (abaixo), que fixa o motivo e o numero de ocorrencias. Quem julga isso
-e o analisador de tests/analisador_interpolacao_crua.py, e o docstring dele e o
-contrato: o que conta como valor seguro, as extensoes e o que a regra NAO pega.
+insertAdjacentHTML / document.write) e escapeHtml() cobrindo o valor inteiro -
+ou DOMPurify.sanitize() so na raiz do sink -, numero, constante do codigo ou
+uma entrada de PERMITIDAS (abaixo), que fixa o motivo e o numero de ocorrencias.
+Quem julga isso e o analisador de tests/analisador_interpolacao_crua.py, e o
+docstring dele e o contrato: o que conta como valor seguro, as extensoes e o que
+a regra NAO pega.
 
 Escopo: conversas/templates/**/*.html (blocos <script> inline, sem src=) e
 conversas/static/js/**/*.js. O front do CRM tem o teste dele.
