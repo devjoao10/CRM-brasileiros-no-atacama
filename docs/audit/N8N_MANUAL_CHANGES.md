@@ -684,6 +684,14 @@ A consolidação dos duplicados **já existentes** é alteração de dado de pro
 não é feita por esta rodada e não deve ser automatizada sem revisão humana caso
 a caso.
 
+> **Nota de 2026-10-15 (CONV-LEAD-FONE-01) — o 409 deste nó passou a aparecer em
+> mais casos.** A rota agora enxerga a MESMA linha em grafias diferentes (nono
+> dígito do celular, DDI de um lado só), então duplicatas que o reconhecimento
+> falho criou — por exemplo `(48) 98871-1776` + `554888711776` — respondem 409
+> quando a busca vem em outra grafia da linha (`5548988711776`, a do modal). Com
+> o roteamento atual do `Lead existe?` isso vira um lead NOVO, e o passo 3 acima
+> deixa de ser opcional: ele é o **M12**, que passa a ser pré-requisito do deploy.
+
 ---
 
 ## M11 — o formulário precisa dizer em qual funil o lead entra
@@ -767,6 +775,18 @@ estão implementados e testados em `tests/test_lead_funnel_entry.py`.
 **Consequência de uma correção desta rodada. Não é regressão — o comportamento
 antigo era pior —, mas agora existe um sinal que o workflow ignora.**
 
+> **Nota de 2026-10-15 (CONV-LEAD-FONE-01) — o M12 passa a ser pré-requisito do
+> deploy.** A rota `GET /api/leads/by-whatsapp` agora enxerga a MESMA linha em
+> grafias diferentes (nono dígito do celular, DDI de um lado só). As duplicatas
+> que o defeito de reconhecimento criou — por exemplo `(48) 98871-1776` +
+> `554888711776` — passam a responder **409** quando a busca vem em outra grafia
+> da linha (`5548988711776`); antes a rota devolvia 200 com um dos dois e o outro
+> ficava invisível. **Sem o M12 o formulário do site cria um TERCEIRO lead** a
+> cada um desses 409. O pré-requisito do deploy é o M12 **junto com** a limpeza
+> das duplicatas guiada pelo SQL de diagnóstico do CONV-LEAD-FONE-01
+> (`scripts/diagnostico_telefone_leads.sql`, somente leitura, entregue ao dono
+> à parte).
+
 ### O que mudou no repositório
 
 `GET /api/leads/by-whatsapp/{n}` consultava a coluna `whatsapp` **crua**. Um
@@ -810,8 +830,15 @@ ramo falso.
 
 Antes, o mesmo cenário também criava lead novo — só que **sempre**, inclusive
 quando havia UM único lead. O 409 aparece agora porque a rota passou a enxergar
-as duplicatas; ele é o diagnóstico, não a causa. Enquanto esta mudança não for
-feita, o comportamento no caso ambíguo é idêntico ao de antes.
+as duplicatas; ele é o diagnóstico, não a causa.
+
+Mas o caso ambíguo **não é idêntico ao de antes** (nota de 2026-10-15,
+CONV-LEAD-FONE-01). Até então a rota só juntava leads de mesmo dígito, ou em que
+um número era sufixo do outro; agora ela também junta a mesma linha em grafias
+diferentes (nono dígito, DDI). Um par como `(48) 98871-1776` + `554888711776`
+respondia 200 com um deles — o outro ficava invisível — e passa a responder 409
+quando a busca vem em outra grafia da linha, como `5548988711776`. Sem a mudança
+no n8n, cada um desses 409 vira um lead novo.
 
 ### Teste manual
 
@@ -832,6 +859,9 @@ implementados e testados em `tests/test_leads_lookup_whatsapp.py`.
 
 **PENDÊNCIA DE DADOS, SEPARADA:** as duplicatas que já existem em produção
 continuam lá. Consolidá-las é alteração de dado de produção, caso a caso, e não
-foi feita por esta rodada (mesma classificação do M10).
+foi feita por esta rodada (mesma classificação do M10). O SQL de diagnóstico do
+CONV-LEAD-FONE-01 (`scripts/diagnostico_telefone_leads.sql`, somente leitura)
+lista os leads da mesma linha gravados mais de uma vez e as conversas presas à
+duplicata, para guiar essa limpeza.
 
 **STATUS:** `FIXED_PENDING_MANUAL_N8N`

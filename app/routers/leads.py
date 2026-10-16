@@ -31,6 +31,12 @@ from app.auth import get_current_user, require_admin
 from app.query_filters import campo_personalizado_match, destino_match
 from app.config import LEAD_TAG_ORIGEM_API
 from app.services.lead_creation import criar_lead, resolver_funil_por_nome
+from app.services.telefone_identidade import (
+    grafias_compativeis,
+    mesmo_telefone,
+    padrao_sufixo,
+    so_digitos,
+)
 
 router = APIRouter(prefix="/api/leads", tags=["Leads"])
 
@@ -86,12 +92,13 @@ def _only_digits(value: Optional[str]) -> str:
     """
     Normalizacao unica de telefone: so digitos (+, espacos, (), - e . somem).
 
-    AUDIT-2026-08-WC (C6): mesmo helper de
-    conversas/app/services/crm.py::_only_digits, definido de novo aqui em vez
-    de importado — os dois pacotes se chamam `app` e nao podem coexistir no
-    mesmo processo.
+    AUDIT-2026-08-WC (C6) / CONV-LEAD-FONE-01: delega a
+    `telefone_identidade.so_digitos`, a normalizacao sobre a qual
+    `grafias_compativeis`, `padrao_sufixo` e `mesmo_telefone` trabalham (e que o
+    Conversas usa na sua copia do modulo). Uma segunda definicao aqui deixaria o
+    numero que gera o pre-filtro divergir do que o Python compara.
     """
-    return "".join(ch for ch in (value or "") if ch.isdigit())
+    return so_digitos(value)
 
 
 def _digitos_no_banco(coluna):
@@ -980,6 +987,13 @@ def import_leads(
 
 # ─── INTEGRATION: Conversas ←→ CRM ──────────────────────────────────
 
+# CONV-LEAD-FONE-01 — quantas linhas o pre-filtro do passo 2 de
+# `get_lead_by_whatsapp` traz no MAXIMO. E o `.limit()` da consulta e o limite com
+# que a rota compara: pre-filtro que volta CHEIO e ambiguidade (409), porque o
+# Python decidiria sobre uma amostra. Uma constante so, para os dois nao divergirem.
+_LIMITE_CANDIDATOS_WHATSAPP = 50
+
+
 @router.get("/by-whatsapp/{whatsapp}", response_model=LeadResponse,
             summary="Buscar lead pelo WhatsApp")
 def get_lead_by_whatsapp(
@@ -991,9 +1005,14 @@ def get_lead_by_whatsapp(
     Busca um lead pelo número de WhatsApp.
     Usado pela plataforma Conversas para vincular conversas a leads automaticamente.
 
-    Contrato (inalterado): casamento por IDENTIDADE de dígitos, tolerante a
-    DDI presente de um lado só (sufixo compatível), e AMBIGUIDADE É RECUSADA
-    com 409 — nunca resolvida escolhendo um lead arbitrário.
+    Contrato (status 200/404/409 e mensagens inalterados; o 409 ganhou um caso
+    novo, o de candidatos demais): casamento por IDENTIDADE da linha, não por
+    texto. Casa o mesmo número dígito a dígito ou a MESMA linha em outra grafia
+    — DDI presente de um lado só, nono dígito do celular de um lado só
+    (CONV-LEAD-FONE-01); entre números brasileiros, DDD diferente nunca casa.
+    AMBIGUIDADE É RECUSADA com 409 — nunca resolvida escolhendo um lead
+    arbitrário —, inclusive quando o pré-filtro enche o limite de candidatos e a
+    decisão seria tomada sobre uma amostra.
     """
     # AUDIT-2026-08-WF2 — os dois lados normalizados, no banco.
     #
@@ -1047,30 +1066,61 @@ def get_lead_by_whatsapp(
     # no do fluxo do Formulario e a Tool Buscar Lead WhatsApp do Gerenciador:
     # um casamento errado atualiza o LEAD DO OUTRO CLIENTE.
     #
-    # Mesma regra de conversas/app/services/crm.py::lookup_lead_by_whatsapp
-    # (AUDIT-2026-08-W2F/F10): o LIKE serve so de PRE-FILTRO barato. A
-    # decisao e por compatibilidade EXATA de digitos, feita em Python — um
-    # numero e "compativel" com o outro quando um e sufixo do outro (cobre o
-    # caso de DDI presente de um lado e ausente do outro, que e o motivo deste
-    # passo existir: "handles country code variations"). Se mais de UM lead
-    # DISTINTO for compativel, a ambiguidade e RECUSADA (409), nunca resolvida
-    # por ORDER BY/LIMIT 1 arbitrario.
+    # CONV-LEAD-FONE-01: este passo responde "e a MESMA linha em outra
+    # grafia?" com a regra de app/services/telefone_identidade.py, a mesma de
+    # conversas/app/services/crm.py::lookup_lead_by_whatsapp (duas copias do
+    # modulo, byte a byte iguais: os dois pacotes se chamam `app` e nao
+    # coexistem no processo). Antes a compatibilidade era "um numero e sufixo
+    # do outro" (AUDIT-2026-08-W2F/F10) - cobria o DDI presente de um lado so,
+    # mas NAO o nono digito: o modal do CRM grava `5548988711776` e a Meta
+    # entrega o mesmo celular como `554888711776` (sem o 9, fora dos DDDs
+    # 11-19, 21, 22, 24, 27 e 28), entao a BIA nao achava o lead cadastrado a
+    # mao e criava uma DUPLICATA. O sufixo agora so vale quando NENHUM dos dois
+    # numeros tem leitura brasileira: com um lado brasileiro ele alinhava errado
+    # e juntava pessoas diferentes - cruzava DDD entre dois brasileiros
+    # (`554987654321`, DDD 49, termina em `54987654321`, DDD 54) e casava
+    # estrangeiro ou registro corrompido com brasileiro (Chile `56987654321` e
+    # DDD 69 sem o 9, `556987654321`).
+    #
+    # O SQL so PRE-FILTRA (grafias compativeis em IN, sufixo de 11 digitos em
+    # LIKE, ambos sobre os digitos NORMALIZADOS da coluna e por bind param) e
+    # quem DECIDE e o Python (`mesmo_telefone`), sobre os candidatos. Se mais de
+    # UM lead DISTINTO for da mesma linha, a ambiguidade e RECUSADA (409), nunca
+    # resolvida por ORDER BY/LIMIT 1 arbitrario. O mesmo vale quando o pre-filtro
+    # volta CHEIO (`_LIMITE_CANDIDATOS_WHATSAPP` linhas): o Python decidiria
+    # sobre uma AMOSTRA, e um lead da mesma linha que ficou de fora faria quem
+    # sobrou parecer unico. Cheio e ambiguo: 409, mesma resposta.
     #
     # So roda quando o passo 1 nao achou nada: casamento exato continua tendo
-    # precedencia sobre sufixo, senao buscar `5511987654321` com um lead
+    # precedencia sobre outra grafia, senao buscar `5511987654321` com um lead
     # `11987654321` e outro `5511987654321` no banco viraria 409 onde antes
-    # havia resposta.
-    if not compativeis and len(normalized) >= 11:
-        suffix = normalized[-11:]
+    # havia resposta. O piso de 11 digitos saiu daqui: DDD + 8 digitos
+    # (`3187654321`) tem leitura e acha o lead; sem DDD nao ha leitura nem
+    # sufixo (os 10 ultimos digitos nao identificam ninguem), entao a unica
+    # grafia e o proprio numero, que o passo 1 ja cobriu.
+    if not compativeis:
+        filtros = [digitos_col.in_(sorted(grafias_compativeis(normalized)))]
+        padrao = padrao_sufixo(normalized)
+        if padrao is not None:
+            filtros.append(digitos_col.like(padrao))
         candidatos = (
             db.query(Lead)
-            .filter(digitos_col.like(f"%{suffix}"))
-            .limit(50)
+            .filter(or_(*filtros))
+            .limit(_LIMITE_CANDIDATOS_WHATSAPP)
             .all()
         )
+        if len(candidatos) >= _LIMITE_CANDIDATOS_WHATSAPP:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Candidatos demais para decidir com segurança "
+                    f"(o limite de {_LIMITE_CANDIDATOS_WHATSAPP} leads foi atingido). "
+                    "Desambigue manualmente — nenhum lead foi escolhido "
+                    "automaticamente."
+                ),
+            )
         for c in candidatos:
-            digitos = _only_digits(c.whatsapp)
-            if digitos and (digitos.endswith(normalized) or normalized.endswith(digitos)):
+            if mesmo_telefone(normalized, c.whatsapp):
                 compativeis[c.id] = c
 
     if len(compativeis) > 1:
