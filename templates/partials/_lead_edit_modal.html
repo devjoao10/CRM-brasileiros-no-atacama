@@ -118,7 +118,7 @@
                     <div class="form-row">
                         <div class="form-group">
                             <label class="form-label" for="leadWhatsapp">WhatsApp <span style="font-weight:400;color:var(--color-dark-400);font-size:11px;">(ex: 48 98871-1776)</span></label>
-                            <input type="tel" id="leadWhatsapp" class="form-input" placeholder="48 98871-1776" maxlength="20" oninput="formatWhatsappInput(this)">
+                            <input type="tel" id="leadWhatsapp" class="form-input" placeholder="48 98871-1776" maxlength="30" oninput="formatWhatsappInput(this)">
                         </div>
                         <div class="form-group">
                             <label class="form-label">Destinos</label>
@@ -340,6 +340,15 @@
     // conjunto completo, sem depender do que a pagina hospedeira definiu.
     function formatWhatsappInput(input) {
         let v = input.value.replace(/\D/g, '');
+        // CONV-LEAD-FONE-01: com mais de 11 digitos, um 55 na frente e o DDI do
+        // Brasil, nao o DDD, e tem que sair ANTES do corte em 11. Colar
+        // `+55 48 98871-1776` (13 digitos) cortava primeiro e virava
+        // `(55) 48988-7117`, e o saveLead gravava 5555489887117: DDD 55 falso e
+        // os 2 ultimos digitos perdidos, um numero que nenhuma busca acha depois.
+        // Com 11 digitos ou menos o 55 continua sendo DDD (RS), por isso `> 11`.
+        if (v.startsWith('55') && v.length > 11) {
+            v = v.slice(2);
+        }
         // Limita a 11 dígitos (DDD + 9 dígitos)
         v = v.slice(0, 11);
         if (v.length > 6) {

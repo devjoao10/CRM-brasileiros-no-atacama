@@ -20,6 +20,12 @@ from sqlalchemy.orm import Session
 
 from app.database import IS_SQLITE
 from app.models.conversation import Conversation
+from app.services.telefone_identidade import (
+    grafias_compativeis,
+    mesmo_telefone,
+    padrao_sufixo,
+    so_digitos,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +51,87 @@ _TRAVA_LINHA_SQL = "" if IS_SQLITE else " FOR UPDATE"
 
 
 def _only_digits(value: Optional[str]) -> str:
-    """Normalizacao unica de telefone: so digitos (+, espacos, (), - e . somem)."""
-    return "".join(ch for ch in (value or "") if ch.isdigit())
+    """
+    Normalizacao unica de telefone: so digitos (+, espacos, (), - e . somem).
+
+    CONV-LEAD-FONE-01: delega a `telefone_identidade.so_digitos`, sobre a qual
+    `grafias_compativeis`, `padrao_sufixo` e `mesmo_telefone` trabalham. Uma
+    segunda definicao de "so digitos" aqui deixaria o numero que gera o
+    pre-filtro divergir do que o Python compara.
+    """
+    return so_digitos(value)
+
+
+# CONV-LEAD-FONE-01 — quantas linhas o pre-filtro da camada 2 traz no MAXIMO. E o
+# `LIMIT` do SQL de `_leads_da_mesma_linha` — que segue LITERAL em `text()`, sem
+# interpolar nada — e e o limite com que o lookup compara: pre-filtro que volta
+# CHEIO e ambiguidade, porque o Python decidiria sobre uma amostra. Como o SQL e
+# literal, o valor aparece nos dois lugares; tests/test_conversas_lead_link.py
+# trava o `LIMIT` do SQL e esta constante no mesmo valor.
+_LIMITE_CANDIDATOS = 50
+
+
+def _e164_brasileiro(digitos: str) -> bool:
+    """
+    CONV-LEAD-FONE-01: `digitos` tem a forma de um wa_id brasileiro E.164 — `55` +
+    DDD + assinante, 12 ou 13 digitos. So a esses a camada 2 se aplica.
+
+    O wa_id que a Meta entrega e SEMPRE E.164 e o `/initiate` forca o `55`, entao
+    um numero de 10 ou 11 digitos aqui e estrangeiro, nunca um brasileiro sem
+    DDI. Lido como brasileiro, o celular do Peru `51987654321` viraria o "DDD 51"
+    de Porto Alegre e a conversa ficaria presa PARA SEMPRE ao lead
+    `5551987654321` (`auto_link_conversation` grava o lead_id permanentemente).
+    """
+    return digitos.startswith("55") and len(digitos) in (12, 13)
+
+
+def _mascarar(digitos: str) -> str:
+    """So os 4 ultimos digitos (`***4321`): da para conferir o caso sem expor o telefone no log."""
+    return "***" + digitos[-4:]
+
+
+def _leads_da_mesma_linha(normalized: str, db: Session) -> tuple[list, bool]:
+    """
+    CONV-LEAD-FONE-01 — CAMADA 2 de `lookup_lead_by_whatsapp`: leads cujo numero
+    e a MESMA linha de `normalized` em outra grafia (nono digito, DDI).
+
+    O SQL so PRE-FILTRA, sobre os digitos normalizados da coluna: as grafias
+    compativeis (`IN`) e, quando o numero tem >= 11 digitos, o sufixo (`LIKE`).
+    O LIKE traz de proposito candidatos que NAO sao a mesma linha (554987654321
+    termina em 54987654321, que e o DDD 54 — outra pessoa): quem decide
+    identidade e `mesmo_telefone`, em Python. Valores sempre por bind param,
+    nunca concatenados; o LIKE nunca incide sobre a coluna crua.
+
+    Devolve `(leads, truncado)`. `truncado` e True quando o pre-filtro encheu o
+    limite (`_LIMITE_CANDIDATOS`): o Python so veria uma amostra — um lead da
+    mesma linha pode ter ficado de fora, e quem sobrou parece unico. Nesse caso
+    `leads` vem vazio de proposito e quem chama trata como ambiguidade, nunca
+    decide sobre o resultado.
+    """
+    sufixo = padrao_sufixo(normalized)
+    parametros = {"grafias": sorted(grafias_compativeis(normalized))}
+    if sufixo is None:
+        consulta = text(
+            "SELECT id, nome, whatsapp, email, responsavel_id "
+            "FROM leads "
+            "WHERE regexp_replace(whatsapp, '[^0-9]', '', 'g') IN :grafias "
+            "LIMIT 50"
+        )
+    else:
+        consulta = text(
+            "SELECT id, nome, whatsapp, email, responsavel_id "
+            "FROM leads "
+            "WHERE regexp_replace(whatsapp, '[^0-9]', '', 'g') IN :grafias "
+            "OR regexp_replace(whatsapp, '[^0-9]', '', 'g') LIKE :sufixo "
+            "LIMIT 50"
+        )
+        parametros["sufixo"] = sufixo
+    candidatos = db.execute(
+        consulta.bindparams(bindparam("grafias", expanding=True)), parametros
+    ).fetchall()
+    if len(candidatos) >= _LIMITE_CANDIDATOS:
+        return [], True
+    return [r for r in candidatos if mesmo_telefone(normalized, r.whatsapp)], False
 
 
 async def lookup_lead_by_whatsapp(whatsapp: str, db: Session) -> tuple[Optional[dict], bool]:
@@ -58,9 +143,17 @@ async def lookup_lead_by_whatsapp(whatsapp: str, db: Session) -> tuple[Optional[
       - `(dict, False)`  exatamente UM lead tem este numero;
       - `(None, False)`  NENHUM lead tem este numero — o caller pode criar;
       - `(None, True)`   nao da para afirmar que o numero e novo (dois ou mais
-                         leads com ele, ou a consulta falhou). O caller NAO
+                         leads com ele, o pre-filtro da camada 2 encheu o limite
+                         de candidatos, ou a consulta falhou). O caller NAO
                          pode vincular nem criar: criar aqui e fabricar mais um
                          duplicado em cima do problema.
+
+    "Ter este numero" tem DUAS camadas (CONV-LEAD-FONE-01), nesta ordem:
+      1. igualdade EXATA dos digitos — a regra de sempre; o F10 e o WF2 abaixo
+         contam como ela foi endurecida;
+      2. SO se a camada 1 nao achou NENHUM lead e o wa_id e brasileiro E.164
+         (`55` + 12/13 digitos): a MESMA linha em outra grafia (nono digito,
+         DDI) — ver o paragrafo CONV-LEAD-FONE-01 mais abaixo.
 
     AUDIT-2026-08-W2F (F10) — IDENTIDADE, nao "busca flexivel".
     O casamento antigo era `whatsapp LIKE '%<10 ultimos digitos>%'` e o primeiro
@@ -98,6 +191,57 @@ async def lookup_lead_by_whatsapp(whatsapp: str, db: Session) -> tuple[Optional[
     sempre o Python. Ambiguidade continua RECUSADA, nunca resolvida por
     "ORDER BY created_at DESC LIMIT 1", que escolhia um cliente arbitrario.
 
+    CONV-LEAD-FONE-01 — a camada 2: a regra deixou de ser SO igualdade exata.
+    O MESMO celular brasileiro chega com grafias diferentes conforme a porta de
+    entrada: o modal do CRM grava `55` + DDD + 9 digitos (`5548988711776`); a
+    Meta entrega o wa_id de boa parte dos celulares SEM o nono digito quando o
+    DDD fica fora de 11-19, 21, 22, 24, 27 e 28 (`554888711776`); import CSV e
+    API gravam o texto cru, muitas vezes sem DDI (`(11) 98765-4321`). Igualdade
+    exata nao enxerga nada disso: o lead cadastrado a mao passava por
+    desconhecido e `auto_create_lead_in_crm` criava um DUPLICADO, com a conversa
+    presa nele para sempre.
+
+    A camada 2 so roda quando a camada 1 nao achou NENHUM lead exato. O lead
+    exato tem precedencia: e o numero do jeito que a Meta o entrega, e um lead
+    de outra grafia da mesma linha nao pode transformar um casamento limpo numa
+    recusa por ambiguidade. Dentro da camada que decidiu vale a mesma regra de
+    sempre: um unico lead distinto vincula; dois ou mais sao ambiguidade, que
+    segue RECUSADA.
+
+    Quem diz "mesma linha" e `mesmo_telefone` (app/services/telefone_identidade.py,
+    copia byte a byte da do CRM: os dois apps decidem pela mesma regra). O SQL
+    so PRE-FILTRA — digitos normalizados da coluna `IN` as grafias compativeis
+    do numero, OU (com >= 11 digitos) `LIKE` o sufixo, ver `_leads_da_mesma_linha`
+    — e cada candidato ainda passa por `mesmo_telefone`.
+
+    Por que a camada 2 so vale para wa_id brasileiro E.164: o wa_id da Meta e
+    sempre E.164 e o `/initiate` forca o `55`, entao 10 ou 11 digitos aqui e um
+    numero estrangeiro. A regra, que nao sabe de onde o numero veio, o leria como
+    brasileiro sem DDI (o celular do Peru `51987654321` como o "DDD 51" de Porto
+    Alegre), e como `auto_link_conversation` grava o lead_id PERMANENTEMENTE a
+    conversa ficaria presa ao lead errado. Efeito colateral aceito: o lead de um
+    estrangeiro que o modal corrompe (`+56 9 8765 4321` gravado como
+    `5556987654321`, F-084, adiado) deixa de ser reunido a ele aqui.
+
+    Por que o F10 continua valendo (a regra e mais larga que a igualdade exata,
+    mas mantem as garantias dele):
+      * se algum lado tem leitura brasileira, DDD diferente NUNCA casa: a leitura
+        canonica exige DDD valido e so infere o nono digito DENTRO do mesmo DDD.
+        O sufixo de 11 digitos alinharia 49 com 54 e 19 com 51 e juntaria
+        estrangeiro ou registro corrompido a um brasileiro, entao ele so vale
+        quando NENHUM lado tem leitura brasileira (limite conhecido: o prefixo
+        `00` deixa de casar com a grafia brasileira);
+      * numero sem DDD nao casa, e os 10 ultimos digitos nao identificam
+        ninguem (por isso o sufixo exige 11);
+      * fixo nunca ganha o 9, entao nunca casa com celular de mesmo final;
+      * ambiguidade continua RECUSADA, nunca resolvida por ORDER BY/LIMIT 1 — e
+        tambem quando o pre-filtro da camada 2 volta CHEIO (`_LIMITE_CANDIDATOS`
+        linhas): o Python decidiria sobre uma amostra, e um lead da mesma linha
+        que ficou de fora faria quem sobrou parecer unico. Cheio e ambiguo.
+    Custo: a camada 2 e mais um Seq Scan em `leads` (a expressao normalizada
+    nao usa `ix_leads_whatsapp`), e so roda quando a camada 1 nao achou nenhum
+    lead exato e o wa_id e brasileiro E.164.
+
     SO-PostgreSQL, como o resto do modulo (`NOW()`, `::jsonb`, `RETURNING`):
     em SQLite `regexp_replace` nao existe e a consulta cai no `except` — que
     agora bloqueia a criacao em vez de deixar passar como "numero novo".
@@ -117,17 +261,30 @@ async def lookup_lead_by_whatsapp(whatsapp: str, db: Session) -> tuple[Optional[
             {"digitos": normalized},
         ).fetchall()
 
-        exact = [r for r in candidates if _only_digits(r.whatsapp) == normalized]
-        if not exact:
+        matched = [r for r in candidates if _only_digits(r.whatsapp) == normalized]
+        # CONV-LEAD-FONE-01 — camada 2 ("mesma linha em outra grafia"): so roda
+        # quando a camada 1 nao achou NENHUM lead exato (o exato tem precedencia)
+        # E o wa_id e brasileiro E.164 (ver `_e164_brasileiro`).
+        if not matched and _e164_brasileiro(normalized):
+            matched, truncado = _leads_da_mesma_linha(normalized, db)
+            if truncado:
+                logger.warning(
+                    "Lookup de lead AMBIGUO para %s: o pre-filtro da camada 2 "
+                    "devolveu o limite de %s candidatos — nao da para decidir com "
+                    "seguranca, nenhum vinculo automatico sera feito.",
+                    _mascarar(normalized), _LIMITE_CANDIDATOS,
+                )
+                return None, True
+        if not matched:
             return None, False
-        if len({r.id for r in exact}) > 1:
+        if len({r.id for r in matched}) > 1:
             logger.warning(
                 "Lookup de lead AMBIGUO para %s: %s leads com o mesmo numero "
                 "(%s) — nenhum vinculo automatico sera feito.",
-                normalized, len(exact), sorted({r.id for r in exact}),
+                _mascarar(normalized), len(matched), sorted({r.id for r in matched}),
             )
             return None, True
-        result = exact[0]
+        result = matched[0]
 
         # Get responsavel name
         responsavel_nome = "Agente IA"
@@ -152,7 +309,11 @@ async def lookup_lead_by_whatsapp(whatsapp: str, db: Session) -> tuple[Optional[
         # tambem a leitura do responsavel, que roda DEPOIS de o lead ter sido
         # encontrado: devolver "pode criar" transformava um erro de consulta em
         # duplicata do lead que a consulta tinha acabado de achar.
-        logger.error(f"Erro ao buscar lead no banco: {e}")
+        #
+        # CONV-LEAD-FONE-01: loga so o TIPO da excecao. A mensagem do SQLAlchemy
+        # carrega os parametros do SQL, que aqui sao as grafias do telefone do
+        # cliente.
+        logger.error("Erro ao buscar lead no banco: %s", type(e).__name__)
         return None, True
 
 

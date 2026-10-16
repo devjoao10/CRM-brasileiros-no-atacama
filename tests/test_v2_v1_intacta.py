@@ -103,13 +103,26 @@ _PROTEGIDOS = (
     # HOTFIX desta rodada: CONV-HOTFIX-LOCK-03 — o SELECT de `sync_responsavel_to_crm`
     # passa a tomar `FOR UPDATE` (ramo IS_SQLITE), fechando a escrita cross-app
     # em `leads` que rodava sem trava nem CAS.
+    # HOTFIX CONV-LEAD-FONE-01 (hash recalculado a mao, mesma formula): o
+    # `lookup_lead_by_whatsapp` ganha a camada "mesma linha em outra grafia" (DDI e
+    # nono digito, via app/services/telefone_identidade.py), so para wa_id
+    # brasileiro E.164, com recusa em ambiguidade e fail-closed quando o
+    # pre-filtro enche o LIMIT; o WARNING de ambiguidade passa a mascarar o numero
+    # e o except loga so o tipo da excecao. So LEITURA de `leads` — nenhuma
+    # escrita nova, nenhuma referencia as colunas da V2.
     (CONVERSAS_DIR / "app/services/crm.py",
-     "fbdb05a6afa68eaee6816d443ff42a3b43307a7be73f88b54778da5680bfc87d"),
+     "67218a4279cb98fbd2e651cec6f9cecc3877331ad056fd82b1bf387498aaadfb"),
     # HOTFIX desta rodada: HOTFIX-LOCK-02 — `update_lead_responsavel` passa a
     # chamar o `_lock_lead()` que ja existia no proprio arquivo. So fecha a
     # corrida; nenhuma recusa, nenhum redirecionamento, nenhuma nocao de handoff.
+    # HOTFIX CONV-LEAD-FONE-01 (hash recalculado a mao, mesma formula): o passo 2
+    # de `get_lead_by_whatsapp` passa a usar a mesma regra de identidade do
+    # Conversas (DDI e nono digito; sufixo so entre numeros sem leitura
+    # brasileira), com 409 quando o pre-filtro enche o LIMIT, e `_only_digits`
+    # delega a `so_digitos`. So LEITURA — nenhuma escrita, nenhuma nocao de
+    # handoff, nenhuma referencia as colunas da V2.
     (ROOT / "app/routers/leads.py",
-     "4c3ec4188d431ebf0a4bb7892d7d6977c62f322836554cbffc0fb39c478f3732"),
+     "47df1cc2d51e10557821e83f02ef4bf09b54836ce53c8bf6f66bd9cef933b330"),
     (ROOT / "app/services/lead_creation.py",
      "cad719206f354a51c3273c6995f0d2832b3d58e1629b6b19d8b4f56abc2a4b58"),
     (ROOT / "app/services/conversas_bridge.py",
