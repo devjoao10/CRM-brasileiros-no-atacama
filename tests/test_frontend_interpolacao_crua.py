@@ -274,6 +274,10 @@ RE_NOME_NUMERICO = re.compile(
 # test_frontend_injection_contract.py) em qualquer grafia - stageId, etapaId,
 # destino_etapa_id - e nao so como `.id` de `stage`/`etapa`.
 RE_ID_DE_ETAPA = re.compile(r"(?:stage|etapa)_?id$", re.I)
+# O mesmo id como `.id` do parametro de callback sobre a lista de etapas
+# (`funnel.etapas.map(s => ... s.id ...)`), seja qual for o nome do parametro.
+RE_CALLBACK_DE_ETAPAS = re.compile(
+    r"\b(?:etapas|stages)\s*\.\s*(?:map|forEach|filter|find|some|every)\s*\(\s*$")
 RE_TAG = re.compile(r"<[A-Za-z!/]")
 RE_SINK_ATRIB = re.compile(r"\.\s*(?:innerHTML|outerHTML)\s*\+?=(?![=>])")
 RE_SINK_CHAMADA = re.compile(r"\.\s*(insertAdjacentHTML)\s*\(|\bdocument\s*\.\s*write(?:ln)?\s*\(")
@@ -754,6 +758,14 @@ class Analise:
             return False
         return not (nome == "id" and receptor in ("stage", "etapa"))
 
+    def _id_de_etapa(self, prim, suf):
+        """`X.id` com X parametro de callback sobre `.etapas`/`.stages`: id de etapa, texto."""
+        if not (prim.tipo == "id" and len(suf) == 1 and suf[0].tipo == "prop" and suf[0].txt == "id"):
+            return False
+        return any(L.tipo == "param" and RE_CALLBACK_DE_ETAPAS.search(
+                       self.m, max(0, L.extra.ini - 200), L.extra.ini)
+                   for L in self._visiveis(prim.txt, prim.ini))
+
     def _valor_da_cadeia(self, prim, suf, a, texto):
         n = len(suf)
         if not n:
@@ -766,7 +778,8 @@ class Analise:
         if prim.tipo == "id" and prim.txt in ESCAPES and n == 1 and ult.tipo == "call":
             return None                                 # esc(...) cobrindo o valor inteiro
         if ult.tipo == "prop" and (ult.txt in ("length", "size")
-                                   or self._nome_numerico(ult.txt, self._receptor(prim, suf))):
+                                   or (self._nome_numerico(ult.txt, self._receptor(prim, suf))
+                                       and not self._id_de_etapa(prim, suf))):
             return None
         if prim.tipo == "id" and all(s.tipo in ("prop", "idx") for s in suf):
             if self._constante(prim.txt, prim.ini) is not None:
@@ -816,9 +829,12 @@ class Analise:
                 return self._primeiro(*[self.julga(x, y) for x, y in self._args(prim.ini + 1, prim.fim - 1)])
             return None                                 # objeto literal: [object Object]
         if prim.tipo == "id":
-            if prim.txt in LITERAIS or self._nome_numerico(prim.txt, None):
+            if prim.txt in LITERAIS or self._laco_constante(prim.txt, prim.ini, False):
                 return None
-            if self._laco_constante(prim.txt, prim.ini, False):
+            # O nome so vale para nome SOLTO (global, de outro arquivo). Nome ligado
+            # no arquivo e resolvido como qualquer outro: `const total = l.nome` e o
+            # parametro `id` de addStageRow (que recebe o id de etapa) sao texto.
+            if self._nome_numerico(prim.txt, None) and not self._visiveis(prim.txt, prim.ini):
                 return None
             return self._resolve(prim.txt, prim.ini, texto)
         return texto
@@ -1109,6 +1125,9 @@ PERMITIDAS = {
         1, "parametro de renderTableGeneric: os tres chamadores (loadReports) "
            "passam literal - 'Sem origens cadastradas', 'Sem tags vinculadas', "
            "'Nenhum lead em funis'"),
+    ("templates/gestao/pendencias.html", "count"): (
+        1, "parametro de mk em renderTabs: os dois chamadores passam openCount(...), "
+           "que devolve list.filter(...).length, inteiro; pode ser 0"),
 }
 
 MOTIVO_MINIMO = 25
@@ -1159,14 +1178,15 @@ for linha in problemas:
 check(not problemas, f"achados crus x allowlist: {len(problemas)} problema(s)")
 
 # ---------------------------------------------------------------------------
-# 2. Controle de mutacao no arquivo REAL: reverter o SEC-XSS-04 tem que acusar
+# 2. Controle de mutacao no arquivo REAL: reverter um esc() auditado tem que acusar
 # ---------------------------------------------------------------------------
-print("\n2) reverter cada correcao do SEC-XSS-04 no arquivo real acusa o campo")
+print("\n2) reverter cada correcao (SEC-XSS-04, id de etapa) no arquivo real acusa o campo")
 
 TRAVESSAO = chr(0x2014)
 PLACEHOLDER = "'<span style=\"color:#aaa\">" + TRAVESSAO + "</span>'"
 SEG = "templates/segmentacao.html"
 MODAL = "templates/partials/_lead_edit_modal.html"
+PIPE = "templates/pipeline.html"
 MUTACOES = [
     (SEG, "<td>${esc(l.email)||" + PLACEHOLDER + "}</td>",
      "<td>${l.email||" + PLACEHOLDER + "}</td>", "l.email||" + PLACEHOLDER),
@@ -1174,6 +1194,10 @@ MUTACOES = [
      "<td>${l.whatsapp||" + PLACEHOLDER + "}</td>", "l.whatsapp||" + PLACEHOLDER),
     (SEG, "${s?esc(t.cor):'#eee'}", "${s?t.cor:'#eee'}", "s?t.cor:'#eee'"),
     (MODAL, 'value="${esc(savedVal)}"', 'value="${savedVal}"', "savedVal"),
+    # O id de etapa (StageSchema.id, texto livre): o <option> de loadTransferStages
+    # (`s` de funnel.etapas.map) e o parametro `id` de addStageRow (recebe s.id).
+    (PIPE, '<option value="${esc(s.id)}">', '<option value="${s.id}">', "s.id"),
+    (PIPE, 'value="${esc(id)}"', 'value="${id}"', "id"),
 ]
 for rel, antes, depois, esperado in MUTACOES:
     fonte = (ROOT / rel).read_text(encoding="utf-8")
@@ -1212,6 +1236,14 @@ ACUSA = [
      [("t.etapa_id", "t.etapa_id")]),
     ("stageId (alem da spec: o mesmo id de etapa)", "el.innerHTML = `<i>${stageId}</i>`;",
      [("stageId", "stageId")]),
+    # `.id` do parametro de callback sobre `.etapas`, seja qual for o nome dele
+    ("s.id de funnel.etapas.map(s => ...) e id de etapa",
+     "el.innerHTML = funnel.etapas.map(s => `<i>${s.id}</i>`).join('');", [("s.id", "s.id")]),
+    # nome numerico LIGADO no arquivo: decide o valor, nao o nome
+    ("const count = l.nome: o nome numerico nao salva o valor",
+     "const count = l.nome;\nel.innerHTML = `<b>${count}</b>`;", [("count", "l.nome")]),
+    ("const total = `${l.nome}`: o template vira markup pela resolucao",
+     "const total = `${l.nome}`;\nel.innerHTML = `<b>${total}</b>`;", [("l.nome", "l.nome")]),
     ("aninhado: acusa o ponto de dentro, nao o de fora",
      "el.innerHTML = `<td>${ok ? `<b>${raw}</b>` : ''}</td>`;", [("raw", "raw")]),
     ("template sem tag aninhado em argumento tambem vira markup (regra 3)",
