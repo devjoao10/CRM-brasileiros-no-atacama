@@ -1114,16 +1114,6 @@ PERMITIDAS = {
         1, "parametro de addStageRow: os chamadores passam literal (2, 3, 5, 7) ou "
            "s.dias_limite || 7 de funnels.etapas, gravado so por create_funnel e "
            "update_funnel via StageSchema.dias_limite: int ge=1"),
-    # -- enum gravado so por codigo; nenhum endpoint o aceita do cliente
-    ("templates/gestao/pendencias.html", "t.effective_status"): (
-        2, "derivado em InternalTaskResponse.from_task (app/schemas/internal_task.py), "
-           "que GET /api/internal/tasks usa: sempre o literal pendente, atrasada ou "
-           "concluida; nao e campo de entrada"),
-    ("templates/pipeline.html", "h.evento"): (
-        1, "LeadHistory.evento so e gravado com literal de codigo: _log_event em "
-           "app/routers/pipeline.py, app/routers/leads.py, "
-           "app/services/lead_creation.py e os INSERT de "
-           "conversas/app/services/crm.py; nenhum schema de entrada tem evento"),
     # -- valor que o proprio codigo ou o navegador restringe
     ("templates/partials/_lead_edit_modal.html", "dest"): (
         4, "dest vem de getSelectedDestinos(): o data-value das opcoes ESTATICAS "

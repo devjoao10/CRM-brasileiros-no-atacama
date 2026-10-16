@@ -1029,7 +1029,7 @@
             return;
         }
         container.innerHTML = `<div class="history-timeline">${items.map(h => `
-            <div class="history-item ${h.evento}">
+            <div class="history-item ${esc(h.evento)}">
                 <div class="history-desc">${esc(h.descricao || h.evento)}</div>
                 <div class="history-time">${fmtDateTime(h.created_at)}</div>
             </div>
