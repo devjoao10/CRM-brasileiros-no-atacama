@@ -241,7 +241,7 @@
             card.innerHTML = `
                 <div class="gi-card-top">
                     <div class="gi-card-title">${esc(t.title)}</div>
-                    <span class="gi-status-chip ${t.effective_status}">${t.effective_status}</span>
+                    <span class="gi-status-chip ${esc(t.effective_status)}">${esc(t.effective_status)}</span>
                 </div>
                 ${t.description ? `<div class="gi-card-desc">${esc(t.description)}</div>` : ''}
                 <div class="gi-card-meta">
