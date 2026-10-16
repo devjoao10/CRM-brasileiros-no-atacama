@@ -18,7 +18,8 @@ docstring dele e o contrato: o que conta como valor seguro, as extensoes e o que
 a regra NAO pega.
 
 Escopo: templates/**/*.html (blocos <script> inline, sem src=) e
-static/js/**/*.js. O app de conversas fica fora: e follow-up.
+static/js/**/*.js. O app de conversas fica fora: a regra dele esta em
+tests/test_conversas_interpolacao_crua.py.
 
 Rodar:  python tests/test_frontend_interpolacao_crua.py
 """
