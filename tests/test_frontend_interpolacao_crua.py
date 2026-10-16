@@ -27,6 +27,7 @@ Rodar:  python tests/test_frontend_interpolacao_crua.py
 import pathlib
 import re
 import sys
+import tempfile
 
 # `python tests/<arquivo>.py` poe tests/ em sys.path[0]: o analisador irmao importa direto.
 from analisador_interpolacao_crua import (
@@ -525,6 +526,48 @@ check(fora_da_regra(novo) == ["codigo_id", "ref_id"],
 check(crus("el.innerHTML = `<i>${t.google_calendar_event_id}</i>`;")
       == [("t.google_calendar_event_id", "t.google_calendar_event_id")],
       "a regra numerica respeita IDS_TEXTO")
+
+# ---------------------------------------------------------------------------
+# 6. Robustez do analisador: entrada estranha nao derruba a regra nem a cega
+# ---------------------------------------------------------------------------
+print("\n6) robustez do analisador")
+
+# _tok: caractere com str.isdigit() verdadeiro que RE_NUM nao casa (o 2 sobrescrito).
+# Lexar por c.isdigit() levantava aqui; o controle pega a excecao e reprova.
+try:
+    obtido, erro = crus("el.innerHTML = " + chr(0xB2) + ";"), None
+except Exception as exc:
+    obtido, erro = None, exc
+check(erro is None and isinstance(obtido, list),
+      f"_tok aceita caractere isdigit() que RE_NUM nao casa, sem levantar (erro: {erro!a})")
+
+# arquivos_do_front desce em subpasta (rglob) e so pega .html de templates e .js de static/js
+with tempfile.TemporaryDirectory() as tmp:
+    base = pathlib.Path(tmp)
+    esperados = [base / "templates" / "a" / "b.html", base / "static" / "js" / "sub" / "c.js",
+                 base / "static" / "js" / "d.js"]
+    for p in esperados + [base / "templates" / "a" / "x.js"]:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("", encoding="utf-8")
+    obtidos = arquivos_do_front(base)
+    nomes = [p.relative_to(base).as_posix() for p in obtidos]
+check(obtidos == sorted(esperados), f"arquivos_do_front acha os .html/.js aninhados e so eles: {nomes!a}")
+
+# varre: arquivo que nao e UTF-8 vira RuntimeError com o caminho dele e a causa original
+with tempfile.TemporaryDirectory() as tmp:
+    raiz = pathlib.Path(tmp)
+    ruim = raiz / "static" / "js" / "ruim.js"
+    ruim.parent.mkdir(parents=True)
+    ruim.write_bytes(b"el.innerHTML = '\xff';\n")
+    try:
+        varre(raiz, [ruim])
+        erro = None
+    except Exception as exc:
+        erro = exc
+causa = getattr(erro, "__cause__", None)
+check(isinstance(erro, RuntimeError) and "static/js/ruim.js" in str(erro)
+      and isinstance(causa, UnicodeDecodeError),
+      f"varre re-lanca a falha com o arquivo e a causa: {erro!a} (causa: {causa!a})")
 
 
 print()
