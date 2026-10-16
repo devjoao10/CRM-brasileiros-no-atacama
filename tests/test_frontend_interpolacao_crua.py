@@ -294,6 +294,9 @@ RE_RECEPTOR_DE_CALLBACK = re.compile(
     r"(?<![\w$.])((?:[^\W\d]|\$)[\w$]*)\s*\.\s*(?:map|forEach)\s*\(\s*$")
 RE_NOME_DE_PADRAO = re.compile(r"(?<![\w$])((?:[^\W\d]|\$)[\w$]*)(?=\s*(?:[,}\]=]|$))")
 RE_OP_DE_ESCRITA = re.compile(r"(?:[-+*/%&|^]|\*\*|<<|>>>?|&&|\|\||\?\?)?=(?![=>])")
+# Metodo que poe valor dentro do proprio array -> os argumentos que viram conteudo.
+MUTADORES = {"push": slice(None), "unshift": slice(None), "splice": slice(2, None),
+             "fill": slice(0, 1)}
 
 
 class Analise:
@@ -772,6 +775,19 @@ class Analise:
                        self.m, max(0, L.extra.ini - 200), L.extra.ini)
                    for L in self._visiveis(prim.txt, prim.ini))
 
+    def _nome_solto_numerico(self, prim):
+        """Identificador SEM ligacao no arquivo (global, de outro arquivo) com nome de PK/FK
+        inteira ou contador. Nome ligado decide pelo valor: `const total = l.nome` e o
+        parametro `id` de addStageRow (que recebe o id de etapa) sao texto."""
+        return (prim.tipo == "id" and self._nome_numerico(prim.txt, None)
+                and not self._visiveis(prim.txt, prim.ini))
+
+    def _campo_numerico(self, prim, suf):
+        """`X.length`, `X.size` ou campo de nome numerico (menos o `.id` de etapa)."""
+        ult = suf[-1]
+        return ult.tipo == "prop" and (ult.txt in ("length", "size") or (
+            self._nome_numerico(ult.txt, self._receptor(prim, suf)) and not self._id_de_etapa(prim, suf)))
+
     def _valor_da_cadeia(self, prim, suf, a, texto):
         n = len(suf)
         if not n:
@@ -786,9 +802,7 @@ class Analise:
         if (prim.tipo == "id" and prim.txt == "DOMPurify" and n == 2 and suf[0].tipo == "prop"
                 and suf[0].txt == "sanitize" and ult.tipo == "call"):
             return None                                 # sanitizador de HTML cobrindo o valor inteiro
-        if ult.tipo == "prop" and (ult.txt in ("length", "size")
-                                   or (self._nome_numerico(ult.txt, self._receptor(prim, suf))
-                                       and not self._id_de_etapa(prim, suf))):
+        if self._campo_numerico(prim, suf):
             return None
         if prim.tipo == "id" and all(s.tipo in ("prop", "idx") for s in suf):
             if self._constante(prim.txt, prim.ini) is not None:
@@ -838,12 +852,8 @@ class Analise:
                 return self._primeiro(*[self.julga(x, y) for x, y in self._args(prim.ini + 1, prim.fim - 1)])
             return None                                 # objeto literal: [object Object]
         if prim.tipo == "id":
-            if prim.txt in LITERAIS or self._laco_constante(prim.txt, prim.ini, False):
-                return None
-            # O nome so vale para nome SOLTO (global, de outro arquivo). Nome ligado
-            # no arquivo e resolvido como qualquer outro: `const total = l.nome` e o
-            # parametro `id` de addStageRow (que recebe o id de etapa) sao texto.
-            if self._nome_numerico(prim.txt, None) and not self._visiveis(prim.txt, prim.ini):
+            if (prim.txt in LITERAIS or self._laco_constante(prim.txt, prim.ini, False)
+                    or self._nome_solto_numerico(prim)):
                 return None
             return self._resolve(prim.txt, prim.ini, texto)
         return texto
@@ -874,24 +884,42 @@ class Analise:
         return self._memoizado(("lig", L.pos), calcula)
 
     def _escritas(self, L):
-        """RHS de toda escrita em NOME no escopo: =, +=, ||=, ??=, NOME[i] =, push/unshift."""
+        """RHS de toda escrita em NOME no escopo: =, +=, ||=, ??=, &&= e as do conteudo."""
         m, nome, out = self.m, re.escape(L.nome), []
         for mm in re.compile(r"(?<![\w$.])" + nome + r"\s*(?:\+=|\|\|=|\?\?=|&&=|=)(?![=>])"
                              ).finditer(m, L.s0, L.s1):
             if mm.start() != L.pos:
                 out.append((mm.end(), self.fim_expr(mm.end())))
-        for mm in re.compile(r"(?<![\w$.])" + nome + r"\s*\[").finditer(m, L.s0, L.s1):
-            abre = mm.end() - 1
-            if abre in self.par:
-                j = self._ws(self.par[abre] + 1, len(m))
-                if m.startswith("=", j) and not m.startswith(("==", "=>"), j):
-                    out.append((j + 1, self.fim_expr(j + 1)))
-        for mm in re.compile(r"(?<![\w$.])" + nome + r"\s*\.\s*(?:push|unshift)\s*\("
-                             ).finditer(m, L.s0, L.s1):
-            abre = mm.end() - 1
-            if abre in self.par:
-                out += self._args(abre + 1, self.par[abre])
+        for valores in self._escritas_no_conteudo(L.nome, L.s0, L.s1):
+            out += valores
         return out
+
+    def _escritas_no_conteudo(self, nome, a, b):
+        """Cada escrita no CONTEUDO de NOME em m[a:b], como a lista dos trechos que viram
+        conteudo: `NOME[k] = v` e `NOME.x = v` (qualquer atribuicao, em qualquer
+        profundidade), NOME.push/unshift/splice/fill(...) e Object.assign(NOME, ...)."""
+        m, n, escritas = self.m, re.escape(nome), []
+        for mm in re.compile(r"\bObject\s*\.\s*assign\s*(\()\s*" + n + r"(?![\w$])").finditer(m, a, b):
+            if mm.start(1) in self.par:
+                escritas.append(self._args(mm.start(1) + 1, self.par[mm.start(1)])[1:])
+        for mm in re.compile(r"(?<![\w$.])" + n + r"(?![\w$])").finditer(m, a, b):
+            j, ultimo = mm.end(), None          # ultimo membro da cadeia NOME.x[k]...
+            while True:
+                j = self._ws(j, len(m))
+                mi = RE_IDENT.match(m, self._ws(j + 1, len(m))) if m.startswith(".", j) else None
+                if mi and not m.startswith("...", j):
+                    j, ultimo = mi.end(), mi.group(0)
+                elif m.startswith("[", j) and j in self.par:
+                    j, ultimo = self.par[j] + 1, "["
+                else:
+                    break
+            if ultimo in MUTADORES and m.startswith("(", j) and j in self.par:
+                escritas.append(self._args(j + 1, self.par[j])[MUTADORES[ultimo]])
+                continue
+            op = RE_OP_DE_ESCRITA.match(m, j) if ultimo is not None else None
+            if op:
+                escritas.append([(op.end(), self.fim_expr(op.end()))])
+        return escritas
 
     def _chamada(self, nome, pos, texto):
         """NOME(...) de funcao do arquivo: segura sse todo retorno de toda declaracao e seguro."""
@@ -1000,30 +1028,10 @@ class Analise:
         return True
 
     def _escrito(self, nome):
-        """O arquivo escreve em NOME? (NOME[..] =, NOME.x =, push/unshift/splice, Object.assign)"""
+        """O arquivo escreve no conteudo de NOME? (as escritas de _escritas_no_conteudo)"""
         if nome not in self._escritos:
-            self._escritos[nome] = self._procura_escrita(nome)
+            self._escritos[nome] = bool(self._escritas_no_conteudo(nome, 0, len(self.m)))
         return self._escritos[nome]
-
-    def _procura_escrita(self, nome):
-        m, n = self.m, re.escape(nome)
-        if re.search(r"(?<![\w$.])" + n + r"\s*\.\s*(?:push|unshift|splice)\s*\(", m) or re.search(
-                r"\bObject\s*\.\s*assign\s*\(\s*" + n + r"(?![\w$])", m):
-            return True
-        for mm in re.finditer(r"(?<![\w$.])" + n + r"(?![\w$])", m):
-            j, houve = mm.end(), False
-            while True:
-                j = self._ws(j, len(m))
-                mi = RE_IDENT.match(m, self._ws(j + 1, len(m))) if m.startswith(".", j) else None
-                if mi and not m.startswith("...", j):
-                    j, houve = mi.end(), True
-                elif m.startswith("[", j) and j in self.par:
-                    j, houve = self.par[j] + 1, True
-                else:
-                    break
-            if houve and RE_OP_DE_ESCRITA.match(m, self._ws(j, len(m))):
-                return True
-        return False
 
     def numerico(self, a, b):
         """Numero por construcao (o receptor que .toLocaleString aceita)."""
@@ -1045,10 +1053,10 @@ class Analise:
             return False
         prim, suf = cadeia
         if not suf:
-            return prim.tipo == "num" or (prim.tipo == "id" and self._nome_numerico(prim.txt, None))
+            return prim.tipo == "num" or self._nome_solto_numerico(prim)
         ult = suf[-1]
         if ult.tipo == "prop":
-            return ult.txt in ("length", "size") or self._nome_numerico(ult.txt, self._receptor(prim, suf))
+            return self._campo_numerico(prim, suf)
         if ult.tipo != "call":
             return False
         if prim.tipo == "id" and ((len(suf) == 1 and prim.txt in ("Number", "parseInt", "parseFloat"))
@@ -1312,14 +1320,32 @@ ACUSA = [
     ("funcao do arquivo: o return e julgado",
      "function fmt(x) { return x; }\nel.innerHTML = `<td>${fmt(y.nome)}</td>`;",
      [("fmt(y.nome)", "x")]),
-    # _procura_escrita: `T[k] = ...` tira o status de constante da tabela
+    # _escritas_no_conteudo: `T[k] = ...` tira o status de constante da tabela
     ("tabela const escrita (T[k] = ...) nao e constante",
      "const T = { a: 'x' };\nT[k] = y.nome;\nel.innerHTML = `<td>${T[k]}</td>`;",
      [("T[k]", "T[k]")]),
-    # _procura_escrita: `T.push(...)` (outro caminho) tambem
+    # _escritas_no_conteudo: `T.push(...)` (outro caminho) tambem
     ("tabela const escrita (T.push) nao e constante",
      "const T = ['a'];\nT.push(y.nome);\nel.innerHTML = `<td>${T[0]}</td>`;",
      [("T[0]", "T[0]")]),
+    # _escritas_no_conteudo: o mesmo vocabulario de escrita vale para tabela e para local
+    ("tabela const escrita (T.x = ...) nao e constante",
+     "const T = { x: 'a' };\nT.x = y.nome;\nel.innerHTML = `<td>${T.x}</td>`;", [("T.x", "T.x")]),
+    ("tabela const escrita (Object.assign) nao e constante",
+     "const T = { a: 'x' };\nObject.assign(T, {a: y.nome});\nel.innerHTML = `<td>${T.a}</td>`;",
+     [("T.a", "T.a")]),
+    ("tabela const escrita (T.unshift) nao e constante",
+     "const T = ['a'];\nT.unshift(y.nome);\nel.innerHTML = `<td>${T[0]}</td>`;", [("T[0]", "T[0]")]),
+    ("local escrito por splice",
+     "const parts=[]; parts.splice(0,0,y.nome); el.innerHTML=`<ul>${parts.join('')}</ul>`",
+     [("parts.join('')", "y.nome")]),
+    ("local escrito por fill",
+     "const parts = [''];\nparts.fill(y.nome);\nel.innerHTML = `<i>${parts.join('')}</i>`;",
+     [("parts.join('')", "y.nome")]),
+    # numerico(): o receptor de .toLocaleString() segue a regra do nome ligado
+    ("toLocaleString de nome numerico ligado a texto",
+     "const total = l.nome;\nel.innerHTML = `<b>${total.toLocaleString()}</b>`;",
+     [("total.toLocaleString()", "total.toLocaleString()")]),
     # _literal_puro: tabela com valor nao literal nao e constante do codigo
     ("tabela const com valor nao literal nao e constante",
      "const T = { a: y.nome };\nel.innerHTML = `<td>${T.a}</td>`;", [("T.a", "T.a")]),
