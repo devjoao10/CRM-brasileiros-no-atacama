@@ -337,8 +337,16 @@ ACUSA = [
      [("x.nome.toLocaleString()", "x.nome.toLocaleString()")]),
     ("aspa dentro de regex nao descarrila o lexer", ESC_COM_REGEX, [("l.nome", "l.nome")]),
     # -- um caso por sink, com template SEM tag: so a raiz do sink o torna markup.
-    # RE_SINK_ATRIB, o `\+?` de `.innerHTML +=`
+    # RE_SINK_ATRIB, o operador opcional antes do `=`: `+=`, `||=`, `&&=`, `??=`
     ("sink innerHTML +=", "el.innerHTML += `${l.nome}`;", [("l.nome", "l.nome")]),
+    ("sink innerHTML ||=", "el.innerHTML ||= `${l.nome}`;", [("l.nome", "l.nome")]),
+    ("sink innerHTML &&=", "el.innerHTML &&= `${l.nome}`;", [("l.nome", "l.nome")]),
+    ("sink innerHTML ??=", "el.innerHTML ??= `${l.nome}`;", [("l.nome", "l.nome")]),
+    # RE_SINK_CHAMADA, a chamada opcional: `?.(` e `document?.write`
+    ("sink insertAdjacentHTML?.(", "el.insertAdjacentHTML?.('beforeend', `${l.nome}`);",
+     [("l.nome", "l.nome")]),
+    ("sink document.write?.(", "document.write?.(`${l.nome}`);", [("l.nome", "l.nome")]),
+    ("sink document?.writeln(", "document?.writeln(`${l.nome}`);", [("l.nome", "l.nome")]),
     # RE_SINK_ATRIB, a alternativa `outerHTML`
     ("sink outerHTML =", "el.outerHTML = `${l.nome}`;", [("l.nome", "l.nome")]),
     # RE_SINK_CHAMADA, `insertAdjacentHTML(pos, html)`: o HTML e o 2o argumento
@@ -375,6 +383,11 @@ ACUSA = [
     ("charAt/toUpperCase: o receptor e julgado",
      "el.innerHTML = `<td>${m.nome.charAt(0).toUpperCase()}</td>`;",
      [("m.nome.charAt(0).toUpperCase()", "m.nome")]),
+    # padStart/padEnd tambem imprimem o texto de preenchimento (o 2o argumento)
+    ("padStart: o texto de preenchimento e julgado",
+     "el.innerHTML = `<td>${'0'.padStart(3, l.nome)}</td>`;", [("'0'.padStart(3, l.nome)", "l.nome")]),
+    ("padEnd: o texto de preenchimento e julgado",
+     "el.innerHTML = `<td>${esc(a).padEnd(9, l.nome)}</td>`;", [("esc(a).padEnd(9, l.nome)", "l.nome")]),
     # `NOME(...)` do arquivo: o veredito vem do `return` da funcao (aqui, o parametro)
     ("funcao do arquivo: o return e julgado",
      "function fmt(x) { return x; }\nel.innerHTML = `<td>${fmt(y.nome)}</td>`;",
@@ -550,6 +563,8 @@ ACEITA = [
     ("ternario com atribuicao num ramo, os dois ramos seguros",
      "el.innerHTML = c ? 'a' : x = 'b';"),
     ("DOMPurify.sanitize() cobrindo o valor do sink", "el.innerHTML = DOMPurify.sanitize(l.nome);"),
+    ("DOMPurify.sanitize() no sink ||=: o lado direito e o HTML inteiro que entra",
+     "el.innerHTML ||= DOMPurify.sanitize(l.nome);"),
     ("DOMPurify.sanitize() nos dois ramos do ternario que e o valor do sink (ai.html)",
      "el.innerHTML = c ? DOMPurify.sanitize(a) : DOMPurify.sanitize(b);"),
     ("DOMPurify.sanitize() em cada posicao que preserva o valor do sink",

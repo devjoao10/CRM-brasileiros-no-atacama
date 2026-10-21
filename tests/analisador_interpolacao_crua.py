@@ -78,14 +78,16 @@ Classificador. Sem espaco e parenteses externos, o valor e SEGURO quando e:
     metodos de METODOS_DATA_NUMERO, `new Date(...)`, e `.toLocaleString()` so
     sobre Date ou numero (a String devolve o proprio texto);
   - metodo que preserva o texto (METODOS_PRESERVAM e `.split(...)[N]`) sobre
-    receptor seguro;
+    receptor seguro - em padStart/padEnd, com o texto de preenchimento (o 2o
+    argumento, tambem impresso) seguro;
   - literal (string, numero, LITERAIS: true/null/undefined...) ou objeto
     literal;
   - template aninhado: seguro NESTE ponto, porque vira MARKUP e cada
     interpolacao dele e julgada no proprio ponto;
   - a expressao INTEIRA e esc(...)/escapeHtml(...);
   - DOMPurify.sanitize(...) so na raiz do sink: o proprio valor do sink (o
-    lado direito de `.innerHTML =`/`+=`, o argumento HTML quando e o unico)
+    lado direito de `.innerHTML =`/`+=`/`||=`/`&&=`/`??=` - nas logicas ele,
+    quando entra, e o HTML inteiro -, o argumento HTML quando e o unico)
     ou uma posicao que preserva esse valor - parenteses, ramo de ternario,
     operando de `||`/`??`, ultimo de `&&` e de virgula, lado direito de
     `=`/`||=`/`??=`/`&&=`, `await X`. Fora dela e CRU: em `${...}` (o
@@ -131,8 +133,9 @@ Extensoes (decididas alem do plano original do SEC-XSS-05):
     trecho cru fora de template (concatenacao, variavel, `.join`) e achado no
     proprio sink;
   - `.join(SEP)` aceita qualquer separador seguro, nao so literal;
-  - document.writeln tambem e sink; DOMPurify.sanitize(...) e seguro so na
-    raiz do sink (ver Classificador);
+  - document.writeln tambem e sink, como `.innerHTML ||=`/`&&=`/`??=` e a
+    chamada opcional (`el.insertAdjacentHTML?.(...)`, `document?.write(...)`);
+    DOMPurify.sanitize(...) e seguro so na raiz do sink (ver Classificador);
   - escrita no conteudo, de local e de tabela, com o mesmo vocabulario:
     `NOME[k] =`, `NOME.x =`, push/unshift/splice/fill, Object.assign(NOME, ...);
   - `{{ ... }}` do Jinja dentro de <script> e cru.
@@ -144,12 +147,22 @@ Limites conhecidos (o que a regra NAO pega):
     (test_frontend_injection_contract.py) so descobre `function esc(`: um
     `const esc = ...` falso passaria nas duas suites. E href, atributo sem
     aspas, <script> e string JS em on* nao sao julgados como contexto proprio;
-  - DOMPurify.sanitize(x, opcoes) na raiz vale sem ler as opcoes: ADD_ATTR,
-    ADD_TAGS ou ALLOWED_URI_REGEXP frouxos reabrem on* e javascript:;
+  - DOMPurify.sanitize(x, opcoes) na raiz vale sem ler as opcoes (ADD_ATTR,
+    ADD_TAGS ou ALLOWED_URI_REGEXP frouxos reabrem on* e javascript:) e sem
+    olhar o receptor: a saida limpa para HTML ainda vira codigo ou CSS no
+    innerHTML de um <script> ou <style>, e o parse muda no de <textarea> e <svg>;
   - sinks que a regra nao conhece: setHTMLUnsafe, createContextualFragment,
-    DOMParser, srcdoc, `el['innerHTML'] =`, Object.assign(el, {innerHTML});
+    DOMParser, srcdoc (tambem `el.setAttribute('srcdoc', x)`),
+    Object.assign(el, {innerHTML}) e as grafias por colchete ou por
+    .call/.apply - `el['innerHTML'] =`, `el['outerHTML'] =`,
+    `el['insertAdjacentHTML'](...)`, `document['write'](...)`,
+    `el.insertAdjacentHTML.call(el, ...)`;
   - aliasing: escrita por uma copia (`const ref = arr; ref.push(x)`) nao conta
     para arr;
+  - escrita que nao e `NOME =`/`+=`/`||=`/`??=`/`&&=` nem no conteudo: um
+    `let`/`var` escrito por desestruturacao (`[h] = [x]`, `({h} = o)`) ou
+    como variavel de `for (h of ...)`/`for (h in ...)` sem declaracao vale so
+    pelo inicializador e pelas outras escritas;
   - id de etapa fora do modelo de LISTA - o `.id` passa como numero: alias
     por variavel (`const lista = f.etapas; lista.map(...)`,
     `const s = f.etapas[0]; s.id`), lista com outro nome que nao
@@ -417,8 +430,11 @@ RE_IDENT_ANTES = re.compile(r"(?:[^\W\d]|\$)[\w$]*$")
 # `for await (` casa sozinho: _fecha_cabecalho olha a palavra antes dele.
 RE_CABECALHO_ANTES = re.compile(r"(?<![\w$.])(?:if|while|for|with|await)$")
 RE_TAG = re.compile(r"<[A-Za-z!/]")
-RE_SINK_ATRIB = re.compile(r"\.\s*(?:innerHTML|outerHTML)\s*\+?=(?![=>])")
-RE_SINK_CHAMADA = re.compile(r"\.\s*(insertAdjacentHTML)\s*\(|\bdocument\s*\.\s*write(?:ln)?\s*\(")
+# Sink por atribuicao: `=`, `+=` e as logicas `||=`/`&&=`/`??=`; por chamada, tambem a opcional
+# (`el.insertAdjacentHTML?.(`, `document?.write(`, `document.write?.(`).
+RE_SINK_ATRIB = re.compile(r"\.\s*(?:innerHTML|outerHTML)\s*(?:\+|\|\||&&|\?\?)?=(?![=>])")
+RE_SINK_CHAMADA = re.compile(r"\.\s*(insertAdjacentHTML)\s*(?:\?\.\s*)?\("
+                             r"|\bdocument\s*\??\.\s*write(?:ln)?\s*(?:\?\.\s*)?\(")
 RE_FUNCTION = re.compile(r"\bfunction\b\s*(?:\*\s*)?(?:((?:[^\W\d]|\$)[\w$]*)\s*)?\(")
 RE_NOME_ATRIBUIDO = re.compile(r"\b(?:const|let|var)\s+((?:[^\W\d]|\$)[\w$]*)\s*=\s*(?:async\s+)?$")
 RE_DECL = re.compile(r"\b(const|let|var)\b")
@@ -752,9 +768,10 @@ class Analise:
             self.marca(F)
 
     def raizes_de_sink(self):
-        """(ini, fim, raiz) do valor de .innerHTML/.outerHTML =, += e do argumento HTML de
-        insertAdjacentHTML/write; raiz=False quando ele nao e o HTML inteiro do sink
-        (document.write(a, b) concatena os argumentos)."""
+        """(ini, fim, raiz) do valor de .innerHTML/.outerHTML =, +=, ||=, &&=, ??= e do argumento
+        HTML de insertAdjacentHTML/write; raiz=False quando ele nao e o HTML inteiro do sink
+        (document.write(a, b) concatena os argumentos). Nas atribuicoes logicas o lado direito,
+        quando entra, e o HTML inteiro: raiz=True, como no `=`."""
         out = [(mm.end(), self.fim_expr(mm.end()), True) for mm in RE_SINK_ATRIB.finditer(self.m)]
         for mm in RE_SINK_CHAMADA.finditer(self.m):
             abre = mm.end() - 1
@@ -1101,8 +1118,10 @@ class Analise:
                     return None
                 if metodo == "toLocaleString":  # String herda o de Object: devolve o proprio texto
                     return None if self._e_new_date(*rec) or self.numerico(*rec) else texto
-                if metodo in METODOS_PRESERVAM:
-                    return self.julga(*rec)
+                if metodo in METODOS_PRESERVAM:     # padStart/padEnd tambem imprimem o preenchimento
+                    preenche = (self._args(ult.ini + 1, ult.fim - 1)[1:2]
+                                if metodo in ("padStart", "padEnd") else [])
+                    return self._primeiro(self.julga(*rec), *[self.julga(x, y) for x, y in preenche])
                 if metodo == "join":            # extensao: qualquer separador seguro
                     seps = [self.julga(x, y) for x, y in self._args(ult.ini + 1, ult.fim - 1)]
                     return self._primeiro(self.julga(*rec), *seps)
