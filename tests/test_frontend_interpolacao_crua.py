@@ -477,6 +477,24 @@ for nome, codigo, esperado in ACUSA:
     obtido = crus(codigo)
     check(obtido == esperado, f"acusa {nome}: {obtido!a}")
 
+# Um controle por posicao em que julga repassa a raiz do sink: dentro de ${...} nenhuma delas e
+# a raiz (o contexto pode ser atributo, e a aspa sai dele), entao o sanitize que chega por ela
+# continua CRU. O `||=` tem o esquerdo numerico para o veredito depender so do lado direito.
+for posicao, expr in (
+    ("ultimo operando de virgula", "(0, DOMPurify.sanitize(a))"),
+    ("lado direito de =", "(x = DOMPurify.sanitize(a))"),
+    ("lado direito de &&=", "(x &&= DOMPurify.sanitize(a))"),
+    ("lado direito de ||=", "(l.id ||= DOMPurify.sanitize(a))"),
+    ("1o ramo de ternario", "(c ? DOMPurify.sanitize(a) : '')"),
+    ("2o ramo de ternario", "(c ? '' : DOMPurify.sanitize(a))"),
+    ("operando de ||", "(DOMPurify.sanitize(a) || '')"),
+    ("ultimo operando de &&", "(c && DOMPurify.sanitize(a))"),
+    ("await", "(await DOMPurify.sanitize(a))"),
+):
+    obtido = crus("el.innerHTML = `<a title=\"${" + expr + "}\">`;")
+    check(obtido == [(expr, "DOMPurify.sanitize(a)")],
+          f"acusa DOMPurify.sanitize(a) como {posicao} dentro de interpolacao: {obtido!a}")
+
 # Mesma ordem de segmentacao.html: a `pills` de renderFilterPills (texto CRU,
 # escapado no fim) vem DEPOIS da que guarda o retorno dela.
 PILLS = """
