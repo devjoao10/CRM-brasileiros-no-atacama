@@ -120,13 +120,13 @@ Extensoes (decididas alem do plano original do SEC-XSS-05):
     devolvem os mesmos elementos (METODOS_PRESERVAM_LISTA: filter, slice,
     sort, concat...); `X.concat(LISTA)` tambem e LISTA.
     ETAPA e `LISTA[k]`, `LISTA.find(...)`/`.at(k)` (METODOS_ELEMENTO), a
-    variavel de `for (... of LISTA)` e o parametro do callback que e o 1o
-    argumento de `LISTA.metodo(` (qualquer metodo) ou o 2o de uma chamada
-    cujo 1o e LISTA (`Array.from(LISTA, cb)`, `X.metodo.call(LISTA, cb)`,
-    `_.map(LISTA, cb)`), mesmo `async` ou entre parenteses. Nos dois basta
-    um operando de `||`/`??`/`&&`/ternario ser (falha fechado). E nome
-    numerico LIGADO no arquivo vale pelo valor (o nome so vale para nome
-    solto);
+    variavel de `for (... of LISTA)` e os parametros - todos, falha fechado -
+    do callback que e o 1o argumento de `LISTA.metodo(`/`LISTA.metodo?.(`
+    (qualquer metodo) ou o 2o de uma chamada cujo 1o e LISTA
+    (`Array.from(LISTA, cb)`, `X.metodo.call(LISTA, cb)`, `_.map(LISTA, cb)`),
+    mesmo `async` ou entre parenteses. Nos dois basta um operando de
+    `||`/`??`/`&&`/ternario ser (falha fechado). E nome numerico LIGADO no
+    arquivo vale pelo valor (o nome so vale para nome solto);
   - o valor do sink e julgado como uma interpolacao: propaga MARKUP, e o
     trecho cru fora de template (concatenacao, variavel, `.join`) e achado no
     proprio sink;
@@ -156,11 +156,15 @@ Limites conhecidos (o que a regra NAO pega):
     `etapas`/`stages` ou com chave calculada (`f[k]`, `f['etapa' + 's']`),
     copia que o modelo nao segue (`[...LISTA]`,
     Array.from(LISTA), Object.values, `.entries()`, `.map(s => s)`),
-    callback passado por nome (`LISTA.map(render)`) ou dentro de array
-    (`X.metodo.apply(LISTA, [cb])`), LISTA fora do 1o argumento
+    callback passado por nome (`LISTA.map(render)`), dentro de array
+    (`X.metodo.apply(LISTA, [cb])`) ou que nao e o 2o argumento da chamada
+    cujo 1o e LISTA (`foo(LISTA, x, cb)`), metodo chamado por colchete
+    (`LISTA['forEach'](cb)`), LISTA fora do 1o argumento
     (`foo(x, LISTA, cb)`) ou que nao e cadeia
-    (`Array.from(c ? f.etapas : [], cb)`) e `for (s of LISTA)` sem
-    declaracao;
+    (`Array.from(c ? f.etapas : [], cb)`), `for (s of LISTA)` sem
+    declaracao e ETAPA repassada a um helper cujo parametro nao se chama
+    stage/etapa (`function row(st) { ...${st.id}... }` com
+    `LISTA.map(s => row(s))`: o `st.id` do helper passa como numero);
   - regex x divisao: `i++ / 2 ... /` na mesma linha e lido como regex, e o
     trecho entre as barras some da analise;
   - custo: resultado que depende de ciclo aberto nao vai para o memo, entao
@@ -966,8 +970,9 @@ class Analise:
         return self.memo[chave]
 
     def _callback_de_lista(self, ini):
-        """A funcao que comeca em ini e o 1o argumento de `LISTA.metodo(` ou o 2o de uma chamada
-        cujo 1o e LISTA (`Array.from(LISTA, cb)`, `X.metodo.call(LISTA, cb)`, `_.map(LISTA, cb)`)?
+        """A funcao que comeca em ini e o 1o argumento de `LISTA.metodo(`/`LISTA.metodo?.(` ou o 2o
+        de uma chamada cujo 1o e LISTA (`Array.from(LISTA, cb)`, `X.metodo.call(LISTA, cb)`,
+        `_.map(LISTA, cb)`)?
         Espaco (o comentario mascarado), `async` e parenteses em volta dela nao contam."""
         m, k = self.m, self._ws_antes(ini)
         mi = RE_IDENT_ANTES.search(m, max(0, k - 80), k)
@@ -979,7 +984,10 @@ class Analise:
                 break
             k = g
         if m[k - 1:k] == "(":
-            mm = RE_METODO_ANTES.search(m, max(0, k - 81), k - 1)
+            j = k - 1
+            if m[j - 2:j] == "?.":                      # LISTA.forEach?.(cb): chamada opcional
+                j -= 2
+            mm = RE_METODO_ANTES.search(m, max(0, j - 80), j)
             return bool(mm) and self._de_etapas(self._inicio_da_cadeia(mm.start()), mm.start(), True)
         if m[k - 1:k] != ",":
             return False

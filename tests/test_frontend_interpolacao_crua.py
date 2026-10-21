@@ -277,6 +277,8 @@ ACUSA = [
      [("s.id", "s.id")]),
     ("callback de qualquer chamada com a lista no 1o argumento: _.forEach(f.etapas, cb)",
      "_.forEach(f.etapas, s => { el.innerHTML += `<i>${s.id}</i>`; });", [("s.id", "s.id")]),
+    ("callback de chamada opcional: f.etapas.forEach?.(cb)",
+     "f.etapas.forEach?.(s => { el.innerHTML += `<i>${s.id}</i>`; });", [("s.id", "s.id")]),
     # a lista como argumento de concat e por colchete com o nome literal
     ("lista de etapas como argumento de [].concat(...)",
      "el.innerHTML = [].concat(f.etapas).map(s => `<i>${s.id}</i>`).join('');", [("s.id", "s.id")]),
