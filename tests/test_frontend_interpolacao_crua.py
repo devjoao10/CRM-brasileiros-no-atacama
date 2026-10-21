@@ -464,6 +464,14 @@ ACUSA = [
     ("||= com DOMPurify.sanitize na direita: o esquerdo ainda e julgado",
      "el.innerHTML = (l.nome ||= DOMPurify.sanitize(x));",
      [("(l.nome ||= DOMPurify.sanitize(x))", "l.nome")]),
+    # atribuicao depois do 1o `?` de topo e parte de um ramo: `c ? a : x = b` e `c ? a : (x = b)`,
+    # e os dois ramos sao impressos (antes so o lado direito da atribuicao era julgado)
+    ("ternario com = no ramo else: o 1o ramo e julgado",
+     "el.innerHTML = c ? l.nome : x = '';", [("c ? l.nome : x = ''", "l.nome")]),
+    ("ternario com &&= no ramo else: o 1o ramo e julgado",
+     "el.innerHTML = `<i>${c ? l.nome : x &&= 'a'}</i>`;", [("c ? l.nome : x &&= 'a'", "l.nome")]),
+    ("ternario com -= no ramo else: o 1o ramo e julgado",
+     "el.innerHTML = `<i>${c ? l.nome : n -= 1}</i>`;", [("c ? l.nome : n -= 1", "l.nome")]),
 ]
 for nome, codigo, esperado in ACUSA:
     obtido = crus(codigo)
@@ -498,6 +506,8 @@ ACEITA = [
     ("data formatada", "el.innerHTML = `<i>${new Date(x).toLocaleDateString('pt-BR')}</i>`;"),
     ("&&=: o falsy do lado esquerdo imprime false/0/''/null, nunca markup",
      "el.innerHTML = (l.nome &&= 'x');"),
+    ("ternario com atribuicao num ramo, os dois ramos seguros",
+     "el.innerHTML = c ? 'a' : x = 'b';"),
     ("DOMPurify.sanitize() cobrindo o valor do sink", "el.innerHTML = DOMPurify.sanitize(l.nome);"),
     ("DOMPurify.sanitize() nos dois ramos do ternario que e o valor do sink (ai.html)",
      "el.innerHTML = c ? DOMPurify.sanitize(a) : DOMPurify.sanitize(b);"),

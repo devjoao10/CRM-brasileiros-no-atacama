@@ -68,8 +68,9 @@ Classificador. Sem espaco e parenteses externos, o valor e SEGURO quando e:
   - ternario com os dois ramos seguros; `||`/`??` com todo operando seguro;
     `&&` com o ultimo seguro; `a + b` de topo com todo operando seguro (o que
     vem antes do ultimo `-` e numero); virgula, pelo ultimo operando;
-    atribuicao: `=` e `&&=` pelo lado direito (o falsy que `&&=` deixa no
-    esquerdo imprime false/0/''/null, nunca markup), `+=`, `||=` e `??=`
+    atribuicao de topo antes do 1o `?` (depois dele ela e parte de um ramo:
+    `c ? a : x = b`): `=` e `&&=` pelo lado direito (o falsy que `&&=` deixa
+    no esquerdo imprime false/0/''/null, nunca markup), `+=`, `||=` e `??=`
     pelos dois lados; `await X`, pelo X;
   - numero ou booleano por construcao: `- * / % **`, comparacao, bit a bit,
     `instanceof`/`in`, `! - + ~ typeof void delete`, `++`/`--`, `X.length`,
@@ -799,14 +800,16 @@ class Analise:
             return self.julga(virgulas[-1].fim, b, raiz)
         if any(tk.txt == "=>" for _, tk in ops):        # funcao como valor imprime o codigo
             return texto
-        for _, tk in ops:                               # atribuicao: vale o lado direito
-            if tk.txt in ATRIBUICOES:
+        # A atribuicao e o operador de fora so antes do 1o `?` de topo (`x = c ? a : b`);
+        # depois dele ela e parte de um ramo (`c ? a : x = b` e `c ? a : (x = b)`).
+        q = next((k for k, tk in ops if tk.txt == "?"), None)
+        for k, tk in ops:                               # atribuicao: vale o lado direito
+            if tk.txt in ATRIBUICOES and (q is None or k < q):
                 if tk.txt == "+=":                      # concatena: nenhum lado e a raiz
                     return self._primeiro(self.julga(a, tk.ini), self.julga(tk.fim, b))
                 if tk.txt in ("||=", "??="):            # vale o esquerdo se ja e truthy/definido
                     return self._primeiro(self.julga(a, tk.ini), self.julga(tk.fim, b, raiz))
                 return self.julga(tk.fim, b, raiz) if tk.txt in ("=", "&&=") else None
-        q = next((k for k, tk in ops if tk.txt == "?"), None)
         if q is not None:                               # c ? x : y -> x e y (c nao e impresso)
             prof = 0
             for k, tk in ops:
