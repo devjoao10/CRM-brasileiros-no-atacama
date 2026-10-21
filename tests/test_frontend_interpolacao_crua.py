@@ -264,6 +264,27 @@ ACUSA = [
      "for await (const x of xs) (f.etapas || []).forEach(a => { el.innerHTML += `<i>${a.id}</i>`; });\n"
      "with (o) (f.etapas || []).forEach(b => { el.innerHTML += `<i>${b.id}</i>`; });",
      [("a.id", "a.id"), ("b.id", "b.id")]),
+    # espaco e comentario (mascarado como espaco) nao contam para nenhuma busca para tras,
+    # de qualquer tamanho: so o tamanho de um NOME e limitado (JANELA_NOME)
+    ("comentario entre if e o parentese do cabecalho",
+     "if /* comentario longo aqui */ (c) (f.etapas || []).forEach(s => "
+     "{ el.innerHTML += `<i>${s.id}</i>`; });", [("s.id", "s.id")]),
+    ("espaco longo entre if e o parentese do cabecalho",
+     "if" + " " * 40 + "(c) (f.etapas || []).forEach(s => { el.innerHTML += `<i>${s.id}</i>`; });",
+     [("s.id", "s.id")]),
+    ("comentario longo entre for e await no cabecalho",
+     "for /* " + "-" * 90 + " */ await (const x of xs) (f.etapas || []).forEach(s => "
+     "{ el.innerHTML += `<i>${s.id}</i>`; });", [("s.id", "s.id")]),
+    ("espaco longo entre .map e o parentese da chamada",
+     "el.innerHTML = f.etapas.map" + " " * 90 + "(s => `<i>${s.id}</i>`).join('');", [("s.id", "s.id")]),
+    ("comentario longo entre o ponto e o nome do metodo",
+     "el.innerHTML = f.etapas./* " + "-" * 90 + " */map(s => `<i>${s.id}</i>`).join('');",
+     [("s.id", "s.id")]),
+    ("comentario longo dos dois lados do ?. da chamada opcional",
+     "f.etapas.forEach /* " + "-" * 90 + " */ ?. /* " + "-" * 90 + " */ (s => "
+     "{ el.innerHTML += `<i>${s.id}</i>`; });", [("s.id", "s.id")]),
+    ("comentario dentro do colchete da lista: f[ /* c */ 'etapas']",
+     "el.innerHTML = f[ /* c */ 'etapas'].map(s => `<i>${s.id}</i>`).join('');", [("s.id", "s.id")]),
     # o callback que recebe as etapas: async, entre parenteses, 2o argumento de .call e de Array.from
     ("callback async function de f.etapas.forEach",
      "f.etapas.forEach(async function (s) { el.innerHTML += `<i>${s.id}</i>`; });", [("s.id", "s.id")]),

@@ -406,14 +406,16 @@ RE_ID_DE_ETAPA = re.compile(r"(?:stage|etapa)_?id$", re.I)
 # O mesmo id como `.id` de uma ETAPA, elemento de uma LISTA de etapas (`funnel.etapas`,
 # `boardMeta.stages`): o modelo esta em Extensoes e em Analise._de_etapas.
 LISTAS_DE_ETAPAS = frozenset({"etapas", "stages"})
-RE_CHAVE_DE_LISTA = re.compile(r"""\s*(['"`])(?:etapas|stages)\1\s*""")    # X['etapas'], X["stages"]
 METODOS_PRESERVAM_LISTA = frozenset(        # devolvem array com (parte d)os mesmos elementos
     "filter slice splice sort reverse concat toSorted toReversed toSpliced".split())
 METODOS_ELEMENTO = frozenset("find findLast at pop shift".split())     # devolvem UM elemento
-RE_METODO_ANTES = re.compile(r"\??\.\s*(?:[^\W\d]|\$)[\w$]*\s*$")       # `.metodo`/`?.metodo` antes de `(`
+# As buscas para tras pulam antes o espaco (o comentario mascarado incluso) com _ws_antes, de
+# qualquer tamanho; a janela so limita o NOME que elas leem (identificador, metodo, palavra-chave).
+JANELA_NOME = 80
 RE_IDENT_ANTES = re.compile(r"(?:[^\W\d]|\$)[\w$]*$")
-# `(` de cabecalho cujo corpo pode vir sem chaves (switch e catch exigem bloco).
-RE_CABECALHO_ANTES = re.compile(r"(?<![\w$.])(?:if|while|for(?:\s+await)?|with)\s*$")
+# `(` de cabecalho cujo corpo pode vir sem chaves (switch e catch exigem bloco). O `await` de
+# `for await (` casa sozinho: _fecha_cabecalho olha a palavra antes dele.
+RE_CABECALHO_ANTES = re.compile(r"(?<![\w$.])(?:if|while|for|with|await)$")
 RE_TAG = re.compile(r"<[A-Za-z!/]")
 RE_SINK_ATRIB = re.compile(r"\.\s*(?:innerHTML|outerHTML)\s*\+?=(?![=>])")
 RE_SINK_CHAMADA = re.compile(r"\.\s*(insertAdjacentHTML)\s*\(|\bdocument\s*\.\s*write(?:ln)?\s*\(")
@@ -622,10 +624,10 @@ class Analise:
                 ini = self.par[j]
                 params = (ini + 1, j)
             else:
-                mi = re.search(r"(?:[^\W\d]|\$)[\w$]*$", m[max(0, j - 80):j + 1])
+                mi = re.search(r"(?:[^\W\d]|\$)[\w$]*$", m[max(0, j - JANELA_NOME):j + 1])
                 if not mi:
                     continue
-                ini = max(0, j - 80) + mi.start()
+                ini = max(0, j - JANELA_NOME) + mi.start()
                 params = (ini, j + 1)
             ma = re.search(r"\basync\s+$", m[max(0, ini - 12):ini])
             ini_async = max(0, ini - 12) + ma.start() if ma else ini
@@ -944,10 +946,10 @@ class Analise:
                 and suf[-2].txt in METODOS_ELEMENTO)):  # LISTA[k], LISTA.find(...)
             k = len(suf) - (1 if suf[-1].tipo == "idx" else 2)
             return self._de_etapas(a, suf[k - 1].fim if k else prim.fim, True)
-        if suf:                                         # `.etapas` ou `['etapas']` (o texto original)
+        if suf:                                         # `.etapas` ou `['etapas']`
             ult = suf[-1]
             return lista and (ult.txt in LISTAS_DE_ETAPAS if ult.tipo == "prop" else (
-                ult.tipo == "idx" and bool(RE_CHAVE_DE_LISTA.fullmatch(self.t, ult.ini + 1, ult.fim - 1))))
+                ult.tipo == "idx" and self._chave_de_lista(ult)))
         if prim.tipo == "grp" and prim.txt == "(":
             return self._de_etapas(prim.ini + 1, prim.fim - 1, lista)
         if prim.tipo != "id":
@@ -955,6 +957,13 @@ class Analise:
         if lista:
             return prim.txt in LISTAS_DE_ETAPAS
         return any(self._liga_etapa(L) for L in self._visiveis(prim.txt, prim.ini))
+
+    def _chave_de_lista(self, idx):
+        """O `[...]` tem so a string 'etapas'/"stages" (ou o template sem interpolacao)? Lido no
+        codigo mascarado: comentario dentro do colchete conta como espaco."""
+        toks = self.tokens(idx.ini + 1, idx.fim - 1)
+        return (len(toks) == 1 and toks[0].tipo == "atom" and toks[0].txt in ("str", "tpl")
+                and self.t[toks[0].ini + 1:toks[0].fim - 1] in LISTAS_DE_ETAPAS)
 
     def _liga_etapa(self, L):
         """L liga uma ETAPA: variavel de `for (... of LISTA)` ou parametro do callback que
@@ -975,7 +984,7 @@ class Analise:
         `_.map(LISTA, cb)`)?
         Espaco (o comentario mascarado), `async` e parenteses em volta dela nao contam."""
         m, k = self.m, self._ws_antes(ini)
-        mi = RE_IDENT_ANTES.search(m, max(0, k - 80), k)
+        mi = RE_IDENT_ANTES.search(m, max(0, k - JANELA_NOME), k)
         if mi and mi.group(0) == "async":               # async function (s) {...}
             k = self._ws_antes(mi.start())
         while m[k - 1:k] == "(":                        # ((s => ...)): sai do grupo em volta
@@ -984,16 +993,26 @@ class Analise:
                 break
             k = g
         if m[k - 1:k] == "(":
-            j = k - 1
-            if m[j - 2:j] == "?.":                      # LISTA.forEach?.(cb): chamada opcional
-                j -= 2
-            mm = RE_METODO_ANTES.search(m, max(0, j - 80), j)
-            return bool(mm) and self._de_etapas(self._inicio_da_cadeia(mm.start()), mm.start(), True)
+            p = self._metodo_antes(k - 1)
+            return p is not None and self._de_etapas(self._inicio_da_cadeia(p), p, True)
         if m[k - 1:k] != ",":
             return False
         a = self._inicio_da_cadeia(k - 1)               # o 1o argumento, quando e cadeia
         j = self._ws_antes(a)
         return m[j - 1:j] == "(" and self._de_etapas(a, k - 1, True)
+
+    def _metodo_antes(self, abre):
+        """Onde comeca o `.metodo` (ou `?.metodo`) da chamada cujo `(` esta em abre - `X.metodo(`,
+        `X?.metodo(`, `X.metodo?.(` -; None se antes do `(` nao ha `.metodo`. Espaco entre as
+        partes (o comentario mascarado incluso) nao conta, de qualquer tamanho."""
+        m, j = self.m, self._ws_antes(abre)
+        if m[j - 2:j] == "?.":                          # LISTA.forEach?.(cb): chamada opcional
+            j = self._ws_antes(j - 2)
+        mi = RE_IDENT_ANTES.search(m, max(0, j - JANELA_NOME), j)
+        p = self._ws_antes(mi.start()) - 1 if mi else -1
+        if p < 0 or m[p] != ".":
+            return None
+        return p - 1 if m[p - 1:p] == "?" else p
 
     def _ws_antes(self, i):
         """Inicio do espaco (o comentario mascarado incluso) que termina em i."""
@@ -1006,7 +1025,7 @@ class Analise:
         m, i = self.m, fim
         while True:
             j = self._ws_antes(i)
-            mi = RE_IDENT_ANTES.search(m, max(0, j - 80), j)
+            mi = RE_IDENT_ANTES.search(m, max(0, j - JANELA_NOME), j)
             if j and m[j - 1] in ")]" and j - 1 in self.par:
                 ini = self.par[j - 1]                   # (args), [k] ou o grupo do inicio
             elif mi and mi.group(0) not in PALAVRAS_PRE_REGEX:
@@ -1016,18 +1035,26 @@ class Analise:
             k = self._ws_antes(ini)
             if m[k - 1:k] == "." and m[k - 3:k] != "...":  # .x e ?.x: a cadeia segue antes
                 i = k - 2 if m[k - 2:k] == "?." else k - 1
-            elif m[ini] in "([" and k and (RE_IDENT_ANTES.search(m, max(0, k - 80), k) or (
+            elif m[ini] in "([" and k and (RE_IDENT_ANTES.search(m, max(0, k - JANELA_NOME), k) or (
                     m[k - 1] in ")]" and not self._fecha_cabecalho(k - 1))):
                 i = k                                   # f(...) e a[k]: segue no que e chamado
             else:
                 return ini
 
     def _fecha_cabecalho(self, p):
-        """m[p] e o `)` de `if (...)`/`while (...)`/`for (...)`/`with (...)`? Depois dele vem
-        um comando novo, nao uma chamada: `if (c) (f.etapas || []).forEach(...)`."""
+        """m[p] e o `)` de `if (...)`/`while (...)`/`for (...)`/`for await (...)`/`with (...)`?
+        Depois dele vem um comando novo, nao uma chamada: `if (c) (f.etapas || []).forEach(...)`.
+        Espaco antes do `(` e entre `for` e `await` (o comentario mascarado incluso) nao conta."""
         abre = self.par.get(p)
-        return self.m[p] == ")" and abre is not None and bool(
-            RE_CABECALHO_ANTES.search(self.m, max(0, abre - 12), abre))
+        if self.m[p] != ")" or abre is None:
+            return False
+        k = self._ws_antes(abre)
+        mm = RE_CABECALHO_ANTES.search(self.m, max(0, k - JANELA_NOME), k)
+        if mm and mm.group(0) == "await":               # for await (...): vale a palavra antes dele
+            k = self._ws_antes(mm.start())
+            mm = RE_CABECALHO_ANTES.search(self.m, max(0, k - JANELA_NOME), k)
+            return bool(mm) and mm.group(0) == "for"
+        return bool(mm)
 
     def _nome_solto_numerico(self, prim):
         """Identificador SEM ligacao no arquivo (global, de outro arquivo) com nome de PK/FK
