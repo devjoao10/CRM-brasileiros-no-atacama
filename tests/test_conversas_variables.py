@@ -863,7 +863,8 @@ session.close()
 
 db_wh = SessionLocal()
 conv_wh = db_wh.query(Conversation).filter(Conversation.id == CONV_A).first()
-# @NOMEATENDENTE e insoluvel no webhook (user=None) -> out_of_hours e pulada
+# @NOMEATENDENTE so e insoluvel em conversa SEM atendente (CONV-EXPEDIENTE-01 D8: com atendente
+# ele resolve para o dono da conversa); CONV_A nao tem -> out_of_hours e pulada
 conf_ooh, txt_ooh = webhook_router._resolve_auto_reply("out_of_hours", db_wh, conv_wh)
 check(conf_ooh is True and txt_ooh is None,
       f"trigger configurado mas insoluvel -> (True, None) (got {conf_ooh}, {txt_ooh!r})")

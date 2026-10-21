@@ -659,12 +659,21 @@
         document.getElementById('btnToggleBot').addEventListener('click', async () => {
             if (!activeConversation) return;
             const newValue = !activeConversation.is_bot_active;
-            await Auth.apiRequest(`/api/conversations/${activeConversation.id}`, {
+            const resp = await Auth.apiRequest(`/api/conversations/${activeConversation.id}`, {
                 method: 'PUT',
                 body: JSON.stringify({ is_bot_active: newValue }),
             });
-            showToast(newValue ? 'Bot ativado' : 'Bot desativado');
-            loadChat(activeConversation.id);
+            // CONV-BIA-FILA-01: so confirma (toast + recarga) quando o backend aceitou. Antes o
+            // toast de sucesso saia mesmo com 404/500 e a tela mentia sobre o estado da Bia; no
+            // erro mostra o motivo e nao mexe em nada da tela.
+            if (resp && resp.ok) {
+                showToast(newValue ? 'Bot ativado' : 'Bot desativado');
+                loadChat(activeConversation.id);
+            } else {
+                let detail = 'Falha ao alterar o bot.';
+                try { const e = await resp.json(); if (e && e.detail) detail = e.detail; } catch (_) { }
+                showToast(detail);
+            }
         });
 
         // Mobile back
@@ -2047,12 +2056,14 @@
             // e o atendente nao tinha como saber de quem era o atendimento.
             // Agora o ATENDENTE vem primeiro quando existe.
             const respLabel = conv.atendente_nome || conv.responsavel_nome || 'Agente IA';
-            // Aguardando humano: a Bia terminou e ninguem respondeu ainda.
-            // NAO e o mesmo que "nao lida" — abrir a conversa zera unread_count
-            // mas nao encerra a espera.
+            // Aguardando humano: a conversa esta na fila humana e ninguem
+            // respondeu ainda. CONV-BIA-FILA-01: a Bia pode seguir ligada na
+            // fila (is_bot_active deixou de marcar a espera) — quem marca e
+            // queued_at. NAO e o mesmo que "nao lida" — abrir a conversa zera
+            // unread_count mas nao encerra a espera.
             const aguardandoHumano =
                 isOpenStatus(conv.status) &&
-                conv.is_bot_active === false &&
+                (conv.is_bot_active === false || !!conv.queued_at) &&
                 !conv.primeira_resposta_humana_at;
 
             return `

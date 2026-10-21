@@ -257,14 +257,32 @@ def _inbox_predicates(inbox: str, current_user_id: int) -> list:
     nao decide mais se a conversa esta esperando. Uma conversa atribuida a
     Julia e ainda nao respondida aparece na FILA (para qualquer um ver que ha
     alguem esperando), nao em "meus atendimentos" dela.
+
+    CONV-BIA-FILA-01 — `queued_at` TAMBEM classifica o lado humano. Entrar na
+    fila deixou de desligar a Bia (ver `aplicar_estado_humano`), entao
+    `is_bot_active` sozinho nao separa mais "triagem com a Bia" de "esperando um
+    humano": a conversa pode estar na fila COM a Bia ainda respondendo, ate a
+    vendedora desliga-la. O que marca a espera e `queued_at` — carimbado ao
+    entrar na fila e so devolvido a NULL quando a conversa inteira volta para a
+    Bia (PUT `is_bot_active=true` ou reabertura de conversa encerrada):
+
+        bia   = aberta AND bot ligado AND queued_at IS NULL    (so a triagem)
+        fila  = aberta AND (bot desligado OR queued_at NOT NULL) AND sem 1a resposta
+        todos = aberta AND (bot desligado OR queued_at NOT NULL)
+
+    `bia` e `todos` seguem disjuntas e juntas cobrem toda conversa aberta.
+    `meus` e `encerradas` nao mudam: a primeira resposta humana desliga a Bia, e
+    `meus` continua exigindo bot desligado.
     """
     aberta = Conversation.status.in_(LEGACY_OPEN_STATUSES)
     humana = Conversation.is_bot_active.is_(False)
+    na_fila = Conversation.queued_at.isnot(None)
+    lado_humano = or_(humana, na_fila)
     aguardando = Conversation.primeira_resposta_humana_at.is_(None)
     if inbox == "bia":
-        return [aberta, Conversation.is_bot_active.is_(True)]
+        return [aberta, Conversation.is_bot_active.is_(True), Conversation.queued_at.is_(None)]
     if inbox == "fila":
-        return [aberta, humana, aguardando]
+        return [aberta, lado_humano, aguardando]
     if inbox == "meus":
         return [
             aberta,
@@ -273,7 +291,7 @@ def _inbox_predicates(inbox: str, current_user_id: int) -> list:
             Conversation.atendente_id == current_user_id,
         ]
     if inbox == "todos":
-        return [aberta, humana]
+        return [aberta, lado_humano]
     if inbox == "encerradas":
         return [Conversation.status == "encerrada"]
     raise HTTPException(
@@ -986,6 +1004,12 @@ async def list_inactive_conversations(
         "quer que eu siga com o seu roteiro [continuar com a Bia], ou prefere
         falar com alguem do nosso time agora? [ir para humano]".
 
+    CONV-BIA-FILA-01 — desde que entrar na fila nao desliga mais a Bia,
+    `is_bot_active=True` aqui tambem pode significar "na fila humana com a Bia
+    ainda respondendo". A decisao nao muda (a query segue sem filtro sobre essa
+    coluna): o silencio do cliente e o mesmo problema nos dois casos, e a
+    pergunta do follow-up ja cobre ambos.
+
     Custo: 3 queries no maximo, independente do tamanho do inbox — (1)
     candidatas por status+janela, (2) `selectinload` em lote das tags dessas
     candidatas (`ConversationResponse.tags` — sem isto a serializacao faria
@@ -1211,8 +1235,18 @@ async def update_conversation(
     a conversa e ela sumia da caixa dele, enquanto a BIA continuava respondendo
     o cliente. O toggle do bot da UI (static/js/conversas.js:648-651) chega aqui.
 
-    Agora os dois campos operacionais passam por `_apply_human_state`, o alvo e
-    validado como `/assign` valida, e o PUT inteiro (status + estado operacional
+    CONV-BIA-FILA-01 — o quadro acima valia enquanto entrar na fila desligava a
+    Bia. Hoje "dono definido + Bia ligada" e um estado LEGITIMO quando a
+    conversa esta na fila: ela aparece em `fila`/`todos` via `queued_at`, e a
+    Bia segue respondendo ate a vendedora desliga-la. O defeito do F-085 era o
+    PUT gravar FORA do ponto unico (sem `queued_at`, sem validar o alvo), nao o
+    flag em si. Por isso o ramo abaixo repassa `desligar_bia` ao ponto unico:
+    `{"is_bot_active": false}` (botao "Desativar Bot") desliga; `{"atendente_id": N}`
+    sozinho preserva o flag.
+
+    Agora os dois campos operacionais passam por `_apply_human_state`, o atendente
+    NOMEADO no payload e validado como `/assign` valida (o dono atual, que so e
+    preservado, nao — CONV-BIA-FILA-01), e o PUT inteiro (status + estado operacional
     + responsavel + sync no CRM) commita UMA vez.
 
     CONV-HOTFIX-LOCK-01 (correcao aprovada nesta rodada) — ESTA rota era a UNICA
@@ -1241,22 +1275,30 @@ async def update_conversation(
     # AUDIT-2026-08-WA (F-085) — o docstring acima ja prometia isto; o codigo
     # nao fazia. `atendente_id` e `is_bot_active` eram escritos DIRETO, fora do
     # ponto unico, e produziam estados que nao existem em nenhuma aba (por
-    # exemplo atendente definido com a BIA ligada). Agora passam por
+    # exemplo atendente definido SEM `queued_at`). Agora passam por
     # `_apply_human_state`, que mantem os quatro campos operacionais coerentes.
     if data.atendente_id is not None or data.is_bot_active is not None:
         if data.is_bot_active is True:
             # Religar a BIA e a unica transicao que `_apply_human_state` nao faz
-            # (ela sempre desliga). Devolver para a BIA significa devolver a
-            # conversa inteira: sem dono, sem fila, sem atendimento humano.
+            # (ela so desliga ou preserva). Devolver para a BIA significa devolver
+            # a conversa inteira: sem dono, sem fila, sem atendimento humano.
             conversation.is_bot_active = True
             conversation.atendente_id = None
             conversation.queued_at = None
             conversation.primeira_resposta_humana_at = None
         else:
             alvo = data.atendente_id if data.atendente_id is not None else conversation.atendente_id
-            if alvo is not None:
-                _require_active_user(db, alvo)
-            _apply_human_state(conversation, alvo, keep_queue_position=True)
+            # CONV-BIA-FILA-01: so valida o atendente que o PAYLOAD nomeia. O dono ATUAL entra no
+            # `alvo` apenas para ser preservado (botao "Desativar Bot" nao nomeia ninguem); validar
+            # tambem esse fazia o botao falhar com 404 quando a vendedora dona foi desativada.
+            if data.atendente_id is not None:
+                _require_active_user(db, data.atendente_id)
+            # CONV-BIA-FILA-01: so `{"is_bot_active": false}` (botao "Desativar
+            # Bot") desliga a Bia; trocar apenas o atendente preserva o flag.
+            _apply_human_state(
+                conversation, alvo, keep_queue_position=True,
+                desligar_bia=data.is_bot_active is False,
+            )
 
     # AUDIT-2026-08-WA (F-086/F-304/F-316) — o responsavel COMERCIAL passa pelo
     # ponto unico, que valida o usuario e mantem o sync com o CRM na MESMA
@@ -1498,7 +1540,9 @@ async def handoff_conversation(
     estava na fila enquanto a conversa continuava em ATENDIMENTOS BIA.
 
     Efeito (idempotente):
-      - is_bot_active = False (a BIA para de ser acionada no proximo inbound)
+      - is_bot_active PRESERVADO como esta (CONV-BIA-FILA-01): a Bia continua
+        respondendo na fila ate a vendedora desliga-la; um handoff nunca
+        religa uma Bia desligada
       - atendente_id NULL -> resolve um atendente elegivel (menor carga); se
         nao houver nenhum, fica NULL e a conversa espera sem dono
       - queued_at = queued_at OR now() — retry do n8n NAO manda a conversa
@@ -1520,6 +1564,7 @@ async def handoff_conversation(
         conversation,
         atendente_id,
         keep_queue_position=True,
+        desligar_bia=False,
     )
     db.commit()
     db.refresh(conversation)
@@ -1625,7 +1670,12 @@ async def assign_conversation(
     # que ainda espera carimbava um `queued_at` novo e mandava o cliente para o
     # fim da fila: uma decisao interna da equipe (trocar de atendente) custava
     # tempo de espera a quem nao tem nada a ver com ela.
-    _apply_human_state(conversation, target.id, keep_queue_position=True)
+    # CONV-BIA-FILA-01: atribuir NAO e assumir — a Bia segue como esta. O n8n
+    # "Handoff Humano -> Julia" chama esta rota no fim do handoff; quem desliga
+    # a Bia e a vendedora (claim ou botao "Desativar Bot").
+    _apply_human_state(
+        conversation, target.id, keep_queue_position=True, desligar_bia=False,
+    )
     db.commit()
     db.refresh(conversation)
     logger.info(
@@ -1654,7 +1704,10 @@ async def release_conversation(
     if conversation.atendente_id is not None or conversation.primeira_resposta_humana_at is not None:
         # PACOTE-A: liberar = volta para o FIM da fila (queued_at novo).
         # Diferente do retry de handoff, que preserva a posicao.
-        _apply_human_state(conversation, None, resetar_atendimento=True)
+        # CONV-BIA-FILA-01: devolver a fila nao desliga a Bia (nem a religa).
+        _apply_human_state(
+            conversation, None, resetar_atendimento=True, desligar_bia=False,
+        )
         db.commit()
         db.refresh(conversation)
         logger.info(f"Conversa {conversation_id} devolvida a fila pelo usuario {current_user.id}")

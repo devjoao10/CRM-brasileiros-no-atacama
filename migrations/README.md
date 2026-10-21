@@ -44,6 +44,22 @@ python -m migrations.m001_schema_drift_leads_tasks
 5. **Validação pós-deploy**: `\d leads` mostra as 6 colunas; `\d tasks` mostra `resultado_ia`; smoke de criar/editar lead com campos de viagem.
 6. **Plano de rollback**: colunas são aditivas/nullable → podem permanecer sem efeito; reversão destrutiva (`DROP COLUMN`) só com backup.
 
+## Atenção — m008 depois de CONV-BIA-FILA-01
+
+**Não re-execute a `m008_conversas_queued_at.py` em banco com conversas na fila.** Além de criar
+`queued_at` e os índices, a m008 normaliza estado legado:
+
+```sql
+UPDATE conversations SET is_bot_active = FALSE
+WHERE atendente_id IS NOT NULL AND is_bot_active = TRUE;
+```
+
+Isso era correto quando atribuir um dono desligava a Bia. Desde o CONV-BIA-FILA-01 a Bia **continua
+ligada** na fila (handoff, assign e release preservam `is_bot_active`), então "atendente preenchido +
+Bia ligada" é um estado válido — e re-executar a m008 desligaria a Bia de **todas** as conversas na fila
+que já têm dono. O script não é editado (migration escrita não se altera): a cautela é de quem opera.
+Banco que ainda não rodou a m008: confira antes se esse `WHERE` pega alguma linha.
+
 ## Drift conhecido e ACEITO — `ix_conversations_whatsapp` (AUDIT-2026-08-WF2)
 
 Produção tem **dois** índices sobre `conversations.whatsapp`:
