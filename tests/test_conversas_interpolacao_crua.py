@@ -29,7 +29,7 @@ import sys
 
 # `python tests/<arquivo>.py` poe tests/ em sys.path[0]: o analisador irmao importa direto.
 from analisador_interpolacao_crua import (
-    analisa, arquivos_do_front, confere_permitidas, varre)
+    analisa, arquivos_do_front, confere_permitidas, fora_da_regra, ids_texto_declarados, varre)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 # O nome CONVERSAS_DIR e o discriminador de job do CI (.github/workflows/test.yml): o
@@ -141,6 +141,26 @@ for rel, antes, depois, esperado in MUTACOES:
     mutado = {a.expr for a in analisa(rel, fonte.replace(antes, depois))}
     check(esperado not in original and esperado in mutado,
           f"{rel}: sem o escapeHtml() o analisador acusa {esperado!a}")
+
+# ---------------------------------------------------------------------------
+# 3. IDS_TEXTO x conversas/app/models e schemas (SEC-XSS-06): `*_id` texto novo reprova
+# ---------------------------------------------------------------------------
+print("\n3) ids texto do Conversas conferidos contra conversas/app/models e conversas/app/schemas")
+
+# Os ids da Meta/WhatsApp sao String/str: a regra numerica pelo nome nao vale para eles.
+COLUNAS_TEXTO = {"meta_phone_number_id", "meta_waba_id", "whatsapp_msg_id", "meta_media_id",
+                 "meta_template_id"}
+CAMPOS_TEXTO = COLUNAS_TEXTO | {"waba_id"}
+colunas, campos = ids_texto_declarados(CONVERSAS_DIR / "app")
+check(COLUNAS_TEXTO <= colunas, f"o scan acha as colunas String *_id dos models ({sorted(colunas)})")
+check(CAMPOS_TEXTO <= campos, f"o scan acha os campos str *_id dos schemas ({sorted(campos)})")
+check(not fora_da_regra(colunas | campos),
+      f"todo *_id texto de models e schemas esta em IDS_TEXTO ou e id de etapa "
+      f"(fora: {fora_da_regra(colunas | campos)})")
+obtido = [(a.expr, a.culpado)
+          for a in analisa("sintetico.js", "el.innerHTML = `<i>${m.whatsapp_msg_id}</i>`;")]
+check(obtido == [("m.whatsapp_msg_id", "m.whatsapp_msg_id")],
+      f"acusa o id da Meta cru, que e texto: {obtido!a}")
 
 
 print()

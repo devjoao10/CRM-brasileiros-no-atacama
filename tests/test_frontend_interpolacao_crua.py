@@ -25,14 +25,13 @@ tests/test_conversas_interpolacao_crua.py.
 Rodar:  python tests/test_frontend_interpolacao_crua.py
 """
 import pathlib
-import re
 import sys
 import tempfile
 
 # `python tests/<arquivo>.py` poe tests/ em sys.path[0]: o analisador irmao importa direto.
 from analisador_interpolacao_crua import (
-    IDS_TEXTO, RE_ID_DE_ETAPA, Achado, Analise, analisa, arquivos_do_front,
-    confere_permitidas, dessincronias, varre)
+    RE_CAMPO_ID_TEXTO, RE_COLUNA_ID_TEXTO, Achado, Analise, analisa, arquivos_do_front,
+    confere_permitidas, dessincronias, fora_da_regra, ids_texto_declarados, varre)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -548,20 +547,7 @@ check(not confere_permitidas([A1], {("x.html", "foo"): (1, BOM_MOTIVO)}),
 # ---------------------------------------------------------------------------
 print("\n5) excecoes de id texto conferidas contra app/models e app/schemas")
 
-RE_COLUNA_ID_TEXTO = re.compile(r"(\w+_id)\s*=\s*(?:Column|mapped_column)\(\s*(?:String|Text)")
-RE_CAMPO_ID_TEXTO = re.compile(r"(\w+_id)\s*:\s*(?:Optional\[)?str")
-
-
-def fora_da_regra(nomes):
-    """`*_id` texto que a regra numerica ainda aceitaria pelo nome (nem IDS_TEXTO, nem id de etapa)."""
-    return sorted(n for n in nomes if n not in IDS_TEXTO and not RE_ID_DE_ETAPA.search(n))
-
-
-colunas, campos = set(), set()
-for p in sorted((ROOT / "app" / "models").rglob("*.py")):
-    colunas |= set(RE_COLUNA_ID_TEXTO.findall(p.read_text(encoding="utf-8")))
-for p in sorted((ROOT / "app" / "schemas").rglob("*.py")):
-    campos |= set(RE_CAMPO_ID_TEXTO.findall(p.read_text(encoding="utf-8")))
+colunas, campos = ids_texto_declarados(ROOT / "app")
 check(bool(colunas), f"o scan acha as colunas String/Text *_id dos models ({sorted(colunas)})")
 check(bool(campos), f"o scan acha os campos str *_id dos schemas ({sorted(campos)})")
 check(not fora_da_regra(colunas | campos),

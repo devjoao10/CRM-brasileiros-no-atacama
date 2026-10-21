@@ -10,6 +10,8 @@ tests/test_frontend_interpolacao_crua.py (front do CRM). Pontos de entrada:
   varre(raiz, arquivos)     -> (achados crus, lexer dessincronizado)
   confere_permitidas(...)   achados crus x allowlist -> lista de problemas
   analisa(rel, texto)       os achados crus de UM texto (controles sinteticos)
+  ids_texto_declarados(app) -> (colunas, campos) `*_id` texto dos models e schemas
+  fora_da_regra(nomes)      os desses nomes que IDS_TEXTO e o id de etapa nao cobrem
 
 A regra: todo valor que chega a um sink de HTML (innerHTML / outerHTML /
 insertAdjacentHTML / document.write) precisa ser
@@ -172,17 +174,23 @@ from collections import deque, namedtuple
 
 Achado = namedtuple("Achado", "rel linha expr culpado")
 
-# Nomes `*_id` que sao texto, nao PK/FK inteira: coluna String/Text em app/models,
-# campo str em app/schemas. A regra numerica pelo nome nao vale para eles (a secao 5
-# de tests/test_frontend_interpolacao_crua.py confere: `*_id` texto novo reprova ate
-# entrar aqui ou casar o id de etapa).
-# `event_id` (String(36), UUID) existe so na linha V2 (feat/bia-v2):
-# app/models/lead_handoff_operation.py e app/schemas/lead_domain.py. Fica aqui para o
-# sync main -> V2 manter a entrada depois da extracao da lista para este modulo (o
-# sync #52 a colocou em tests/test_frontend_interpolacao_crua.py). No main e fail-closed:
-# nenhum codigo do main usa `event_id`, entao nenhum achado muda, e um uso futuro sem
-# esc() passa a reprovar (endurece, nao afrouxa).
-IDS_TEXTO = frozenset({"etapa_id", "google_calendar_event_id", "event_id"})
+# Nomes `*_id` que sao texto, nao PK/FK inteira: coluna String/Text nos models, campo str
+# nos schemas. A regra numerica pelo nome nao vale para eles. Um conjunto so para os apps
+# do repo, a uniao dos ids texto de cada um (fail-closed para todos). O teste de cada app
+# confere os models e schemas dele (ids_texto_declarados + fora_da_regra, no fim deste
+# modulo): `*_id` texto novo reprova ate entrar aqui ou casar o id de etapa.
+IDS_TEXTO = frozenset({
+    # CRM: app/models e app/schemas
+    "etapa_id", "google_calendar_event_id",
+    # Linha V2 do CRM: `event_id` (String(36), UUID) de app/models/lead_handoff_operation.py
+    # e app/schemas/lead_domain.py dela. Fica aqui para o sync main -> V2 nao perder a
+    # entrada; onde o campo nao existe e fail-closed (nenhum codigo usa o nome). Sai daqui
+    # so quando a linha V2 nao tiver mais esse campo texto.
+    "event_id",
+    # Conversas (SEC-XSS-06): conversas/app/models e conversas/app/schemas, ids da Meta e do WhatsApp
+    "meta_phone_number_id", "meta_waba_id", "waba_id", "whatsapp_msg_id", "meta_media_id",
+    "meta_template_id",
+})
 
 
 # ===========================================================================
@@ -1391,3 +1399,22 @@ def confere_permitidas(achados, permitidas):
         if len(motivo.strip()) < MOTIVO_MINIMO:
             problemas.append(f"motivo curto (<{MOTIVO_MINIMO}): {chave[0]} ${{{chave[1]}}}")
     return problemas
+
+
+# -- IDS_TEXTO x models e schemas: a conferencia que o teste de cada app faz --
+RE_COLUNA_ID_TEXTO = re.compile(r"(\w+_id)\s*=\s*(?:Column|mapped_column)\(\s*(?:String|Text)")
+RE_CAMPO_ID_TEXTO = re.compile(r"(\w+_id)\s*:\s*(?:Optional\[)?str")
+
+
+def ids_texto_declarados(app):
+    """(colunas, campos): os `*_id` texto do pacote `app` de um app - coluna String/Text
+    em app/models e campo str em app/schemas."""
+    def acha(pasta, regex):
+        return {nome for p in sorted(pasta.rglob("*.py"))
+                for nome in regex.findall(p.read_text(encoding="utf-8"))}
+    return acha(app / "models", RE_COLUNA_ID_TEXTO), acha(app / "schemas", RE_CAMPO_ID_TEXTO)
+
+
+def fora_da_regra(nomes):
+    """`*_id` texto que a regra numerica ainda aceitaria pelo nome (nem IDS_TEXTO, nem id de etapa)."""
+    return sorted(n for n in nomes if n not in IDS_TEXTO and not RE_ID_DE_ETAPA.search(n))
