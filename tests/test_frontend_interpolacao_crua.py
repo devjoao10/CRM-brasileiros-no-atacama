@@ -207,7 +207,7 @@ ACUSA = [
     # `.id` do parametro de callback sobre `.etapas`, seja qual for o nome dele
     ("s.id de funnel.etapas.map(s => ...) e id de etapa",
      "el.innerHTML = funnel.etapas.map(s => `<i>${s.id}</i>`).join('');", [("s.id", "s.id")]),
-    # o `.id` de uma ETAPA, elemento de uma lista de etapas (o modelo: Extensoes e _de_etapas)
+    # o `.id` de uma ETAPA, elemento de uma lista de etapas (o modelo: Extensoes e _e_etapa)
     ("lista de etapas entre parenteses com || []",
      "el.innerHTML = (f.etapas || []).map(s => `<i>${s.id}</i>`).join('');", [("s.id", "s.id")]),
     ("etapa de for (const s of f.etapas)",
@@ -236,6 +236,9 @@ ACUSA = [
     ("etapa como operando de ||: (f.etapas[0] || {}).id",
      "el.innerHTML = `<i>${(f.etapas[0] || {}).id}</i>`;",
      [("(f.etapas[0] || {}).id", "(f.etapas[0] || {}).id")]),
+    ("etapa como operando que nao e o 1o: (x || f.etapas[0]).id",
+     "el.innerHTML = `<i>${(x || f.etapas[0]).id}</i>`;",
+     [("(x || f.etapas[0]).id", "(x || f.etapas[0]).id")]),
     ("lista de etapas depois de return (palavra antes do parentese)",
      "function g(f) { return (f.etapas || []).map(s => `<i>${s.id}</i>`).join(''); }\n"
      "el.innerHTML = g(x);", [("s.id", "s.id")]),

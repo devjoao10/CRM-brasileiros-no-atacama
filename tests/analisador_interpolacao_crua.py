@@ -116,11 +116,12 @@ reprovam.
 Extensoes (decididas alem do plano original do SEC-XSS-05):
   - id de etapa (StageSchema.id, texto livre) em qualquer grafia - stageId,
     etapaId, destino_etapa_id -, como `.id` de `stage`/`etapa` e como `.id`
-    de uma ETAPA, elemento de uma LISTA de etapas (Analise._de_etapas). LISTA
-    e a cadeia que termina no nome ou na propriedade `etapas`/`stages`
-    (tambem `X['etapas']`), tirados da direita os parenteses e os metodos que
-    devolvem os mesmos elementos (METODOS_PRESERVAM_LISTA: filter, slice,
-    sort, concat...); `X.concat(LISTA)` tambem e LISTA.
+    de uma ETAPA, elemento de uma LISTA de etapas (Analise._e_etapa e
+    Analise._e_lista_de_etapas). LISTA e a cadeia que termina no nome ou na
+    propriedade `etapas`/`stages` (tambem `X['etapas']`), tirados da direita
+    os parenteses e os metodos que devolvem os mesmos elementos
+    (METODOS_PRESERVAM_LISTA: filter, slice, sort, concat...);
+    `X.concat(LISTA)` tambem e LISTA.
     ETAPA e `LISTA[k]`, `LISTA.find(...)`/`.at(k)` (METODOS_ELEMENTO), a
     variavel de `for (... of LISTA)` e os parametros - todos, falha fechado -
     do callback que e o 1o argumento de `LISTA.metodo(`/`LISTA.metodo?.(`
@@ -417,7 +418,7 @@ RE_NOME_NUMERICO = re.compile(
 # etapaId, destino_etapa_id - e nao so como `.id` de `stage`/`etapa`.
 RE_ID_DE_ETAPA = re.compile(r"(?:stage|etapa)_?id$", re.I)
 # O mesmo id como `.id` de uma ETAPA, elemento de uma LISTA de etapas (`funnel.etapas`,
-# `boardMeta.stages`): o modelo esta em Extensoes e em Analise._de_etapas.
+# `boardMeta.stages`): o modelo esta em Extensoes e em Analise._e_lista_de_etapas/_e_etapa.
 LISTAS_DE_ETAPAS = frozenset({"etapas", "stages"})
 METODOS_PRESERVAM_LISTA = frozenset(        # devolvem array com (parte d)os mesmos elementos
     "filter slice splice sort reverse concat toSorted toReversed toSpliced".split())
@@ -768,10 +769,10 @@ class Analise:
             self.marca(F)
 
     def raizes_de_sink(self):
-        """(ini, fim, raiz) do valor de .innerHTML/.outerHTML =, +=, ||=, &&=, ??= e do argumento
-        HTML de insertAdjacentHTML/write; raiz=False quando ele nao e o HTML inteiro do sink
+        """(ini, fim, na_raiz) do valor de .innerHTML/.outerHTML =, +=, ||=, &&=, ??= e do
+        argumento HTML de insertAdjacentHTML/write; na_raiz=False quando ele nao e o HTML inteiro do sink
         (document.write(a, b) concatena os argumentos). Nas atribuicoes logicas o lado direito,
-        quando entra, e o HTML inteiro: raiz=True, como no `=`."""
+        quando entra, e o HTML inteiro: na_raiz=True, como no `=`."""
         out = [(mm.end(), self.fim_expr(mm.end()), True) for mm in RE_SINK_ATRIB.finditer(self.m)]
         for mm in RE_SINK_CHAMADA.finditer(self.m):
             abre = mm.end() - 1
@@ -791,8 +792,8 @@ class Analise:
         # O valor que chega ao sink e julgado como uma interpolacao: todo template
         # que ele alcanca vira markup, e o trecho cru que ele carrega fora de
         # template (concatenacao, variavel, .join) e achado no proprio sink.
-        for x, y, raiz in self.raizes_de_sink():
-            culpado = self.julga(x, y, raiz)
+        for x, y, na_raiz in self.raizes_de_sink():
+            culpado = self.julga(x, y, na_raiz)
             if culpado is not None:
                 out.append(Achado(self.rel, self.t.count("\n", 0, self._ws(x, y)) + 1,
                                   self.norm(x, y), culpado))
@@ -806,9 +807,9 @@ class Analise:
         return sorted(out)
 
     # -- Classificador: None = SEGURO; senao o trecho cru culpado -------------
-    def julga(self, a, b, raiz=False):
+    def julga(self, a, b, na_raiz=False):
         """None se o valor em m[a:b] e SEGURO pelo Classificador do docstring do modulo; senao o
-        trecho CRU culpado. raiz=True: m[a:b] e o HTML inteiro do sink, ou uma posicao que
+        trecho CRU culpado. na_raiz=True: m[a:b] e o HTML inteiro do sink, ou uma posicao que
         preserva esse valor - o unico ponto onde DOMPurify.sanitize(...) vale. Efeito
         colateral: todo template que o valor alcanca vira MARKUP (marca) e entra na fila,
         para cada interpolacao dele ser julgada no ponto."""
@@ -820,7 +821,7 @@ class Analise:
         ops = [(k, tk) for k, tk in enumerate(toks) if tk.tipo == "op"]
         virgulas = [tk for _, tk in ops if tk.txt == ","]
         if virgulas:                                    # a, b: vale o ultimo
-            return self.julga(virgulas[-1].fim, b, raiz)
+            return self.julga(virgulas[-1].fim, b, na_raiz)
         if any(tk.txt == "=>" for _, tk in ops):        # funcao como valor imprime o codigo
             return texto
         # A atribuicao e o operador de fora so antes do 1o `?` de topo (`x = c ? a : b`);
@@ -831,8 +832,8 @@ class Analise:
                 if tk.txt == "+=":                      # concatena: nenhum lado e a raiz
                     return self._primeiro(self.julga(a, tk.ini), self.julga(tk.fim, b))
                 if tk.txt in ("||=", "??="):            # vale o esquerdo se ja e truthy/definido
-                    return self._primeiro(self.julga(a, tk.ini), self.julga(tk.fim, b, raiz))
-                return self.julga(tk.fim, b, raiz) if tk.txt in ("=", "&&=") else None
+                    return self._primeiro(self.julga(a, tk.ini), self.julga(tk.fim, b, na_raiz))
+                return self.julga(tk.fim, b, na_raiz) if tk.txt in ("=", "&&=") else None
         if q is not None:                               # c ? x : y -> x e y (c nao e impresso)
             prof = 0
             for k, tk in ops:
@@ -843,15 +844,15 @@ class Analise:
                 elif prof:
                     prof -= 1
                 else:
-                    return self._primeiro(self.julga(toks[q].fim, tk.ini, raiz),
-                                          self.julga(tk.fim, b, raiz))
+                    return self._primeiro(self.julga(toks[q].fim, tk.ini, na_raiz),
+                                          self.julga(tk.fim, b, na_raiz))
             return texto
         partes = self._divide(toks, a, b, ("||", "??"))
         if len(partes) > 1:                             # qualquer operando pode ser impresso
-            return self._primeiro(*[self.julga(x, y, raiz) for x, y in partes])
+            return self._primeiro(*[self.julga(x, y, na_raiz) for x, y in partes])
         partes = self._divide(toks, a, b, ("&&",))
         if len(partes) > 1:                             # o falsy de a imprime false/0/''/null
-            return self.julga(*partes[-1], raiz)
+            return self.julga(*partes[-1], na_raiz)
         if any(tk.txt in BINARIOS_SEGUROS for _, tk in ops) or any(
                 tk.tipo == "id" and tk.txt in ("instanceof", "in") for tk in toks):
             return None                                 # comparacao/bit a bit: bool ou numero
@@ -872,9 +873,9 @@ class Analise:
                 toks[-1].tipo == "op" and toks[-1].txt in ("++", "--")):
             return None                                 # unario/posfixo: bool, numero, tipo
         if t0.tipo == "id" and t0.txt == "await" and len(toks) > 1:
-            return self.julga(toks[1].ini, b, raiz)
+            return self.julga(toks[1].ini, b, na_raiz)
         cadeia = self._parse_cadeia(toks)
-        return texto if cadeia is None else self._valor_da_cadeia(*cadeia, a, texto, raiz)
+        return texto if cadeia is None else self._valor_da_cadeia(*cadeia, a, texto, na_raiz)
 
     @staticmethod
     def _fim_de_operando(tk):
@@ -936,44 +937,63 @@ class Analise:
         return not (nome == "id" and receptor in ("stage", "etapa"))
 
     def _id_de_etapa(self, prim, suf):
-        """`E.id` com E uma ETAPA (ver _de_etapas): id de etapa, texto livre."""
-        return suf[-1].tipo == "prop" and suf[-1].txt == "id" and self._de_etapas(
-            prim.ini, suf[-2].fim if len(suf) > 1 else prim.fim, False)
+        """`E.id` com E uma ETAPA (ver _e_etapa): id de etapa, texto livre."""
+        return suf[-1].tipo == "prop" and suf[-1].txt == "id" and self._e_etapa(
+            prim.ini, suf[-2].fim if len(suf) > 1 else prim.fim)
 
-    def _de_etapas(self, a, b, lista):
-        """m[a:b] e uma LISTA de etapas (lista=True) ou uma ETAPA (lista=False)? Ver o id de
-        etapa em Extensoes, no docstring do modulo."""
+    def _operandos_ou_cadeia(self, a, b):
+        """O que _e_lista_de_etapas e _e_etapa leem em m[a:b], sem espaco e parenteses
+        externos: (inicio, operandos, cadeia). Operandos de `||`/`??`/`&&`/ternario quando
+        ha mais de um (basta um ser - falha fechado); senao [] e a cadeia `P.x[k](...)`
+        (None se nao for cadeia)."""
         a, b = self.apara(a, b)
         toks = self.tokens(a, b)
         partes = self._divide(toks, a, b, ("||", "??", "&&", "?", ":"))
         if len(partes) > 1:
-            return any(self._de_etapas(x, y, lista) for x, y in partes)
-        cadeia = self._parse_cadeia(toks) if toks else None
+            return a, partes, None
+        return a, [], (self._parse_cadeia(toks) if toks else None)
+
+    def _e_lista_de_etapas(self, a, b):
+        """m[a:b] e uma LISTA de etapas? Ver o id de etapa em Extensoes, no docstring do modulo."""
+        _, partes, cadeia = self._operandos_ou_cadeia(a, b)
+        if partes:
+            return any(self._e_lista_de_etapas(x, y) for x, y in partes)
         if cadeia is None:
             return False
         prim, suf = cadeia
-        while lista and len(suf) >= 2 and suf[-1].tipo == "call" and (
+        while len(suf) >= 2 and suf[-1].tipo == "call" and (
                 suf[-2].tipo == "prop" and suf[-2].txt in METODOS_PRESERVAM_LISTA):
             if suf[-2].txt == "concat" and any(         # X.concat(LISTA) tambem traz as etapas
-                    self._de_etapas(x, y, True) for x, y in self._args(suf[-1].ini + 1, suf[-1].fim - 1)):
+                    self._e_lista_de_etapas(x, y) for x, y in self._args(suf[-1].ini + 1, suf[-1].fim - 1)):
                 return True
             suf = suf[:-2]                              # LISTA.filter(...) ainda e LISTA
-        if not lista and suf and (suf[-1].tipo == "idx" or (
+        if suf:                                         # `.etapas` ou `['etapas']`
+            ult = suf[-1]
+            return ult.txt in LISTAS_DE_ETAPAS if ult.tipo == "prop" else (
+                ult.tipo == "idx" and self._chave_de_lista(ult))
+        if prim.tipo == "grp" and prim.txt == "(":
+            return self._e_lista_de_etapas(prim.ini + 1, prim.fim - 1)
+        return prim.tipo == "id" and prim.txt in LISTAS_DE_ETAPAS
+
+    def _e_etapa(self, a, b):
+        """m[a:b] e uma ETAPA, elemento de uma LISTA de etapas? Ver Extensoes."""
+        a, partes, cadeia = self._operandos_ou_cadeia(a, b)
+        if partes:
+            return any(self._e_etapa(x, y) for x, y in partes)
+        if cadeia is None:
+            return False
+        prim, suf = cadeia
+        if suf and (suf[-1].tipo == "idx" or (
                 len(suf) >= 2 and suf[-1].tipo == "call" and suf[-2].tipo == "prop"
                 and suf[-2].txt in METODOS_ELEMENTO)):  # LISTA[k], LISTA.find(...)
             k = len(suf) - (1 if suf[-1].tipo == "idx" else 2)
-            return self._de_etapas(a, suf[k - 1].fim if k else prim.fim, True)
-        if suf:                                         # `.etapas` ou `['etapas']`
-            ult = suf[-1]
-            return lista and (ult.txt in LISTAS_DE_ETAPAS if ult.tipo == "prop" else (
-                ult.tipo == "idx" and self._chave_de_lista(ult)))
-        if prim.tipo == "grp" and prim.txt == "(":
-            return self._de_etapas(prim.ini + 1, prim.fim - 1, lista)
-        if prim.tipo != "id":
+            return self._e_lista_de_etapas(a, suf[k - 1].fim if k else prim.fim)
+        if suf:
             return False
-        if lista:
-            return prim.txt in LISTAS_DE_ETAPAS
-        return any(self._liga_etapa(L) for L in self._visiveis(prim.txt, prim.ini))
+        if prim.tipo == "grp" and prim.txt == "(":
+            return self._e_etapa(prim.ini + 1, prim.fim - 1)
+        return prim.tipo == "id" and any(
+            self._e_ligacao_de_etapa(L) for L in self._visiveis(prim.txt, prim.ini))
 
     def _chave_de_lista(self, idx):
         """O `[...]` tem so a string 'etapas'/"stages" (ou o template sem interpolacao)? Lido no
@@ -982,12 +1002,12 @@ class Analise:
         return (len(toks) == 1 and toks[0].tipo == "atom" and toks[0].txt in ("str", "tpl")
                 and self.t[toks[0].ini + 1:toks[0].fim - 1] in LISTAS_DE_ETAPAS)
 
-    def _liga_etapa(self, L):
+    def _e_ligacao_de_etapa(self, L):
         """L liga uma ETAPA: variavel de `for (... of LISTA)` ou parametro do callback que
         recebe os elementos de LISTA (ver _callback_de_lista). Um veredito por callback: o
         recuo ate a chamada nao se repete a cada leitura de `.id`."""
         if L.tipo == "forof":
-            return self._de_etapas(*L.extra, True)
+            return self._e_lista_de_etapas(*L.extra)
         if L.tipo != "param":
             return False
         chave = ("etapa", L.extra.ini)
@@ -1011,12 +1031,12 @@ class Analise:
             k = g
         if m[k - 1:k] == "(":
             p = self._metodo_antes(k - 1)
-            return p is not None and self._de_etapas(self._inicio_da_cadeia(p), p, True)
+            return p is not None and self._e_lista_de_etapas(self._inicio_da_cadeia(p), p)
         if m[k - 1:k] != ",":
             return False
         a = self._inicio_da_cadeia(k - 1)               # o 1o argumento, quando e cadeia
         j = self._ws_antes(a)
-        return m[j - 1:j] == "(" and self._de_etapas(a, k - 1, True)
+        return m[j - 1:j] == "(" and self._e_lista_de_etapas(a, k - 1)
 
     def _metodo_antes(self, abre):
         """Onde comeca o `.metodo` (ou `?.metodo`) da chamada cujo `(` esta em abre - `X.metodo(`,
@@ -1086,7 +1106,7 @@ class Analise:
         return ult.tipo == "prop" and (ult.txt in ("length", "size") or (
             self._nome_numerico(ult.txt, self._receptor(prim, suf)) and not self._id_de_etapa(prim, suf)))
 
-    def _valor_da_cadeia(self, prim, suf, a, texto, raiz):
+    def _valor_da_cadeia(self, prim, suf, a, texto, na_raiz):
         n = len(suf)
         if not n:
             return self._primario(prim, texto)
@@ -1099,7 +1119,7 @@ class Analise:
             return None                                 # esc(...) cobrindo o valor inteiro
         if (prim.tipo == "id" and prim.txt == "DOMPurify" and n == 2 and suf[0].tipo == "prop"
                 and suf[0].txt == "sanitize" and ult.tipo == "call"):
-            return None if raiz else texto              # sanitizador de HTML: so na raiz do sink
+            return None if na_raiz else texto              # sanitizador de HTML: so na raiz do sink
         if self._campo_numerico(prim, suf):
             return None
         if prim.tipo == "id" and all(s.tipo in ("prop", "idx") for s in suf):
