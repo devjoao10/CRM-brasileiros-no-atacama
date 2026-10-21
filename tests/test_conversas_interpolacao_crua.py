@@ -25,11 +25,13 @@ conversas/static/js/**/*.js. O front do CRM tem o teste dele.
 Rodar:  python tests/test_conversas_interpolacao_crua.py
 """
 import pathlib
+import re
 import sys
 
 # `python tests/<arquivo>.py` poe tests/ em sys.path[0]: o analisador irmao importa direto.
 from analisador_interpolacao_crua import (
-    analisa, arquivos_do_front, confere_permitidas, fora_da_regra, ids_texto_declarados, varre)
+    RE_OP_DE_ESCRITA, Analise, analisa, arquivos_do_front, confere_permitidas, fora_da_regra,
+    ids_texto_declarados, varre)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 # O nome CONVERSAS_DIR e o discriminador de job do CI (.github/workflows/test.yml): o
@@ -58,11 +60,14 @@ TEMPLATES_JS = "conversas/static/js/templates.js"
 # ---------------------------------------------------------------------------
 # Allowlist: (arquivo, expressao normalizada) -> (ocorrencias, motivo).
 # Cada entrada aceita EXATAMENTE `ocorrencias` achados crus com aquela chave:
-# o que foi auditado e a contagem, nao a grafia - uso novo da mesma expressao
-# reprova ate ser auditado. O motivo diz de onde o valor vem e por que ele nao
-# carrega markup. Numero NAO vai para escapeHtml() (a copia de templates.js
-# devolve '' para 0 e apaga o zero da tela) e valor JA escapado tambem nao
-# (escapar de novo duplica entidades): os dois ficam aqui, com a procedencia.
+# uma interpolacao a mais (ou a menos) com a mesma expressao muda a contagem e
+# reprova. A contagem NAO ve o que chega ao nome: uma fonte nova escrita em
+# `content`, em `monos` ou em `originalText`, ou um safeTagColor mais fraco,
+# deixam a contagem igual - quem reprova isso sao os pinos de procedencia da
+# secao 4. O motivo diz de onde o valor vem e por que ele nao carrega markup.
+# Numero NAO vai para escapeHtml() (a copia de templates.js devolve '' para 0 e
+# apaga o zero da tela) e valor JA escapado tambem nao (escapar de novo duplica
+# entidades): os dois ficam aqui, com a procedencia.
 # ---------------------------------------------------------------------------
 PERMITIDAS = {
     # -- cor de tag: safeTagColor revalida no cliente (defesa em profundidade); a
@@ -161,6 +166,74 @@ obtido = [(a.expr, a.culpado)
           for a in analisa("sintetico.js", "el.innerHTML = `<i>${m.whatsapp_msg_id}</i>`;")]
 check(obtido == [("m.whatsapp_msg_id", "m.whatsapp_msg_id")],
       f"acusa o id da Meta cru, que e texto: {obtido!a}")
+
+# ---------------------------------------------------------------------------
+# 4. Procedencia auditada da allowlist (SEC-XSS-06): a contagem confia num NOME
+# ---------------------------------------------------------------------------
+print("\n4) a procedencia que a allowlist auditou continua a mesma")
+
+# Os pinos leem o CODIGO (Analise.m: comentario, texto de string e de template e corpo de
+# regex viram espaco): mudar o markup estatico nao reprova; mudar o que flui para `content`,
+# para `monos` ou para `originalText`, ou o gate de safeTagColor, reprova ate a entrada e o
+# pino serem reauditados juntos.
+
+
+def analise(rel):
+    return Analise(rel, (ROOT / rel).read_text(encoding="utf-8"))
+
+
+def codigo(A, a, b):
+    return " ".join(A.m[a:b].split())
+
+
+def confere(obtido, auditado, msg):
+    check(obtido == auditado, msg if obtido == auditado else f"{msg} (obtido: {obtido!a})")
+
+
+CJ = analise(CONVERSAS_JS)
+check(len(re.findall(r"renderWhatsappMarkup\s*\(", CJ.m)) == 2 and len(re.findall(
+    r"renderWhatsappMarkup\s*\(\s*escapeHtml\s*\(\s*msg\s*\.\s*content\s*\)\s*\)", CJ.m)) == 1,
+      "renderWhatsappMarkup: a definicao e uma chamada so, renderWhatsappMarkup(escapeHtml(msg.content))")
+# renderWhatsappMarkup so poe tags constantes, sem atributo, em volta do texto ja escapado, e
+# `monos` so guarda trecho dele (a entrada monos[Number(i)]).
+RENDER_AUDITADO = (
+    "{ if (!escaped) return escaped; const monos = []; let out = String(escaped).replace(/ /g, "
+    "(_, corpo) => { monos.push(corpo); return ` monos.length - 1 `; }); for (const [re, tag] of "
+    "WA_MARKUP) { const close = tag.replace(' ', ' '); out = out.replace(re, (_, pre, corpo) => "
+    "` pre tag corpo close `); } return out.replace(/ /g, (_, i) => ` monos[Number(i)] `); }")
+confere([codigo(CJ, *F.corpo) for F in CJ.funcoes_por_nome.get("renderWhatsappMarkup", [])],
+        [RENDER_AUDITADO], "o codigo de renderWhatsappMarkup e o auditado")
+# Cada escrita em `content` dentro de appendMessageElement: o operador e o lado direito (a
+# entrada content x5; escrita por desestruturacao nao e vista - ver Limites do analisador).
+ESCRITAS_AUDITADAS = [
+    "= renderWhatsappMarkup(escapeHtml(msg.content))",
+    "= ` Number(msg.media_asset.id) captionHtml `",
+    "= ` escapeHtml(msg.media_url) content `",
+    "= ` content `",
+    "= ` Number(msg.media_asset.id) ` + (msg.content && msg.content !== ' ' ? ` content ` : '')",
+    "= ' '",
+    "= ` fn fn Number(msg.media_asset.id) captionHtml `",
+    "= ' '",
+    "= ` Number(msg.media_asset.id) captionHtml `",
+    "= ' '",
+    "+= ` Number(msg.media_asset.id) `",
+]
+RE_ESCRITA_DE_CONTENT = re.compile(r"(?<![\w$.])content\s*(" + RE_OP_DE_ESCRITA.pattern + ")")
+confere([mm.group(1) + " " + codigo(CJ, mm.end(), CJ.fim_expr(mm.end()))
+         for F in CJ.funcoes_por_nome.get("appendMessageElement", [])
+         for mm in RE_ESCRITA_DE_CONTENT.finditer(CJ.m, *F.corpo)],
+        ESCRITAS_AUDITADAS, f"as escritas em content sao as {len(ESCRITAS_AUDITADAS)} auditadas")
+# safeTagColor: a regex ancorada de #hex6 e o literal de fallback (a entrada safeTagColor x5)
+confere([CJ.norm(*F.corpo) for F in CJ.funcoes_por_nome.get("safeTagColor", [])],
+        ["{ return /^#[0-9A-Fa-f]{6}$/.test(cor || '') ? cor : '#999999'; }"],
+        "safeTagColor e o gate auditado")
+# originalText: guarda btn.innerHTML antes do spinner e so volta para ele (entradas originalText)
+for rel in (SETTINGS_JS, TEMPLATES_JS):
+    m = analise(rel).m
+    check(len(re.findall(r"(?<![\w$.])originalText(?![\w$])", m)) == 2
+          and len(re.findall(r"\bconst\s+originalText\s*=\s*btn\s*\.\s*innerHTML\s*;", m)) == 1
+          and len(re.findall(r"\bbtn\s*\.\s*innerHTML\s*=\s*originalText\s*;", m)) == 1,
+          f"{rel}: originalText e escrito uma vez (btn.innerHTML) e lido so na restauracao")
 
 
 print()
