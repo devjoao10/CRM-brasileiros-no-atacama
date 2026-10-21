@@ -742,7 +742,7 @@
                 // Find members by finding users who have this team.id
                 const members = allUsers.filter(u => (u.teams || []).some(tm => tm.id === t.id));
                 const memListHtml = members.length > 0
-                    ? members.map(m => `<div class="team-member-item"><div class="member-avatar">${m.nome.charAt(0).toUpperCase()}</div> <span>${esc(m.nome)}</span></div>`).join('')
+                    ? members.map(m => `<div class="team-member-item"><div class="member-avatar">${esc(m.nome.charAt(0).toUpperCase())}</div> <span>${esc(m.nome)}</span></div>`).join('')
                     : '<span style="color:var(--color-dark-300);font-size:12px;">Nenhum usuário assinalado.</span>';
 
                 // AUDIT-2026-08-W2A (F5): `cor` ia crua aqui enquanto a MESMA coluna

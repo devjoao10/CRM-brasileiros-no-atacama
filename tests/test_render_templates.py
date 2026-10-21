@@ -57,7 +57,7 @@ def test_ai_chat_is_sanitized():
     """SEC-XSS-01: render do chat da IA deve passar por DOMPurify."""
     html = render("ai.html")
     assert "dompurify" in html.lower(), "ai.html: DOMPurify nao carregado"
-    assert "DOMPurify.sanitize(marked.parse(content))" in html, "ai.html: IA sem sanitize"
+    assert "DOMPurify.sanitize(marked.parse(content), PERFIL_RESPOSTA_IA)" in html, "ai.html: IA sem sanitize"
 
 
 # WP-UX-03 — sidebars contextuais: cada pagina renderiza SO a navegacao do seu setor.

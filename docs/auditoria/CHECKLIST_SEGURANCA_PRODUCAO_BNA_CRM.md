@@ -16,9 +16,11 @@ Estado: ✅ ok · ⚠️ parcial/atenção · ❌ pendente (WP)
 - ✅ **SEC-XSS-02 corrigido**: `esc()`/`escapeHtml()` em 10 templates passam a escapar `'` e `"` (fecha quebra de literal em `onclick`).
 - ❌ **SEC-XSS-03**: `marked.min.js` sem versão fixa + sem SRI — WP-SEC-02.
 - ✅ **SEC-XSS-04 corrigido**: `email`/`whatsapp` (painel de leads da Segmentação), `dias_por_destino` (editor de lead) e cor da tag (chips de filtro) passam por `esc()`; regressão em `tests/test_xss_crud_templates.py` (seção 5).
+- ✅ **SEC-LINK-01 corrigido**: resposta da IA no chat (`ai.html`) só com o HTML do markdown (sem `class`/`style`/`data-*`); link http(s) abre em nova aba com `noopener noreferrer` e selo do host real; download só no formato de `_safe_document_target`, com a regex do clique ancorada; regressão em `tests/test_ai_chat_links.py`.
 - ❌ **SEC-CSP-01**: sem `Content-Security-Policy` (amplifica XSS) — WP-SEC-02 (cuidado com inline JS).
 - ✅ Jinja2 autoescape ativo no SSR.
 - ✅ **SEC-CSV-01 corrigido**: "Exportar CSV" da Segmentação prefixa `'` em célula que começa com `=`, `+`, `-`, `@`, TAB ou CR (exceto telefone/número puro, para não alterar o WhatsApp); regressão em `tests/test_segmentacao_csv_formula.py`.
+- ✅ **SEC-XLSX-01 corrigido**: a planilha gerada pela IA (`generate_excel_document`) grava toda célula como texto, então `=...` vindo do LLM não vira mais fórmula, e marca `quotePrefix` nas que começam com `=`, `+`, `-`, `@`, para uma edição do operador (F2+Enter) não reativar a fórmula; regressão em `tests/test_ai_excel_formula.py`.
 
 ## Headers / Transporte
 - ✅ `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`.

@@ -34,6 +34,7 @@ _(nenhum achado de severidade crítica não-mitigada no estado local atual)_
 | **SEC-CSP-01** | Segurança | sem `Content-Security-Policy` em `main.py` (FRONT-06) | WP-SEC-02 (não aplicável agora: muito inline JS quebraria; exige nonces) |
 | **SEC-XSS-03** | Segurança | `ai.html` `marked.min.js` sem versão fixa nem SRI (FRONT-05) | ⚠️ **PARCIAL**: versão fixada (`marked@12.0.0`); SRI pendente (hash em CI) |
 | **SEC-CSV-01** | Segurança/FE | "Exportar CSV" da Segmentação (`exportLeads`) só envolvia as células em aspas: valor começando com `=`, `+`, `-`, `@`, TAB ou CR (nome/email/tags vindos do n8n) virava fórmula no Excel/Sheets | ✅ **CORRIGIDO** (prefixo `'`, exceto telefone/número puro; `tests/test_segmentacao_csv_formula.py`) |
+| **SEC-XLSX-01** | Segurança/IA | planilha gerada pela IA (`generate_excel_document` em `ai_tools.py`) gravava cru o texto do LLM, que pode ser conduzido por texto de lead de terceiros: célula (cabeçalho ou dado) começando com `=` virava fórmula viva no .xlsx (`=HYPERLINK`/`=WEBSERVICE`) | ✅ **CORRIGIDO** (célula gravada como texto, sem prefixo no valor; `quotePrefix` nas que começam com `=`, `+`, `-`, `@`; `tests/test_ai_excel_formula.py`) |
 | **DEVOPS-01** | DevOps | `docker-compose.yml` CRM publicava `8000:8000` no host (bypass do TLS) | ✅ **CORRIGIDO** (`expose` só + healthcheck; valida no deploy) |
 | **DATA-02** | Banco | migrations inline no `lifespan` (sem Alembic, RM-12) | WP-DATA-02 |
 | **ARCH-02** | Arquitetura | `_build_lead_response`/`_json_list_contains` duplicados em `leads.py`+`segments.py` | WP-ARCH-02 (RM-02 LeadQueryService) |
@@ -47,6 +48,7 @@ _(nenhum achado de severidade crítica não-mitigada no estado local atual)_
 | **DATA-03** | Banco | soft-delete inconsistente (`is_active` Lead vs `is_archived` operacional; sem `deleted_at`) | DEC-08 / WP-DATA-02 |
 | **FE-03** | Frontend | botões-ícone sem `aria-label`, modais sem focus-trap, contraste não auditado | WP-FE-03 |
 | **F-02/F-03** | Repo | `scratch/` não ignorado; EOF blank lines | ✅ CORRIGIDO (WP-AUDIT-00) |
+| **SEC-LINK-01** | Segurança/FE | chat da IA (`templates/ai.html`): a resposta do LLM (que lê texto de lead vindo do WhatsApp/n8n) passava pelo DOMPurify no perfil padrão, então link enganoso abria na própria aba e `class`/`style`/`<style>` podiam esconder o destino, imitar o botão de download ou cobrir a tela; a regex do clique de download não tinha âncora (aceitava `/`, `..`, host alheio) | ✅ **CORRIGIDO** (perfil allowlist do markdown; link http(s) em nova aba com `noopener noreferrer` e selo do host real; download só no formato de `_safe_document_target`; `tests/test_ai_chat_links.py`) |
 
 ### DATA-01 (especial)
 | ID | Área | Evidência | Status |

@@ -6,12 +6,39 @@ name: Deploy to VPS (manual, gated)
 #
 # GATES OBRIGATORIOS antes de rodar (responsabilidade humana):
 #   1. Backup fresco do PostgreSQL verificado (pg_dump + checksum + offsite)
-#   2. Revisao das migrations e execucao controlada (m001, m002) com aprovacao
+#   2. Revisao e execucao controlada das migrations pendentes (ver migrations/README.md), com aprovacao
 #   3. Revisao de Docker/Traefik (CRM so via proxy)
 #   4. Smoke visual + smoke de auth (login/logout, 429) + smoke do board operacional
 #   5. Plano de rollback definido
 #   6. Aprovacao humana explicita
 # Ver TECNOLOGIA_E_SISTEMAS/02_INFRAESTRUTURA_E_DEPLOY/CHECKLIST_PRE_DEPLOY.md
+#
+# WP-OPS-03 (deploy de ref EXPLICITO, sem merge no servidor): a producao NAO segue `main`.
+# O run #73 falhou porque /opt/crm estava em HEAD destacado na ponta de
+# feat/bia-v2-2026-08-29 (d84c4ce), com docker-compose.yml e requirements.txt
+# modificados na VPS, e o `git pull origin main` tentou MESCLAR main nessa linha
+# ("Need to specify how to reconcile divergent branches"). Se tivesse passado,
+# teria mesclado as duas linhas em silencio. Agora:
+#   - `ref` (obrigatorio, SEM default) diz o que publicar: branch do GitHub ou SHA.
+#     Sem default de proposito: um valor pre-preenchido poderia tirar a producao da
+#     linha atual sem ninguem perceber. Confira antes o que roda na VPS:
+#     git -C /opt/crm log -1
+#     `HEAD` (e qualquer ref terminado em /HEAD) e recusado: resolve para o branch padrao
+#     de origin e tiraria a producao da linha atual em silencio, como no run #73.
+#   - a VPS faz `git fetch` (refspec explicito, vale ate para clone de um branch so) e
+#     `git checkout --detach` do alvo. NUNCA mescla. Alvo = branch de origin ou SHA
+#     hexadecimal; ref LOCAL da VPS (main velho, tag, branch antigo) nao vale, e um SHA so
+#     vale se o commit resolvido comecar pelo que foi digitado.
+#   - alteracao local em arquivo RASTREADO aborta o deploy (arquivo nao rastreado,
+#     como o .env, nao conta).
+#   - nenhum input e interpolado dentro de `run:`/`script:` (injecao de script): todos
+#     entram por `env:`, e o job `guard` valida `ref` e `services` por allowlist
+#     antes de qualquer SSH.
+#   - sem escopo de GITHUB_TOKEN (permissions) e uma execucao por vez (concurrency).
+# Se build/up falharem DEPOIS do checkout, um trap de saida devolve a arvore ao SHA do
+# "Antes" e manda conferir `docker compose ps`: a reversao e so do git, e se o up falhou
+# no meio algum container pode ja rodar a imagem nova.
+# Rollback manual: o log imprime "Antes: <SHA> ..."; rode de novo com ref=<esse SHA>.
 
 on:
   workflow_dispatch:
@@ -24,22 +51,77 @@ on:
         description: 'Migrations revisadas e aplicadas com backup? (yes/no)'
         required: true
         default: 'no'
+      ref:
+        description: 'Branch do GitHub (ex.: main, feat/bia-v2-2026-08-29) ou SHA a publicar. Confira antes qual linha roda na VPS: git -C /opt/crm log -1'
+        required: true
+      services:
+        description: 'Servicos a reconstruir e reiniciar, separados por espaco (permitidos: crm conversas). Vazio = todos.'
+        required: false
+        default: ''
+
+# WP-OPS-03: nenhum job precisa de escopo do GITHUB_TOKEN (o appleboy baixa o drone-ssh por
+# URL publica e o deploy usa so SSH); sem esta linha o token herda o default do repositorio.
+permissions: {}
+
+# WP-OPS-03: UMA execucao por vez. Dois disparos juntos fariam checkout/build em /opt/crm ao
+# mesmo tempo; o segundo espera o primeiro terminar (nao cancela o que esta em curso).
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
 
 jobs:
   guard:
     runs-on: ubuntu-latest
     steps:
       - name: Verificar confirmacao dos gates
+        # Inputs entram por env: e viram variaveis de shell. Interpolar a expressao
+        # direto no script faria o texto digitado no input virar codigo (WP-OPS-03).
+        shell: bash
+        env:
+          DEPLOY_CONFIRM: ${{ github.event.inputs.confirm }}
+          DEPLOY_MIGRATIONS_REVIEWED: ${{ github.event.inputs.migrations_reviewed }}
+          DEPLOY_REF: ${{ github.event.inputs.ref }}
+          DEPLOY_SERVICES: ${{ github.event.inputs.services }}
         run: |
-          if [ "${{ github.event.inputs.confirm }}" != "DEPLOY" ]; then
+          set -f   # sem expansao de curingas ao quebrar DEPLOY_SERVICES em tokens
+          if [ "$DEPLOY_CONFIRM" != "DEPLOY" ]; then
             echo "::error::Confirmacao ausente. Digite DEPLOY para prosseguir (apos cumprir os gates)."
             exit 1
           fi
-          if [ "${{ github.event.inputs.migrations_reviewed }}" != "yes" ]; then
-            echo "::error::Migrations nao confirmadas. Aplique m001/m002 com backup antes do deploy."
+          if [ "$DEPLOY_MIGRATIONS_REVIEWED" != "yes" ]; then
+            echo "::error::Migrations nao confirmadas. Aplique as migrations pendentes (ver migrations/README.md) com backup antes do deploy."
             exit 1
           fi
-          echo "Gates confirmados manualmente. Prosseguindo."
+          # WP-OPS-03: alvo explicito, por allowlist de caracteres. '..', '//' e '/' no
+          # fim sao recusados: nenhum nome de branch ou SHA legitimo os usa.
+          ref_re='^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$'
+          if ! [[ "$DEPLOY_REF" =~ $ref_re ]] || [[ "$DEPLOY_REF" == *..* || "$DEPLOY_REF" == *//* || "$DEPLOY_REF" == */ ]]; then
+            echo "::error::Ref invalido ou vazio. Informe um branch do GitHub ou SHA (so letras, numeros, . _ / - ate 200 caracteres; sem '..', '//' nem '/' no fim)."
+            exit 1
+          fi
+          # WP-OPS-03: HEAD e */HEAD (origin/HEAD) resolvem para a ponta do branch padrao de
+          # origin: o deploy tiraria a producao da linha atual em silencio (run #73 de novo).
+          if [[ "$DEPLOY_REF" == HEAD || "$DEPLOY_REF" == */HEAD ]]; then
+            echo "::error::Ref 'HEAD' (ou terminado em /HEAD) nao e um alvo explicito: resolve para o branch padrao de origin e tira a producao da linha atual em silencio. Informe o nome do branch ou o SHA."
+            exit 1
+          fi
+          # WP-OPS-03: servicos = nomes minusculos separados por UM espaco (tab, quebra de
+          # linha e espaco duplo ficam de fora) e, depois, so os que tem build no compose.
+          svc_re='^([a-z]+( [a-z]+)*)?$'
+          if ! [[ "$DEPLOY_SERVICES" =~ $svc_re ]]; then
+            echo "::error::Servicos invalidos. Use nomes em minusculas separados por UM espaco (sem tab, quebra de linha ou espaco duplo). Permitidos: crm conversas (vazio = todos)."
+            exit 1
+          fi
+          for servico in $DEPLOY_SERVICES; do
+            case "$servico" in
+              crm|conversas) ;;
+              *)
+                echo "::error::Servico invalido '$servico'. Permitidos: crm conversas (vazio = todos)."
+                exit 1
+                ;;
+            esac
+          done
+          echo "Gates confirmados manualmente. Alvo: ref=$DEPLOY_REF servicos=${DEPLOY_SERVICES:-todos}. Prosseguindo."
 
   deploy:
     needs: guard
@@ -48,14 +130,71 @@ jobs:
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
+        # `envs` repassa so os NOMES listados, lidos deste env: e exportados no shell
+        # remoto entre aspas simples. Os valores ja passaram pelo job guard.
+        env:
+          DEPLOY_REF: ${{ github.event.inputs.ref }}
+          DEPLOY_SERVICES: ${{ github.event.inputs.services }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           password: ${{ secrets.VPS_PASSWORD }}
+          envs: DEPLOY_REF,DEPLOY_SERVICES
           script: |
             set -e
             cd /opt/crm
-            git pull origin main
-            docker compose build --no-cache
-            docker compose up -d
-            echo "Deploy concluido em $(date)"
+            ANTES_SHA=$(git rev-parse HEAD)
+            echo "Antes: $(git log -1 --oneline)"
+            echo "Alvo: ref=$DEPLOY_REF servicos=${DEPLOY_SERVICES:-todos}"
+            # Tree sujo (arquivo RASTREADO alterado) aborta; .env e outros nao rastreados nao contam.
+            SUJO=$(git status --porcelain --untracked-files=no)
+            if [ -n "$SUJO" ]; then
+              {
+                echo "WP-OPS-03: deploy ABORTADO - /opt/crm tem alteracao local em arquivo rastreado:"
+                git status --short --untracked-files=no
+                echo "Nada foi alterado. Resolva na VPS (commit ou descarte) e rode de novo."
+              } >&2
+              exit 1
+            fi
+            git fetch origin --prune '+refs/heads/*:refs/remotes/origin/*'
+            # Alvo = branch de origin; senao SHA hexadecimal (minusculas). Ref LOCAL da VPS
+            # (main velho, tag, branch antigo) nao vale. O rev-parse poe ref local (ex.: tag
+            # "dead") na frente de SHA abreviado, entao o resultado so vale se COMECAR pelo
+            # que foi digitado.
+            ALVO=$(git rev-parse --verify --quiet "refs/remotes/origin/$DEPLOY_REF^{commit}" || true)
+            if [ -z "$ALVO" ]; then
+              REF_LC=$(printf '%s' "$DEPLOY_REF" | tr 'A-F' 'a-f')
+              case "$REF_LC" in
+                ''|*[!0-9a-f]*) ;;
+                *)
+                  ALVO=$(git rev-parse --verify --quiet "$REF_LC^{commit}" || true)
+                  case "$ALVO" in
+                    "$REF_LC"*) ;;
+                    *) ALVO='' ;;
+                  esac
+                  ;;
+              esac
+            fi
+            if [ -z "$ALVO" ]; then
+              echo "WP-OPS-03: ref '$DEPLOY_REF' nao e branch de origin nem SHA existente (vazio = envs nao repassadas). Nada foi alterado." >&2
+              exit 1
+            fi
+            git checkout --detach "$ALVO"
+            # Daqui em diante, falha (build/up) devolve a arvore ao SHA do "Antes". Reverte so o
+            # git: se o up falhou no meio, algum container pode ja rodar a imagem nova.
+            trap '
+              rc=$?
+              if [ "$rc" -ne 0 ]; then
+                if git checkout --detach "$ANTES_SHA" >&2; then
+                  echo "WP-OPS-03: deploy FALHOU (exit $rc) - /opt/crm revertido para $ANTES_SHA. ATENCAO: confira docker compose ps - se o up falhou no meio, algum container pode ja rodar a imagem nova (a reversao e so do git)." >&2
+                else
+                  echo "WP-OPS-03: deploy FALHOU (exit $rc) E a reversao para $ANTES_SHA tambem falhou - /opt/crm segue no alvo novo. Confira git status e docker compose ps." >&2
+                fi
+              fi
+            ' EXIT
+            echo "Depois: $(git log -1 --oneline)"
+            # $DEPLOY_SERVICES sem aspas de proposito (quebra em palavras); seguro porque
+            # o job guard so deixa passar nomes da allowlist.
+            docker compose build --no-cache $DEPLOY_SERVICES
+            docker compose up -d $DEPLOY_SERVICES
+            echo "Deploy concluido em $(date) (ref=$DEPLOY_REF). Rollback manual: rode de novo com ref=$ANTES_SHA"
