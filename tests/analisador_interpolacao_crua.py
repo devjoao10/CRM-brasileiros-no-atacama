@@ -13,6 +13,10 @@ tests/test_frontend_interpolacao_crua.py (front do CRM). Pontos de entrada:
   ids_texto_declarados(app) -> (colunas, campos) `*_id` texto dos models e schemas
   fora_da_regra(nomes)      os desses nomes que IDS_TEXTO e o id de etapa nao cobrem
 
+A secao 4 de tests/test_conversas_interpolacao_crua.py (pinos de procedencia) tambem
+le internos da Analise: o codigo mascarado `.m`, `.funcoes_por_nome` (e o `.corpo`
+de cada Funcao), `.fim_expr` e `.norm`; renomear um deles exige atualizar os pinos.
+
 A regra: todo valor que chega a um sink de HTML (innerHTML / outerHTML /
 insertAdjacentHTML / document.write) precisa ser
 
@@ -179,6 +183,16 @@ Limites conhecidos (o que a regra NAO pega):
     declaracao e ETAPA repassada a um helper cujo parametro nao se chama
     stage/etapa (`function row(st) { ...${st.id}... }` com
     `LISTA.map(s => row(s))`: o `st.id` do helper passa como numero);
+  - fronteira de template: a mascara deixa so espaco entre dois interpolados, e o
+    recuo ate o receptor do callback passa ao anterior (terminado em identificador,
+    `)` ou `]`) se o seguinte comeca por `(`: o `.id` da etapa passa como numero
+    (`${esc(a)}${(f.etapas || []).map(...)}` le a chamada `esc(a)(f.etapas || [])`);
+  - `for` a mais de 30 caracteres da declaracao (espaco e comentario contam): o
+    RE_FOR de _declaracao olha so os 30 caracteres antes de const/let/var, a
+    variavel do laco nao vira ETAPA e o `.id` passa como numero;
+  - ids_texto_declarados le coluna `Column`/`mapped_column` com String|Text e campo
+    `str`/`Optional[str]`, nao `Mapped[str]` nem `Union[str, None]`: um `*_id` texto
+    assim segue aceito como numero pelo nome ate entrar em IDS_TEXTO;
   - regex x divisao: `i++ / 2 ... /` na mesma linha e lido como regex, e o
     trecho entre as barras some da analise;
   - custo: resultado que depende de ciclo aberto nao vai para o memo, entao
