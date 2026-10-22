@@ -3,7 +3,7 @@ import secrets
 
 # ─── App ─────────────────────────────────────────
 PROJECT_NAME = "Conversas — Brasileiros no Atacama"
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 DESCRIPTION = "Plataforma de conversas WhatsApp integrada ao CRM"
 API_PREFIX = "/api"
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")

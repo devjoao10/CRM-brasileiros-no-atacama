@@ -590,7 +590,7 @@
                     ${author || when ? `<div class="var-meta-line">${author} ${when}</div>` : ''}
                 </div>
                 <div class="var-item-meta">
-                    <span class="var-kind-badge ${v.kind}">${kindLabel}</span>
+                    <span class="var-kind-badge ${escapeHtml(v.kind)}">${kindLabel}</span>
                     ${!v.is_active ? '<span class="var-kind-badge inactive">Inativa</span>' : ''}
                     <div class="var-item-actions">
                         <button class="btn-icon" title="Editar" onclick="window._editVar(${Number(v.id)})">

@@ -2070,7 +2070,7 @@
                 <div class="conv-item ${isActive ? 'active' : ''} ${isUnread ? 'unread' : ''} ${aguardandoHumano ? 'aguardando-humano' : ''}"
                      data-id="${conv.id}" onclick="window._openConv(${conv.id})">
                     <div class="conv-avatar">
-                        ${initials}
+                        ${escapeHtml(initials)}
                         ${isOpenStatus(conv.status) ? '<div class="online-dot"></div>' : ''}
                     </div>
                     <div class="conv-info">
