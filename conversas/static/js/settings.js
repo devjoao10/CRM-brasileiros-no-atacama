@@ -297,7 +297,7 @@
                         <!-- AUDIT-2026-08-W2D-orq: r.trigger ia CRU para dentro de um literal
                              JS aqui e no botao Salvar. escapeHtml nem resolveria: o parser
                              decodifica a entidade ANTES de o JS compilar. Vai por data-trigger. -->
-                        <input type="checkbox" ${r.is_active ? 'checked' : ''} data-trigger="${escapeHtml(r.trigger)}" onchange="window._toggleAutoReply(this.dataset.trigger, this.checked)">
+                        <input type="checkbox" ${r.is_active ? 'checked' : ''} data-trigger="${escapeHtml(r.trigger)}" onchange="window._toggleAutoReply(this.dataset.trigger, this.checked, this)">
                         <span class="toggle-slider"></span>
                     </label>
                 </div>
@@ -310,12 +310,25 @@
         `).join('');
     }
 
-    window._toggleAutoReply = async function (trigger, isActive) {
-        await Auth.apiRequest(`/api/settings/auto-replies/${trigger}`, {
+    window._toggleAutoReply = async function (trigger, isActive, checkbox) {
+        // CONV-EXPEDIENTE-01: manda junto o texto que esta na caixa (o mesmo elemento que o Salvar
+        // le), para o que fica salvo ser igual ao que o admin ve: ativar uma frase cujo texto salvo
+        // e vazio, mas ja digitado na caixa, nao da 422; e criar uma frase ainda sem linha nao
+        // grava o texto padrao por cima do que foi digitado.
+        const message = document.getElementById(`ar-${trigger}`).value;
+        const resp = await Auth.apiRequest(`/api/settings/auto-replies/${trigger}`, {
             method: 'PUT',
-            body: JSON.stringify({ is_active: isActive }),
+            body: JSON.stringify({ is_active: isActive, message }),
         });
-        showToast(isActive ? 'Frase ativada' : 'Frase desativada');
+        // So confirma se o backend aceitou (antes mostrava "Frase ativada" mesmo com o PUT falhando).
+        if (resp && resp.ok) {
+            showToast(isActive ? 'Frase ativada' : 'Frase desativada');
+            return;
+        }
+        // Em erro (ex.: 422 "Escreva a mensagem antes de ativar") mostra o motivo e desfaz SO este
+        // checkbox, sem recarregar a lista: os rascunhos digitados nas outras frases sobrevivem.
+        checkbox.checked = !isActive;
+        await showBackendError(resp, 'Erro ao atualizar a frase');
     };
 
     window._saveAutoReply = async function (trigger) {
@@ -325,7 +338,7 @@
             body: JSON.stringify({ message }),
         });
         if (resp && resp.ok) showToast('Frase atualizada');
-        else showToast('Erro ao salvar');
+        else await showBackendError(resp, 'Erro ao salvar');
     };
 
     // ─── Business Hours ─────────────────────────
@@ -355,6 +368,20 @@
             </div>
         `).join('');
 
+        // CONV-EXPEDIENTE-01: dia sem linha no banco (id nulo/ausente) NAO esta salvo: o webhook o
+        // trata como aberto o dia todo, e o 09:00/18:00 acima e so o preenchimento padrao da tela.
+        // O aviso diz isso ate o "Salvar Horarios" criar as linhas (ai a tela recarrega e ele some).
+        // Texto fixo, sem dado de usuario, montado com textContent.
+        if (hours.some(h => h.id == null)) {
+            const aviso = document.createElement('div');
+            aviso.setAttribute('role', 'note');
+            aviso.style.cssText = 'margin: 12px 20px 0; padding: 12px 14px; font-size: 13px; line-height: 1.5; '
+                + 'color: var(--dark); background: rgba(214, 158, 46, 0.1); border: 1px solid var(--warning); '
+                + 'border-left-width: 4px; border-radius: var(--radius-md);';
+            aviso.textContent = 'Horario comercial ainda nao salvo: ate voce clicar em "Salvar Horarios", todos os dias contam como abertos o dia todo e a mensagem "Fora do expediente" nao e enviada.';
+            list.insertBefore(aviso, list.firstChild);
+        }
+
         // Toggle time inputs on checkbox change
         list.querySelectorAll('.bh-open').forEach(cb => {
             cb.addEventListener('change', function () {
@@ -380,8 +407,14 @@
             body: JSON.stringify({ days }),
         });
 
-        if (resp && resp.ok) showToast('Horarios salvos');
-        else showToast('Erro ao salvar horarios');
+        if (resp && resp.ok) {
+            showToast('Horarios salvos');
+            // as linhas agora existem: recarrega para o aviso de "ainda nao salvo" sumir
+            await loadBusinessHours();
+        } else {
+            // o 422 diz QUAL dia errou (loc -> posicao em `days`); outros erros ficam sem rotulo
+            await showBackendError(resp, 'Erro ao salvar horarios', err => businessHoursErrorDay(err, days));
+        }
     }
 
     // ─── Quick Replies ──────────────────────────
@@ -614,9 +647,30 @@
         if (typeof err.detail === 'string') return err.detail;
         if (Array.isArray(err.detail) && err.detail.length) {
             const first = err.detail[0];
+            // CONV-EXPEDIENTE-01: o `msg` de um erro de padrao do Pydantic e a regex crua. O unico
+            // `pattern` destas telas e o HH:MM do horario comercial, entao a frase e fixa.
+            if (first && first.type === 'string_pattern_mismatch') return 'Horario invalido: use o formato HH:MM';
             if (first && typeof first.msg === 'string') return first.msg.replace(/^Value error, /, '');
         }
         return fallback;
+    }
+
+    /** CONV-EXPEDIENTE-01: mostra no toast o erro que o backend devolveu (ou o texto padrao).
+     *  `labelFor(err)` e opcional: devolve um rotulo (ex.: o dia da semana) que prefixa a mensagem. */
+    async function showBackendError(resp, fallback, labelFor) {
+        const err = resp ? await resp.json().catch(() => null) : null;
+        const label = labelFor ? labelFor(err) : '';
+        showToast((label ? `${label}: ` : '') + backendError(err, fallback));
+    }
+
+    /** CONV-EXPEDIENTE-01: nome do dia a que um 422 de `PUT /business-hours` se refere, ou ''.
+     *  O Pydantic manda loc = ["body", "days", <posicao em days>, ...]; `days` e a lista que a
+     *  tela enviou (linhas na ordem em que foram desenhadas), entao a posicao vira o weekday dela. */
+    function businessHoursErrorDay(err, days) {
+        const first = err && Array.isArray(err.detail) ? err.detail[0] : null;
+        const loc = first && Array.isArray(first.loc) ? first.loc : [];
+        if (loc[0] !== 'body' || loc[1] !== 'days' || !Number.isInteger(loc[2]) || !days[loc[2]]) return '';
+        return WEEKDAYS[days[loc[2]].weekday] || '';
     }
 
     async function handleSaveVar(e) {

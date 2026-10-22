@@ -15,6 +15,19 @@ else:
     _engine_kwargs["pool_size"] = 10
     _engine_kwargs["max_overflow"] = 20
     _engine_kwargs["pool_pre_ping"] = True  # Detecta conexões mortas
+    # Invariante de isolamento do handoff V2 (BIA-V2 R-B, desenho secao 2.1.1).
+    # READ COMMITTED ja e o default do PostgreSQL, mas ELE PRECISA SER
+    # EXPLICITO: o ramo de replay de `POST /api/v2/lead-domain/handoff` le o
+    # lead SEM `FOR UPDATE` e compara o dono atual contra o livro-razao — sob
+    # READ COMMITTED cada SELECT enxerga o ultimo valor COMMITADO, que e
+    # exatamente o "fresco o bastante" que a comparacao exige. Sob REPEATABLE
+    # READ/SERIALIZABLE o snapshot congelaria no PRIMEIRO SELECT da requisicao
+    # (o do `get_current_user`, antes de a rota rodar) e essa leitura voltaria
+    # obsoleta EM SILENCIO — sem erro nenhum, ao contrario do caminho com
+    # `FOR UPDATE`, que falharia ruidosamente. Nao ha como o CI pegar uma
+    # mudanca acidental aqui: SQLite nao tem o mesmo conceito de nivel de
+    # isolamento, e por isso este parametro so existe no ramo PostgreSQL.
+    _engine_kwargs["isolation_level"] = "READ COMMITTED"
 
 engine = create_engine(DATABASE_URL, **_engine_kwargs)
 

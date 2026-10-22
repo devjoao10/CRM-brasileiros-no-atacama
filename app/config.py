@@ -123,6 +123,27 @@ DEFAULT_ETAPA_NOME = os.getenv("DEFAULT_ETAPA_NOME", "Sem Contato")
 # caller nao seria (o endpoint nao sabe qual caller e). Default "" = nenhuma tag.
 LEAD_TAG_ORIGEM_API = os.getenv("LEAD_TAG_ORIGEM_API", "")
 
+# ─── BIA-V2 Fase 6 (revisao de seguranca) — usuario de servico do handoff ──
+# `POST /api/v2/lead-domain/handoff` (app/routers/v2_lead_domain.py) so pode
+# ser chamado por ESTE usuario — ver a secao AUTORIZACAO do docstring daquele
+# modulo para o motivo (a rota reabre a troca de `responsavel_id` sem passar
+# pela ponte que `PUT /api/leads/{id}/responsavel` bloqueia de proposito).
+#
+# Sem default que funcione, DE PROPOSITO — ao contrario de SECRET_KEY, nao
+# existe um "usuario de servico aleatorio" seguro para inventar em dev.
+# Ausente ou nao-numerico vira None, e nenhum id de usuario real e None: a
+# comparacao dentro do handler falha para QUALQUER chamador, nunca abre por
+# omissao (mesmo estilo do DEFAULT_FUNNEL_ID acima — falha no USO, sem travar
+# a subida do processo). Em producao, docker-compose.yml usa `:?` no bloco do
+# servico `crm` para recusar subir sem esta variavel definida (mesmo mecanismo
+# de CONVERSAS_API_KEY/SECRET_KEY ali).
+_v2_lead_domain_service_user_id_raw = os.getenv("V2_LEAD_DOMAIN_SERVICE_USER_ID", "").strip()
+V2_LEAD_DOMAIN_SERVICE_USER_ID = (
+    int(_v2_lead_domain_service_user_id_raw)
+    if _v2_lead_domain_service_user_id_raw.isdigit()
+    else None
+)
+
 # Upload
 MAX_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_UPLOAD_SIZE_BYTES", str(10 * 1024 * 1024)))  # 10MB
 

@@ -4,9 +4,9 @@ PACOTE-A — estado operacional confiavel do Conversas.
 Fonte unica: is_bot_active + atendente_id + queued_at + primeira_resposta_humana_at.
 
   BIA               -> bot=True,  atendente=NULL, queued=NULL,        prh=NULL
-  Fila (sem dono)    -> bot=False, atendente=NULL, queued=<timestamp>, prh=NULL
-  Fila (com dono)    -> bot=False, atendente=<id>, queued=<timestamp>, prh=NULL   <- ATRIBUIDA != ATENDIDA
-  Atendendo (meus)   -> bot=False, atendente=<id>, queued=NULL,        prh=<timestamp>
+  Fila (sem dono)    -> bot=True|False, atendente=NULL, queued=<timestamp>, prh=NULL
+  Fila (com dono)    -> bot=True|False, atendente=<id>, queued=<timestamp>, prh=NULL   <- ATRIBUIDA != ATENDIDA
+  Atendendo (meus)   -> bot=False, atendente=<id>, queued=<timestamp>, prh=<timestamp>  <- queued PRESERVADO (HOTFIX-01)
 
 AUDIT-2026-08-WA — mudanca de regra de negocio (nao e regressao): antes
 `_apply_human_state` zerava queued_at assim que um atendente era definido, o que
@@ -15,27 +15,53 @@ Bia dizia ao cliente que ele estava nela. Agora o eixo fila vs atendimento e
 `primeira_resposta_humana_at`: NULL = ainda esperando (mesmo com dono), NOT NULL =
 alguem respondeu de fato. Ver conversas/app/services/atendimento.py.
 
+HOTFIX-01 — segunda correcao (esta tambem NAO e regressao): ate aqui, a
+PRIMEIRA resposta humana bem-sucedida (`marcar_atendimento_humano`) e qualquer
+operacao de fila rodada DEPOIS dela (`_apply_human_state`, quando
+`primeira_resposta_humana_at` ja nao era NULL) zeravam `queued_at`. Isso
+apagava o instante de entrada na fila assim que ele passava a ter valor de
+metrica ("tempo em fila" / "tempo ate a 1a resposta"), e contradizia
+app/v2/estados.py (que ja exige queued_at IS NOT NULL para
+WAITING_HUMAN/HUMAN_ACTIVE). Agora queued_at e PRESERVADO a partir da 1a
+resposta humana; so o release (`resetar_atendimento=True`) volta a zera-lo,
+de proposito, ao devolver a conversa para o FIM da fila. A secao 18e abaixo
+prova a mudanca.
+
+CONV-BIA-FILA-01 — terceira mudanca de regra (tambem NAO e regressao): entrar ou
+continuar na fila (handoff, assign, release, PUT so com atendente) deixou de
+desligar a Bia; `is_bot_active` so cai por quem ASSUME (claim, botao "Desativar
+Bot", 1a mensagem humana). Por isso, nas secoes 2, 3, 7b, 11, 13b e 17c, o
+`bot=False` do handoff virou `bot=True` (a Bia segue ligada na fila) e o debounce
+da Bia continua agendado apos o handoff; a garantia original — Bia DESLIGADA nao
+e acionada — passa a ser provada apos o claim (13d). A regra nova, com os
+predicados das abas, e provada em tests/test_conversas_bia_ativa_fila.py.
+
 Prova que:
   1. Inbound novo nasce em BIA (bot ligado, sem atendente, sem fila, sem prh).
-  2. Handoff desliga a BIA, RESOLVE um atendente elegivel e carimba queued_at —
-     mas a conversa CONTINUA na fila (prh continua NULL: atribuir != atender).
+  2. Handoff PRESERVA a BIA ligada (CONV-BIA-FILA-01), RESOLVE um atendente
+     elegivel e carimba queued_at — a conversa CONTINUA na fila (prh continua
+     NULL: atribuir != atender).
   3. Handoff e IDEMPOTENTE: retry do n8n nao muda queued_at nem reresolve o
      atendente (nao vai pro fim da fila, nao troca de dono).
   4. RACE — handoff depois de claim: nao mexe na posicao da fila nem no dono.
   5. Claim: atendente=usuario autenticado, bot=False, queued_at PRESERVADO
      (assumir nao e atender).
   6. Claim concorrente continua 409 (trava anti-duplo-atendimento intacta).
-  7. Assign: atendente=destino, bot=False, continua fora do universo da BIA e
-     dentro da fila (prh continua NULL ate a primeira resposta).
-  8. Release: atendente=NULL, bot=False, prh=NULL, queued_at=NOVO timestamp
-     (fim da fila) — inclusive quando libera uma conversa ja atendida.
+  7. Assign: atendente=destino e PRESERVA o flag da Bia (CONV-BIA-FILA-01; aqui ela ja
+     estava desligada pelo claim da secao 5, entao segue False). Usa
+     keep_queue_position=True e continua dentro da fila (prh continua NULL ate a
+     primeira resposta).
+  8. Release: atendente=NULL, PRESERVA o flag da Bia (aqui ja desligada pelo claim),
+     prh=NULL, queued_at=NOVO timestamp (fim da fila) — inclusive quando libera uma
+     conversa ja atendida.
   9. Initiate: quem inicia assume E ja atendeu (prh preenchido), sem fila.
  10. Reabertura (encerrada + inbound): volta para a BIA, SEM herdar atendente
      nem a resposta humana anterior (prh volta a NULL).
  11. Inbound em conversa JA aberta nao toca o estado operacional (FIFO firme).
  12. FIFO: mensagem nova do cliente NAO altera queued_at nem a ordem da fila.
- 13. BIA/debounce: agenda antes do handoff, NAO agenda depois, volta a agendar
-     apos reabertura.
+ 13. BIA/debounce: agenda antes E depois do handoff (a Bia segue ligada na fila),
+     NAO agenda depois que a vendedora a desliga (claim), volta a agendar apos
+     reabertura.
  14. Nenhuma operacao de fila escreve na tabela `leads`.
  15. Handoff exige autenticacao (sem credencial -> 401).
  16. Migration m008: coluna, indices, correcao de bot legado, dados preservados.
@@ -224,11 +250,14 @@ client.post("/webhook", json=inbound("wamid.S2", "5511900066601"))
 check(scheduled == [c1], "pre-handoff: debounce da BIA agendado")
 
 # ============ 2. HANDOFF ============
-print("2 — handoff desliga BIA, RESOLVE atendente e carimba queued_at (continua na fila)")
+print("2 — handoff PRESERVA a BIA ligada, RESOLVE atendente e carimba queued_at (continua na fila)")
 r = client.post(f"/api/conversations/{c1}/handoff")
 check(r.status_code == 200, f"handoff responde 200 (got {r.status_code})")
 bot, at, q1, prh, st = state(c1)
-check(bot is False, "handoff: is_bot_active=False")
+# CONV-BIA-FILA-01 — era `check(bot is False, "handoff: is_bot_active=False")`:
+# entrar na fila nao desliga mais a Bia; quem desliga e a vendedora (claim,
+# botao "Desativar Bot" ou 1a mensagem humana).
+check(bot is True, "handoff: is_bot_active continua True (CONV-BIA-FILA-01: a Bia segue ligada na fila)")
 # AUDIT-2026-08-WA — inverte "atendente_id continua NULL": handoff agora
 # RESOLVE um atendente elegivel (ATENDENTES_ELEGIVEIS=1 fixado no topo do
 # arquivo -> sempre o usuario 1, o comportamento de hoje com uma unica atendente).
@@ -252,14 +281,18 @@ bot, at, q2, prh, st = state(c1)
 check(q2 == q1, "retry do n8n NAO altera queued_at")
 # AUDIT-2026-08-WA — inverte "bot=False e atendente=NULL": atendente agora e 1
 # (resolvido no primeiro handoff); o retry NAO rerresolve nem troca de dono.
-check(bot is False and at == 1, "retry mantem bot=False e atendente=1 (nao rerresolve)")
+check(bot is True and at == 1, "retry mantem a Bia ligada e atendente=1 (nao rerresolve)")
 check(prh is None, "retry: primeira_resposta_humana_at continua NULL")
 
-# ============ 13b. BIA NAO agenda depois do handoff ============
-print("13b — BIA NAO agendada DEPOIS do handoff")
+# ============ 13b. BIA CONTINUA agendada depois do handoff ============
+# CONV-BIA-FILA-01 — era "BIA NAO agendada DEPOIS do handoff"
+# (`check(scheduled == [], ...)`): o handoff deixou de desligar a Bia, entao o
+# proximo inbound do cliente na fila volta a acionar o debounce. A garantia
+# original (Bia DESLIGADA nao e acionada) e provada apos o claim, em 13d.
+print("13b — BIA CONTINUA agendada DEPOIS do handoff (a Bia segue ligada na fila)")
 scheduled.clear()
 client.post("/webhook", json=inbound("wamid.S3", "5511900066601"))
-check(scheduled == [], "pos-handoff: debounce da BIA NAO agendado")
+check(scheduled == [c1], "pos-handoff: debounce da BIA agendado (CONV-BIA-FILA-01)")
 
 # ============ 12. FIFO — inbound nao move a fila ============
 print("12 — FIFO: mensagem do cliente nao muda queued_at")
@@ -269,7 +302,9 @@ check(q3 == q1, "inbound do cliente NAO altera queued_at")
 # ============ 11. inbound em conversa aberta preserva estado ============
 print("11 — inbound em conversa JA aberta preserva estado operacional")
 # AUDIT-2026-08-WA — atendente agora e 1 (nao mais NULL) desde o handoff.
-check(bot is False and at == 1, "inbound normal: bot/atendente inalterados (permanece 1)")
+# CONV-BIA-FILA-01 — era `bot is False`: a Bia segue ligada na fila.
+check(bot is True and at == 1,
+      "inbound normal: bot/atendente inalterados (Bia segue ligada, atendente permanece 1)")
 check(prh is None, "inbound normal: primeira_resposta_humana_at inalterado (continua NULL)")
 
 # FIFO com tres conversas
@@ -305,10 +340,20 @@ check(bot is False, "claim: is_bot_active=False")
 check(q == q1, "claim: queued_at PRESERVADO (assumir != atender)")
 check(prh is None, "claim: primeira_resposta_humana_at continua NULL")
 
+# ============ 13d. BIA NAO agenda depois que a vendedora a desliga ============
+# CONV-BIA-FILA-01 — a garantia que 13b provava apos o handoff (Bia DESLIGADA nao
+# e acionada) passa a ser provada aqui, apos o claim, que e quem a desliga.
+print("13d — BIA NAO agendada DEPOIS do claim (a vendedora desligou a Bia)")
+scheduled.clear()
+client.post("/webhook", json=inbound("wamid.S3b", "5511900066601"))
+check(scheduled == [], "pos-claim: debounce da BIA NAO agendado")
+
 # ============ 5b. CLAIM DIRETO DA BIA (mutante F) ============
 # Isolado de proposito: no fluxo acima o handoff ja tinha desligado a BIA,
 # entao "bot=False apos claim" passava trivialmente. Aqui a conversa esta em
 # BIA PURA, provando a transicao True -> False feita pelo proprio claim.
+# (CONV-BIA-FILA-01: o handoff deixou de desligar a BIA, entao a secao 5 tambem
+# prova essa transicao agora; 5b segue isolando o claim a partir da BIA pura.)
 print("5b — claim direto de uma conversa em BIA desliga a BIA e entra na fila")
 client.post("/webhook", json=inbound("wamid.B1", "5511900066621"))
 cBia = conv_id_of("5511900066621")
@@ -350,13 +395,15 @@ r = client.post(f"/api/conversations/{c1}/assign", json={"user_id": 2})
 check(r.status_code == 200, f"assign responde 200 (got {r.status_code})")
 bot, at, q, prh, st = state(c1)
 check(at == 2, "assign: atendente_id = destino")
-check(bot is False, "assign: is_bot_active=False")
+check(bot is False,
+      "assign: is_bot_active continua False (assign preserva o flag; a Bia ja estava desligada pelo claim da secao 5)")
 # AUDIT-2026-08-WA — inverte "assign: queued_at=NULL": atribuir nao tira da
-# fila. ACHADO: assign_conversation (conversas/app/routers/conversations.py)
-# chama _apply_human_state SEM keep_queue_position=True (diferente de claim e
-# handoff), entao na pratica ele troca queued_at por um NOVO "agora" em vez de
-# preservar o antigo. O que esta suite pode garantir e que ele NAO fica NULL;
-# a divergencia de posicao exata esta reportada no resumo final.
+# fila. assign_conversation (conversas/app/routers/conversations.py) chama
+# _apply_human_state com keep_queue_position=True e desligar_bia=False: preserva
+# a posicao na fila (queued_at) E o flag da Bia — por isso o bot segue False aqui,
+# onde o claim da secao 5 ja o tinha desligado. Este check so exige queued_at
+# preenchido (NAO NULL); a preservacao exata da posicao e do flag e provada em
+# tests/test_conversas_bia_ativa_fila.py (secao 3).
 check(q is not None, "assign: queued_at continua preenchido (NAO fica NULL)")
 check(prh is None, "assign: primeira_resposta_humana_at continua NULL (ainda nao foi atendida)")
 
@@ -381,7 +428,9 @@ bot, at, q, prh, _ = state(cFila)
 # conversa da fila NAO tira ela da fila.
 check(q is not None, "assign a partir da fila: queued_at continua preenchido (NAO fica NULL)")
 check(at == 2, "assign a partir da fila: atendente_id = destino")
-check(bot is False, "assign a partir da fila: is_bot_active=False")
+# CONV-BIA-FILA-01 — era `check(bot is False, ...)`: atribuir nao e assumir, o
+# flag da Bia e preservado (a conversa so passou pelo handoff, que a manteve ligada).
+check(bot is True, "assign a partir da fila: a Bia continua ligada (CONV-BIA-FILA-01: atribuir nao desliga)")
 check(prh is None, "assign a partir da fila: continua sem resposta humana (continua na FILA)")
 
 # ============ 8. RELEASE ============
@@ -562,7 +611,9 @@ r = client.post(f"/api/conversations/{cEl3}/handoff")
 check(r.status_code == 200, "handoff sem ninguem elegivel NAO levanta excecao (200)")
 bot3, at3, q3b, prh3, st3 = state(cEl3)
 check(at3 is None, "sem elegivel: atendente_id continua NULL")
-check(bot3 is False, "sem elegivel: bot desligado mesmo assim (saiu da BIA)")
+# CONV-BIA-FILA-01 — era `check(bot3 is False, "... (saiu da BIA)")`: sem
+# elegivel a conversa tambem entra na fila COM a Bia ligada, sem dono.
+check(bot3 is True, "sem elegivel: a Bia continua ligada (CONV-BIA-FILA-01), a conversa entra na fila sem dono")
 check(q3b is not None, "sem elegivel: queued_at preenchido (continua na fila, so sem dono)")
 check(prh3 is None, "sem elegivel: primeira_resposta_humana_at continua NULL")
 
@@ -647,7 +698,11 @@ r = client.post(f"/api/conversations/{cNovo}/messages",
 check(r.status_code == 200, f"primeiro envio humano responde 200 (got {r.status_code})")
 bot2, at2, q2, prh2, st2 = state(cNovo)
 check(prh2 is not None, "primeira resposta humana: primeira_resposta_humana_at preenchido")
-check(q2 is None, "primeira resposta humana: sai da fila (queued_at=NULL)")
+# HOTFIX-01 (era `check(q2 is None, ...)` — "sai da fila (queued_at=NULL)"):
+# a classificacao fila/meus continua sendo por primeira_resposta_humana_at (ver
+# _inbox_predicates); queued_at agora e PRESERVADO, nao apagado, para que o
+# instante de entrada na fila sobreviva a 1a resposta humana.
+check(q2 == q_h, "primeira resposta humana: queued_at PRESERVADO (HOTFIX-01, nao apaga mais o instante de entrada na fila)")
 check(at2 == at, "primeira resposta humana: mantem o mesmo atendente")
 check(bot2 is False, "primeira resposta humana: bot continua desligado")
 
@@ -784,6 +839,7 @@ r = client.post(f"/api/conversations/{cRet}/messages",
                 json={"content": "Bom dia, aqui e a Julia", "msg_type": "text"})
 check(r.status_code == 200, f"20 — primeiro atendimento responde 200 (got {r.status_code})")
 prh_antes = state(cRet)[3]
+q_antes = state(cRet)[2]  # HOTFIX-01: baseline para provar que a retomada preserva queued_at
 
 r = client.put(f"/api/conversations/{cRet}", json={"status": "encerrada"})
 check(r.status_code == 200, "20 — PUT status=encerrada responde 200")
@@ -800,7 +856,12 @@ bot_r, at_r, q_r, prh_r, st_r = state(cRet)
 check(st_r == "aberta", f"20a — status volta para 'aberta' (got {st_r!r})")
 check(at_r == 1, f"20a — atendente_id preservado (got {at_r!r})")
 check(prh_r == prh_antes, "20a — primeira_resposta_humana_at do ciclo NAO e reescrita")
-check(q_r is None, "20a — nao volta para a fila (queued_at continua NULL)")
+# HOTFIX-01 (era `check(q_r is None, ...)` — "nao volta para a fila"): a
+# conversa ja tinha primeira_resposta_humana_at != NULL ANTES de encerrar, entao
+# marcar_atendimento_humano so reabre o status (early-return antes de tocar
+# queued_at) — o valor sobrevive intacto, nao "continua NULL".
+check(q_r == q_antes, "20a — queued_at PRESERVADO (HOTFIX-01): retomada nao apaga o "
+                      "instante de entrada na fila original")
 check(bot_r is False, "20a — BIA continua desligada")
 
 print("20b — a conversa retomada volta a ser VISIVEL para quem escreveu")

@@ -4,6 +4,7 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -15,10 +16,13 @@ from slowapi.middleware import SlowAPIMiddleware
 from app.config import PROJECT_NAME, VERSION, DESCRIPTION, API_PREFIX, ENVIRONMENT
 from app.database import engine, Base
 from app.limiter import limiter
+from app.logging_config import configurar_logging
 from app.routers import auth, users, leads, tags, pipeline, segments, teams, pages, tasks, analytics, ai
 from app.routers import operational_boards, operational_cards, operational_flow, operational_checklists, operational_comments, operational_notifications, operational_pending, operational_pages
 from app.routers import internal_tasks  # Gestão Interna (WP-GI)
+from app.routers import v2_lead_domain  # BIA-V2 Fase 6 — handoff idempotente
 from app.models.lead import Lead  # noqa: F401
+from app.models.lead_handoff_operation import LeadHandoffOperation  # noqa: F401 — BIA-V2 Fase 6
 from app.models.tag import Tag, lead_tags  # noqa: F401
 from app.models.pipeline import Funnel, FunnelEntry, LeadHistory  # noqa: F401
 from app.models.segment import Segment  # noqa: F401
@@ -31,6 +35,12 @@ import app.models.operational.checklist  # noqa: F401
 import app.models.operational.notification  # noqa: F401
 from app.models.internal_task import InternalTask  # noqa: F401 — Gestão Interna (WP-GI)
 from app.seed import seed_database
+
+# BIA-V2 Fase 6 (HOTFIX-08) — ANTES de qualquer `getLogger`/`.info` deste
+# processo. Sem isto o root logger fica em WARNING e sem handler, e toda a
+# trilha `.info` do CRM — inclusive a do endpoint de handoff registrado abaixo
+# — morre dentro do processo. Ver `app/logging_config.py`.
+configurar_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +87,12 @@ app = FastAPI(
     description=DESCRIPTION,
     docs_url="/docs" if ENVIRONMENT == "development" else None,
     redoc_url="/redoc" if ENVIRONMENT == "development" else None,
+    # BIA-V2 Fase 6 (achado do fastapi-reviewer) — sem isto, `/openapi.json`
+    # continuava servindo o schema completo em producao mesmo com docs/redoc
+    # desligados: a UI ficava fechada, mas o JSON cru (inclusive descriptions
+    # de operation com raciocinio interno) continuava publico. Mesmo gate que
+    # docs_url/redoc_url acima, aplicado ao app inteiro — nao so a v2_lead_domain.
+    openapi_url="/openapi.json" if ENVIRONMENT == "development" else None,
     lifespan=lifespan,
 )
 
@@ -86,6 +102,66 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # SlowAPIMiddleware aplica o default_limits global (200/minute por IP) a todas as rotas.
 # Limites por rota (ex.: login 5/minute) continuam via @limiter.limit no router.
 app.add_middleware(SlowAPIMiddleware)
+
+
+# ─── Excecoes de dominio da V2 → status HTTP ──────────────────────────
+# BIA-V2 Fase 6. Registrado na instancia FastAPI RAIZ, no mesmo molde do
+# `add_exception_handler` do rate limiter acima. Um handler registrado num
+# `APIRouter` NUNCA e chamado, nem para as rotas daquele router: a excecao
+# cairia no 500 default do Starlette — exatamente o que este mapeamento existe
+# para evitar.
+#
+# `HandoffIndeterminado` e a unica excecao de `v2_lead_domain.py` que nao e um
+# `HTTPException` (404/422/409 sao levantados na rota). Ela sinaliza que o
+# banco recusou a gravacao por um motivo que NAO e a colisao esperada de
+# `event_id`, ou seja: o estado nao pode ser afirmado. 500 e o status correto —
+# o servidor nao concluiu —, mas o corpo e generico DE PROPOSITO: o
+# `IntegrityError` original carrega SQL, nome de constraint e nome de coluna, e
+# nada disso pode chegar ao cliente. O detalhe fica no log do servidor.
+#
+# O corpo e token estruturado, nao prosa: este 500 e o unico nao-2xx do handoff
+# V2 que nasce FORA de `v2_lead_domain.py`, e deixa-lo como string solta furaria
+# a regra de "todo nao-2xx desta rota responde `{"detail": {"error": ...}}`" no
+# unico caso em que o cliente mais precisa distinguir "nao aplicou" de "nao sei".
+async def _handoff_indeterminado_handler(
+    request: StarletteRequest, exc: v2_lead_domain.HandoffIndeterminado
+):
+    # WP-R11-PII-02 — este log NAO carrega mais nem `str(exc)` nem o traceback.
+    #
+    # `HandoffIndeterminado` e construida em `v2_lead_domain.py` interpolando
+    # `{exc}` da excecao original do SQLAlchemy, cuja `str()` embute o SQL
+    # completo E os parametros ligados. Uma auditoria desta rodada percorreu
+    # todo statement por onde este endpoint pode falhar e confirmou que os
+    # parametros de hoje sao so ids — ou seja, NAO ha vazamento ativo. Mas o
+    # log ficava dependendo dessa propriedade se manter verdadeira a cada
+    # query nova, e isso nao e uma garantia: e uma coincidencia auditada. O
+    # resto da trilha V2 (`gate.py`, `estados.py`, `handoff.py`) ja registra
+    # so token fechado e id, e este handler era a excecao.
+    #
+    # O que sobra e o que diagnostica sem carregar dado: a rota, o tipo da
+    # excecao de dominio e o tipo da causa original (OperationalError x
+    # IntegrityError x outra) — que e o sinal de verdade para decidir se foi
+    # `lock_timeout`, conexao caida ou violacao de restricao. O `event_id` da
+    # requisicao ja esta na trilha de `handoff_operations`/`conversation_events`,
+    # que e por onde se correlaciona o caso concreto.
+    causa = exc.__cause__
+    logger.error(
+        "Handoff V2 indeterminado em %s: %s%s. Detalhe da excecao SUPRIMIDO "
+        "deliberadamente (a mensagem embute SQL e parametros ligados); "
+        "correlacione pelo event_id na trilha de handoff_operations.",
+        request.url.path,
+        type(exc).__name__,
+        f" causada por {type(causa).__name__}" if causa is not None else "",
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": {"error": v2_lead_domain.TokenErroHandoff.HANDOFF_NAO_APLICADO}
+        },
+    )
+
+
+app.add_exception_handler(v2_lead_domain.HandoffIndeterminado, _handoff_indeterminado_handler)
 
 # CORS
 # AUDIT-2026-08-W1B (F8) tirou o curinga do Conversas e explicou por que:
@@ -191,6 +267,8 @@ app.include_router(operational_notifications.router)
 app.include_router(operational_pending.router)
 app.include_router(operational_pages.router)
 app.include_router(internal_tasks.router)
+# BIA-V2 Fase 6 — operacao comercial idempotente chamada pelo Conversas
+app.include_router(v2_lead_domain.router)
 # Include page routes (must be last to not conflict with API routes)
 app.include_router(pages.router)
 

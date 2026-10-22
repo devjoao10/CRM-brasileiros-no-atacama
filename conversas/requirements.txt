@@ -7,3 +7,13 @@ pydantic==2.11.2
 httpx==0.28.1
 python-multipart==0.0.20
 jinja2==3.1.6
+# IA Interpretadora e IA Comunicadora (BIA-V2 Fases 8 e 9). NAO e
+# google-generativeai (o SDK do CRM) — esse pacote esta sem suporte a
+# montante (FutureWarning na propria importacao); ver o docstring de
+# app/v2/interpretador.py. Pin em 1.75.0 (nao a serie 2.x mais recente)
+# porque 2.x exige pydantic>=2.12.5, acima do pydantic==2.11.2 fixado acima —
+# 1.75.0 e a ultima release compativel com pydantic<3.0.0,>=2.9.0. Unico SDK
+# do Gemini no lado Conversas (a Fase 9 usava google-generativeai ate uma
+# reconciliacao pos-implementacao padronizar os dois consumidores V2 neste
+# pacote — ver o docstring de app/v2/comunicador.py).
+google-genai==1.75.0

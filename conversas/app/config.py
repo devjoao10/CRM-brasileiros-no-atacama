@@ -3,7 +3,7 @@ import secrets
 
 # ─── App ─────────────────────────────────────────
 PROJECT_NAME = "Conversas — Brasileiros no Atacama"
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 DESCRIPTION = "Plataforma de conversas WhatsApp integrada ao CRM"
 API_PREFIX = "/api"
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
@@ -40,6 +40,34 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"
 
 # ─── CRM Integration ────────────────────────────
 CRM_BASE_URL = os.getenv("CRM_BASE_URL", "http://127.0.0.1:8000")
+# BIA-V2 Fase 6 — credencial da ponte Conversas -> CRM (direcao INVERSA da
+# `CONVERSAS_API_KEY` de app/config.py, que e a ponte CRM -> Conversas).
+# Deve ser a API key de um usuario real da tabela `users` compartilhada, nunca
+# um segredo novo — o CRM autentica esta chamada com a mesma dependency de API
+# key que ja usa para as demais rotas /api/.
+#
+# NOME `BIA_V2_CRM_API_KEY`, NAO `CRM_API_KEY` (achado #2 da revisao da Fase 6)
+# `CRM_API_KEY` colide com uma variavel de AMBIENTE N8N do workflow
+# "Notificação WhatsApp" (n8n/workflows/Notificação WhatsApp.json), que e uma
+# credencial DIFERENTE — a API key que o N8N usa para chamar o Conversas
+# (direcao N8N -> Conversas), nao a que o Conversas usa para chamar o CRM
+# (direcao Conversas -> CRM, esta aqui). Dois sistemas diferentes (n8n e este
+# `.env`), dois significados diferentes, mesmo nome literal: um operador que
+# visse "CRM_API_KEY" num painel do n8n e copiasse o valor para o `.env` deste
+# app (ou vice-versa) configuraria a credencial ERRADA sem nenhum sinal de
+# erro imediato — o guard `if not` abaixo so pega AUSENCIA, nao valor trocado.
+# O prefixo `BIA_V2_` torna as duas variaveis inconfundiveis pelo nome.
+#
+# Vazia (default) = ponte DESLIGADA. Diferente da ponte irma, aqui o desligamento
+# NAO e no-op silencioso: `app/v2/handoff.py` registra a operacao como FAILED
+# com `CRM_SEM_CREDENCIAL` e emite `HANDOFF_FAILED`. Handoff que "some" deixaria
+# o cliente esperando com o bot ligado — exatamente a falha que a V2 corrige.
+#
+# `.strip()` (mesmo padrao de `N8N_WEBHOOK_AUTH_VALUE` abaixo): sem ele, um
+# valor `" "` (espaco) passaria pelo guard `if not BIA_V2_CRM_API_KEY` do
+# `app/v2/handoff.py` — que so recusa string VAZIA — e viraria um header
+# `X-API-Key` invalido em vez do diagnostico correto de "credencial ausente".
+BIA_V2_CRM_API_KEY = os.getenv("BIA_V2_CRM_API_KEY", "").strip()
 
 # ─── Meta Cloud API (WhatsApp) ───────────────────
 META_VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN", "")
@@ -72,6 +100,82 @@ N8N_AGENT_ENABLED = os.getenv("N8N_AGENT_ENABLED", "false").lower() == "true"
 N8N_WEBHOOK_AUTH_HEADER = os.getenv("N8N_WEBHOOK_AUTH_HEADER", "").strip()
 N8N_WEBHOOK_AUTH_VALUE = os.getenv("N8N_WEBHOOK_AUTH_VALUE", "").strip()
 
+# ─── IA Gemini (BIA-V2 Fases 8 e 9) ───────────────
+# Mesmo nome de env var do CRM (app/config.py) — a chave e a MESMA credencial
+# Gemini; o SDK que a consome diverge do CRM (google-genai aqui, nao
+# google.generativeai — ver o docstring de app/v2/interpretador.py para o
+# motivo). Vazio por default, sem RuntimeError: mesmo padrao lazy-check do
+# CRM — ausencia so falha na hora de chamar a IA, nunca no boot.
+#
+# UNICA definicao para os DOIS consumidores V2: app/v2/interpretador.py
+# (Fase 8, `_chamar_llm`) e app/v2/comunicador.py (Fase 9, `_chamar_gemini`).
+# As duas fases originalmente declaravam esta variavel em blocos separados —
+# a Fase 9 tambem tinha decidido usar google.generativeai para espelhar
+# app/routers/ai.py (CRM); uma reconciliacao pos-implementacao padronizou os
+# dois consumidores V2 em google-genai (o SDK ja verificado pela Fase 8) e
+# uniu a declaracao aqui. Cada consumidor cria seu proprio
+# `genai.Client(api_key=GEMINI_API_KEY)` — sem estado compartilhado alem da
+# leitura desta constante.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+# ─── BIA-V2 Fase 10 — modo de execucao do pipeline V2 ────────────
+# "dry_run" (default) nao aplica NENHUM efeito real: app/v2/pipeline.py nunca
+# chama handoff_to_human() de verdade (a UNICA funcao de todo o pipeline V2
+# com efeito irreversivel — grava em `conversations`/`handoff_operations` e
+# fala com o CRM), e nenhum envio real ao WhatsApp acontece (nao implementado
+# nesta fase). "live" e o UNICO outro valor reconhecido, e habilita o handoff
+# de verdade. Fail-closed (contrato da Fase 10): qualquer valor que NAO seja
+# exatamente "live" e tratado como dry_run — nunca o inverso. Cobre typo,
+# string vazia, e qualquer modo hipotetico futuro ainda nao desenhado.
+V2_MODE = os.getenv("V2_MODE", "dry_run")
+
+# ─── BIA-V2 Fase 10 (achado de seguranca pos-implementacao) — credencial do
+# webhook do agente ───────────────────────────────────────────────────────
+# `POST /webhook/agent-bia-v2` (app/routers/v2_agent.py) e alcancavel
+# publicamente (mesmo Traefik que expoe o webhook da Meta) e, mesmo em
+# V2_MODE=dry_run, ja escreve `conversation_events` reais e chama o Gemini
+# (I/O pago) para qualquer `conversation_id` existente — sem credencial,
+# alcancavel por qualquer chamador que descubra a URL.
+#
+# Nem BIA_V2_CRM_API_KEY (Fase 6) nem N8N_WEBHOOK_AUTH_HEADER/VALUE (acima)
+# servem prontas aqui: as duas sao OUTBOUND (a credencial que o CONVERSAS
+# apresenta AO CRM, e o cabecalho que o CONVERSAS manda AO n8n,
+# respectivamente) — nenhuma protege uma rota INBOUND deste proprio app.
+# Mecanismo dedicado: o router compara o cabecalho `X-Webhook-Auth` contra
+# este valor, em tempo constante.
+#
+# Vazio (default) = a dependency recusa TODA chamada com 401 — mesma
+# disciplina fail-closed de V2_LEAD_DOMAIN_SERVICE_USER_ID/BIA_V2_CRM_API_KEY
+# (Fase 6): nunca permissivo por omissao. `.strip()` pelo mesmo motivo de
+# BIA_V2_CRM_API_KEY acima (um valor so-espaco nao deveria virar credencial
+# "configurada").
+V2_AGENT_WEBHOOK_AUTH_VALUE = os.getenv("V2_AGENT_WEBHOOK_AUTH_VALUE", "").strip()
+
+# ─── BIA-V2 (achado de seguranca da revisao da rota sombra) — credencial
+# PROPRIA de `POST /webhook/agent-bia-v2-shadow` ─────────────────────────
+# Ate esta correcao a sombra (app/routers/v2_agent_sombra.py) importava a
+# verificacao de `v2_agent.py` e comparava contra a MESMA
+# V2_AGENT_WEBHOOK_AUTH_VALUE acima, da rota VIVA. O problema: se o node do
+# n8n que chama a sombra apontar para a URL SEM o sufixo `-shadow` (erro de
+# configurar a URL, nao a credencial), a chamada autentica normalmente
+# contra a rota VIVA — e `executar_pipeline` ja grava uma linha real de
+# MESSAGE_RECEIVED em `conversation_events` ANTES de recusar `LEGACY` com
+# 409 (ver o docstring de app/routers/v2_agent.py). Toda mensagem de
+# producao espelhada por essa URL errada gravaria uma linha real, sem
+# nenhum efeito visivel ate alguem notar.
+#
+# Com credenciais DIFERENTES esse mesmo erro de URL vira 401 imediato (a
+# sombra nunca aceita a credencial viva, nem vice-versa) em vez de escrita
+# silenciosa. NAO simplificar isto de volta para reusar
+# V2_AGENT_WEBHOOK_AUTH_VALUE — a separacao das duas credenciais E o ponto
+# desta mudanca, nao um detalhe incidental.
+#
+# Mesma disciplina fail-closed da variavel irma acima: vazia (default)
+# recusa TODA chamada com 401, nunca abre por omissao. `.strip()` pelo
+# mesmo motivo — um valor so-espaco nao deveria virar credencial
+# "configurada".
+V2_AGENT_SHADOW_WEBHOOK_AUTH_VALUE = os.getenv("V2_AGENT_SHADOW_WEBHOOK_AUTH_VALUE", "").strip()
+
 # ─── Media storage (CONV-02) ─────────────────────
 # Espelho local dos binarios de midia (media_assets.local_path e RELATIVO a este dir).
 # Default fica sob conversas/uploads/ (ja coberto pelo .gitignore). Em producao:
@@ -80,3 +184,12 @@ MEDIA_STORAGE_DIR = os.getenv(
     "CONVERSAS_MEDIA_DIR",
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads", "media"),
 )
+
+# ─── BIA-V2 R13 — retencao de `conversation_events` ──────────────
+# Quantos dias de `conversation_events` (trilha de auditoria append-only —
+# ver conversas/app/models/evento.py) sao mantidos antes de ficarem
+# elegiveis para limpeza por scripts/cleanup_conversation_events.py. 180 dias
+# e um DEFAULT CONSERVADOR de partida, pendente de uma decisao explicita de
+# compliance/juridico sobre o prazo real de retencao — nao inventar essa
+# decisao aqui.
+CONVERSATION_EVENTS_RETENTION_DAYS = int(os.getenv("CONVERSATION_EVENTS_RETENTION_DAYS", "180"))

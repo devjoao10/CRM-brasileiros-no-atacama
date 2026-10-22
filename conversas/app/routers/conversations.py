@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFil
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import set_committed_value
 from sqlalchemy import and_, case, desc, func, or_, update as sa_update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db, IS_SQLITE
@@ -256,14 +257,32 @@ def _inbox_predicates(inbox: str, current_user_id: int) -> list:
     nao decide mais se a conversa esta esperando. Uma conversa atribuida a
     Julia e ainda nao respondida aparece na FILA (para qualquer um ver que ha
     alguem esperando), nao em "meus atendimentos" dela.
+
+    CONV-BIA-FILA-01 — `queued_at` TAMBEM classifica o lado humano. Entrar na
+    fila deixou de desligar a Bia (ver `aplicar_estado_humano`), entao
+    `is_bot_active` sozinho nao separa mais "triagem com a Bia" de "esperando um
+    humano": a conversa pode estar na fila COM a Bia ainda respondendo, ate a
+    vendedora desliga-la. O que marca a espera e `queued_at` — carimbado ao
+    entrar na fila e so devolvido a NULL quando a conversa inteira volta para a
+    Bia (PUT `is_bot_active=true` ou reabertura de conversa encerrada):
+
+        bia   = aberta AND bot ligado AND queued_at IS NULL    (so a triagem)
+        fila  = aberta AND (bot desligado OR queued_at NOT NULL) AND sem 1a resposta
+        todos = aberta AND (bot desligado OR queued_at NOT NULL)
+
+    `bia` e `todos` seguem disjuntas e juntas cobrem toda conversa aberta.
+    `meus` e `encerradas` nao mudam: a primeira resposta humana desliga a Bia, e
+    `meus` continua exigindo bot desligado.
     """
     aberta = Conversation.status.in_(LEGACY_OPEN_STATUSES)
     humana = Conversation.is_bot_active.is_(False)
+    na_fila = Conversation.queued_at.isnot(None)
+    lado_humano = or_(humana, na_fila)
     aguardando = Conversation.primeira_resposta_humana_at.is_(None)
     if inbox == "bia":
-        return [aberta, Conversation.is_bot_active.is_(True)]
+        return [aberta, Conversation.is_bot_active.is_(True), Conversation.queued_at.is_(None)]
     if inbox == "fila":
-        return [aberta, humana, aguardando]
+        return [aberta, lado_humano, aguardando]
     if inbox == "meus":
         return [
             aberta,
@@ -272,7 +291,7 @@ def _inbox_predicates(inbox: str, current_user_id: int) -> list:
             Conversation.atendente_id == current_user_id,
         ]
     if inbox == "todos":
-        return [aberta, humana]
+        return [aberta, lado_humano]
     if inbox == "encerradas":
         return [Conversation.status == "encerrada"]
     raise HTTPException(
@@ -449,6 +468,119 @@ def _repair_responsavel_cache(db: Session, conversation: Conversation, lead_resp
     set_committed_value(conversation, "responsavel_id", rid)
     set_committed_value(conversation, "responsavel_nome", rnome)
     return True
+
+
+# CONV-HOTFIX-R10-01 (correcao aprovada nesta rodada; ver bia-v2-r8-r10-inventory.md
+# secao 2.3) — nome da CHECK constraint criada por migrations/m015. Constante
+# nomeada em vez de literal solto porque ela e comparada contra o texto do erro
+# do driver, e um erro de digitacao aqui viraria "engoliu tudo em silencio".
+_CHECK_ATENDIMENTO_HUMANO = "ck_conversations_estado_humano"
+
+
+def _reparar_responsavel_tolerando_recusa(
+    db: Session, conversation: Conversation, lead_resp: dict
+) -> bool:
+    """
+    CONV-HOTFIX-R10-01 — `_repair_responsavel_cache` que sobrevive a uma recusa
+    do banco. Mesmo retorno da funcao que envolve: True se houve reparo.
+
+    O PROBLEMA (mecanico, nao hipotetico). `_repair_responsavel_cache` alinha o
+    responsavel da conversa ao do lead (o CRM e a fonte de verdade) SEM tocar
+    `atendente_id`. Quando alguem reatribui o lead pelo CRM
+    (`PUT /api/leads/{id}/responsavel` — a ferramenta do n8n faz exatamente isso)
+    enquanto a conversa esta em atendimento humano, os dois passam a divergir, e
+    a CHECK constraint de m015 recusa o UPDATE. O erro derrubava A LISTAGEM
+    INTEIRA do inbox — nao so aquela conversa — e voltava a cada ciclo de
+    polling enquanto a divergencia existisse.
+
+    ONDE O ERRO ESTOURA (medido, nao suposto): no `db.execute()` de dentro de
+    `_repair_responsavel_cache`, NAO no `db.commit()` seguinte. `sa_update` sobre
+    uma entidade mapeada e um UPDATE ORM-enabled, que o SQLAlchemy 2.0 executa
+    NA HORA. Envolver o commit nao pegaria nada — por isso a guarda esta aqui,
+    em volta da chamada.
+
+    Uma rota de LEITURA nao pode devolver 500 porque um reparo OPORTUNISTA de
+    cache foi recusado. Aqui o reparo e desfeito, o incidente vira log, e a
+    resposta segue com o cache como estava. Convergir de fato e trabalho do
+    worker de reconciliacao, nao de um GET.
+
+    O `db.rollback()` e obrigatorio, nao cosmetico: depois de um erro de
+    statement a transacao fica invalidada e qualquer query seguinte na mesma
+    sessao levantaria `PendingRollbackError` — o 500 voltaria pela porta dos
+    fundos, na proxima linha da pagina.
+
+    ESCOPO ESTREITO DE PROPOSITO: so esta CHECK e engolida. Qualquer outro
+    `IntegrityError` (FK, UNIQUE, NOT NULL) volta a subir intacto — engolir
+    IntegrityError generico aqui esconderia defeito de verdade.
+
+    LOG SEM DADO DE CLIENTE: so ids e o nome da constraint. Nenhum telefone,
+    nome ou conteudo de mensagem — mesma disciplina do resto do caminho V2.
+
+    POR QUE CADA REPARO COMMITA O SEU PROPRIO (achado do teste de regressao, nao
+    do desenho): o `db.rollback()` obrigatorio acima desfaz a transacao INTEIRA,
+    e nao so o UPDATE recusado. Com um commit unico no fim da pagina, UMA
+    conversa recusada descartava os reparos JA aplicados de TODAS as outras
+    conversas da mesma pagina — e, como a recusa se repete a cada polling,
+    aquelas outras nunca convergiam enquanto a conversa problematica estivesse
+    na pagina. Uma linha ruim contaminava a pagina inteira; era um defeito pior
+    e mais silencioso do que o 500 que este hotfix veio corrigir.
+
+    O SAVEPOINT seria a resposta idiomatica e esta PROIBIDO neste repositorio:
+    `.claude/memory/pysqlite-savepoint-rollback-gap.md` documenta que
+    `db.begin_nested()` no SQLite daqui nao desfaz num `db.rollback()` posterior.
+
+    O custo era zero no caminho comum: `_repair_responsavel_cache` faz early-return
+    quando o cache ja bate com o CRM, que e o caso da esmagadora maioria das
+    linhas, e este commit so acontece quando um reparo REALMENTE foi emitido.
+
+    ACHADO DESTA RODADA (revisao de performance, nao hipotetico): numa pagina
+    que TEM divergencia, o preco descrito acima como "aceitavel" era maior do
+    que parecia. `SessionLocal` (`app/database.py`) usa o default
+    `expire_on_commit=True` — este commit nao expira so a linha reparada,
+    expira TODOS os objetos da identity map da sessao, inclusive a colecao
+    `tags` de TODAS as outras conversas da pagina, carregada em lote por
+    `selectinload(Conversation.tags)` em `list_conversations` EXATAMENTE para
+    evitar 1 SELECT de tags por linha. Expirada, `tags` volta ao lazy-load
+    default do relationship (`models/conversation.py`) na hora de serializar —
+    reintroduzindo, em qualquer pagina com PELO MENOS UMA divergencia, o mesmo
+    N+1 que aquele eager load existe para evitar. Isto na rota que este proprio
+    arquivo trata como a mais quente do app (poll de 5s por aba aberta, ate
+    200 linhas por pagina).
+
+    A CORRECAO (ver o commit logo abaixo): desligar `expire_on_commit` nesta
+    sessao SO em volta deste commit, e religar logo depois. E seguro porque
+    `set_committed_value` (dentro de `_repair_responsavel_cache`, acima) ja
+    deixou os dois campos reparados corretos no `__dict__` do objeto ANTES do
+    commit — nao ha nada que um SELECT novo pos-commit resolveria para a linha
+    reparada em si. O unico efeito do expire aqui seria invalidar objetos que
+    ESTE commit nao tem nenhum motivo de invalidar. Ligar/desligar por commit
+    (em vez de mudar o default da sessao inteira) nao muda nada para o resto
+    do request: o unico outro commit deste endpoint (`list_conversations`, ao
+    final, apos a serializacao) ja roda DEPOIS de tudo ler o que precisava —
+    o expire dele continua gratis, como o comentario de la ja descrevia.
+    """
+    try:
+        if not _repair_responsavel_cache(db, conversation, lead_resp):
+            return False
+        # Ver "A CORRECAO" no docstring acima: liga/desliga escopado a ESTE
+        # commit, nunca ao default da sessao inteira.
+        expire_on_commit_original = db.expire_on_commit
+        db.expire_on_commit = False
+        try:
+            db.commit()
+        finally:
+            db.expire_on_commit = expire_on_commit_original
+        return True
+    except IntegrityError as exc:
+        if _CHECK_ATENDIMENTO_HUMANO not in str(getattr(exc, "orig", exc)):
+            raise
+        db.rollback()
+        logger.warning(
+            "Read-repair do responsavel recusado por %s: o cache NAO foi alinhado ao "
+            "CRM e a resposta segue com o valor anterior. conversation_id=%s lead_id=%s",
+            _CHECK_ATENDIMENTO_HUMANO, conversation.id, conversation.lead_id,
+        )
+        return False
 
 
 # ─── N8N Integration: Send Notification ──────────────────────────────
@@ -726,7 +858,9 @@ async def list_conversations(
             for conv in conversations:
                 info = responsaveis.get(conv.lead_id)
                 if info is not None:
-                    repaired = _repair_responsavel_cache(db, conv, info) or repaired
+                    # CONV-HOTFIX-R10-01: um reparo recusado pelo banco desfaz a si
+                    # mesmo e a pagina segue — antes, derrubava a listagem inteira.
+                    repaired = _reparar_responsavel_tolerando_recusa(db, conv, info) or repaired
 
     _preencher_atendente_nome(db, conversations)
 
@@ -869,6 +1003,12 @@ async def list_inactive_conversations(
         § M8) ja foi escrito para cobrir os dois casos com a MESMA pergunta:
         "quer que eu siga com o seu roteiro [continuar com a Bia], ou prefere
         falar com alguem do nosso time agora? [ir para humano]".
+
+    CONV-BIA-FILA-01 — desde que entrar na fila nao desliga mais a Bia,
+    `is_bot_active=True` aqui tambem pode significar "na fila humana com a Bia
+    ainda respondendo". A decisao nao muda (a query segue sem filtro sobre essa
+    coluna): o silencio do cliente e o mesmo problema nos dois casos, e a
+    pergunta do follow-up ja cobre ambos.
 
     Custo: 3 queries no maximo, independente do tamanho do inbox — (1)
     candidatas por status+janela, (2) `selectinload` em lote das tags dessas
@@ -1035,7 +1175,10 @@ async def get_conversation(
             if responsaveis:
                 info = responsaveis.get(conversation.lead_id)
                 if info is not None:
-                    _repair_responsavel_cache(db, conversation, info)
+                    # CONV-HOTFIX-R10-01: mesmo tratamento do call site da listagem
+                    # — abrir uma conversa nao pode devolver 500 porque o reparo
+                    # oportunista de cache foi recusado pelo banco.
+                    _reparar_responsavel_tolerando_recusa(db, conversation, info)
         dirty = True
 
     # Mark as read
@@ -1092,16 +1235,31 @@ async def update_conversation(
     a conversa e ela sumia da caixa dele, enquanto a BIA continuava respondendo
     o cliente. O toggle do bot da UI (static/js/conversas.js:648-651) chega aqui.
 
-    Agora os dois campos operacionais passam por `_apply_human_state`, o alvo e
-    validado como `/assign` valida, e o PUT inteiro (status + estado operacional
-    + responsavel + sync no CRM) commita UMA vez.
-    """
-    conversation = db.query(Conversation).filter(
-        Conversation.id == conversation_id
-    ).first()
+    CONV-BIA-FILA-01 — o quadro acima valia enquanto entrar na fila desligava a
+    Bia. Hoje "dono definido + Bia ligada" e um estado LEGITIMO quando a
+    conversa esta na fila: ela aparece em `fila`/`todos` via `queued_at`, e a
+    Bia segue respondendo ate a vendedora desliga-la. O defeito do F-085 era o
+    PUT gravar FORA do ponto unico (sem `queued_at`, sem validar o alvo), nao o
+    flag em si. Por isso o ramo abaixo repassa `desligar_bia` ao ponto unico:
+    `{"is_bot_active": false}` (botao "Desativar Bot") desliga; `{"atendente_id": N}`
+    sozinho preserva o flag.
 
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversa nao encontrada")
+    Agora os dois campos operacionais passam por `_apply_human_state`, o atendente
+    NOMEADO no payload e validado como `/assign` valida (o dono atual, que so e
+    preservado, nao — CONV-BIA-FILA-01), e o PUT inteiro (status + estado operacional
+    + responsavel + sync no CRM) commita UMA vez.
+
+    CONV-HOTFIX-LOCK-01 (correcao aprovada nesta rodada) — ESTA rota era a UNICA
+    escrita de conversa do arquivo sem trava de linha: um `.first()` puro,
+    enquanto claim/assign/release/handoff ja usavam `_lock_conversation`. E ela e
+    a mais destrutiva das cinco: o ramo "religar a BIA" abaixo zera QUATRO campos
+    operacionais de uma vez. Duas requisicoes simultaneas (o toggle do bot e uma
+    troca de responsavel, ou dois operadores na mesma conversa) liam as duas o
+    mesmo retrato e a ultima a commitar apagava a decisao da outra em silencio.
+    Nenhum comportamento novo: a MESMA trava, do MESMO helper, que as outras
+    quatro rotas deste arquivo ja usam ha tempo — inclusive o ramo IS_SQLITE.
+    """
+    conversation = _lock_conversation(db, conversation_id)
 
     old_status = conversation.status
 
@@ -1117,22 +1275,30 @@ async def update_conversation(
     # AUDIT-2026-08-WA (F-085) — o docstring acima ja prometia isto; o codigo
     # nao fazia. `atendente_id` e `is_bot_active` eram escritos DIRETO, fora do
     # ponto unico, e produziam estados que nao existem em nenhuma aba (por
-    # exemplo atendente definido com a BIA ligada). Agora passam por
+    # exemplo atendente definido SEM `queued_at`). Agora passam por
     # `_apply_human_state`, que mantem os quatro campos operacionais coerentes.
     if data.atendente_id is not None or data.is_bot_active is not None:
         if data.is_bot_active is True:
             # Religar a BIA e a unica transicao que `_apply_human_state` nao faz
-            # (ela sempre desliga). Devolver para a BIA significa devolver a
-            # conversa inteira: sem dono, sem fila, sem atendimento humano.
+            # (ela so desliga ou preserva). Devolver para a BIA significa devolver
+            # a conversa inteira: sem dono, sem fila, sem atendimento humano.
             conversation.is_bot_active = True
             conversation.atendente_id = None
             conversation.queued_at = None
             conversation.primeira_resposta_humana_at = None
         else:
             alvo = data.atendente_id if data.atendente_id is not None else conversation.atendente_id
-            if alvo is not None:
-                _require_active_user(db, alvo)
-            _apply_human_state(conversation, alvo, keep_queue_position=True)
+            # CONV-BIA-FILA-01: so valida o atendente que o PAYLOAD nomeia. O dono ATUAL entra no
+            # `alvo` apenas para ser preservado (botao "Desativar Bot" nao nomeia ninguem); validar
+            # tambem esse fazia o botao falhar com 404 quando a vendedora dona foi desativada.
+            if data.atendente_id is not None:
+                _require_active_user(db, data.atendente_id)
+            # CONV-BIA-FILA-01: so `{"is_bot_active": false}` (botao "Desativar
+            # Bot") desliga a Bia; trocar apenas o atendente preserva o flag.
+            _apply_human_state(
+                conversation, alvo, keep_queue_position=True,
+                desligar_bia=data.is_bot_active is False,
+            )
 
     # AUDIT-2026-08-WA (F-086/F-304/F-316) — o responsavel COMERCIAL passa pelo
     # ponto unico, que valida o usuario e mantem o sync com o CRM na MESMA
@@ -1374,7 +1540,9 @@ async def handoff_conversation(
     estava na fila enquanto a conversa continuava em ATENDIMENTOS BIA.
 
     Efeito (idempotente):
-      - is_bot_active = False (a BIA para de ser acionada no proximo inbound)
+      - is_bot_active PRESERVADO como esta (CONV-BIA-FILA-01): a Bia continua
+        respondendo na fila ate a vendedora desliga-la; um handoff nunca
+        religa uma Bia desligada
       - atendente_id NULL -> resolve um atendente elegivel (menor carga); se
         nao houver nenhum, fica NULL e a conversa espera sem dono
       - queued_at = queued_at OR now() — retry do n8n NAO manda a conversa
@@ -1396,6 +1564,7 @@ async def handoff_conversation(
         conversation,
         atendente_id,
         keep_queue_position=True,
+        desligar_bia=False,
     )
     db.commit()
     db.refresh(conversation)
@@ -1501,7 +1670,12 @@ async def assign_conversation(
     # que ainda espera carimbava um `queued_at` novo e mandava o cliente para o
     # fim da fila: uma decisao interna da equipe (trocar de atendente) custava
     # tempo de espera a quem nao tem nada a ver com ela.
-    _apply_human_state(conversation, target.id, keep_queue_position=True)
+    # CONV-BIA-FILA-01: atribuir NAO e assumir — a Bia segue como esta. O n8n
+    # "Handoff Humano -> Julia" chama esta rota no fim do handoff; quem desliga
+    # a Bia e a vendedora (claim ou botao "Desativar Bot").
+    _apply_human_state(
+        conversation, target.id, keep_queue_position=True, desligar_bia=False,
+    )
     db.commit()
     db.refresh(conversation)
     logger.info(
@@ -1530,7 +1704,10 @@ async def release_conversation(
     if conversation.atendente_id is not None or conversation.primeira_resposta_humana_at is not None:
         # PACOTE-A: liberar = volta para o FIM da fila (queued_at novo).
         # Diferente do retry de handoff, que preserva a posicao.
-        _apply_human_state(conversation, None, resetar_atendimento=True)
+        # CONV-BIA-FILA-01: devolver a fila nao desliga a Bia (nem a religa).
+        _apply_human_state(
+            conversation, None, resetar_atendimento=True, desligar_bia=False,
+        )
         db.commit()
         db.refresh(conversation)
         logger.info(f"Conversa {conversation_id} devolvida a fila pelo usuario {current_user.id}")

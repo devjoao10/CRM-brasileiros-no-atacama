@@ -29,6 +29,58 @@ class AutoReply(Base):
         return f"<AutoReply(trigger='{self.trigger}', title='{self.title}')>"
 
 
+# CONV-EXPEDIENTE-01: catálogo dos 7 gatilhos com título e texto padrão — FONTE ÚNICA do seed
+# de desenvolvimento (`seed_auto_replies`) e da tela de Configurações (o GET lista o gatilho
+# que ainda não tem linha; o PUT cria a linha a partir daqui). Em produção o seed não roda,
+# então sem este catálogo a tela não teria o que mostrar nem criar.
+# `is_active` aqui é o padrão do SEED: na tela, gatilho sem linha no banco aparece INATIVO
+# (quem liga é o dono, de propósito). greeting e break_time não têm texto padrão.
+AUTO_REPLY_PADROES = (
+    {
+        "trigger": "greeting",
+        "title": "Frase de apresentação",
+        "message": "",
+        "is_active": False,
+    },
+    {
+        "trigger": "start_service",
+        "title": "Início de atendimento",
+        "message": "Estamos iniciando o seu atendimento. Como podemos te ajudar hoje?",
+        "is_active": True,
+    },
+    {
+        "trigger": "waiting",
+        "title": "Aguardando atendimento",
+        "message": "Recebemos sua mensagem! Em breve, um atendente estará com você. Obrigado pela paciência.",
+        "is_active": True,
+    },
+    {
+        "trigger": "end_service",
+        "title": "Término de atendimento",
+        "message": "Seu atendimento foi finalizado. Caso precise de mais alguma coisa, estamos à disposição. Até breve!",
+        "is_active": True,
+    },
+    {
+        "trigger": "out_of_hours",
+        "title": "Fora do expediente",
+        "message": "*Seja bem-vind@ à Brasileiros no Atacama!* 🌵\n\nNossa equipe comercial responde em horários específicos para garantir um atendimento ágil e de qualidade. No momento, estamos fora do horário, mas retornaremos sua mensagem o mais breve possível!",
+        "is_active": True,
+    },
+    {
+        "trigger": "break_time",
+        "title": "Intervalo de atendimento",
+        "message": "",
+        "is_active": False,
+    },
+    {
+        "trigger": "paused",
+        "title": "Status em pausa",
+        "message": "Estamos em uma breve pausa no momento, mas logo retornaremos para continuar seu atendimento. Obrigado pela compreensão!",
+        "is_active": True,
+    },
+)
+
+
 class BusinessHours(Base):
     """Horário comercial — expediente da empresa por dia da semana."""
     __tablename__ = "business_hours"

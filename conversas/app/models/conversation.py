@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import (
-    Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Index, text,
+    Column, Integer, String, Text, DateTime, ForeignKey, Boolean, CheckConstraint, Index, text,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -38,6 +38,30 @@ def service_window_open(last_customer_msg_at, now=None) -> bool:
     return now < last_customer_msg_at + SERVICE_WINDOW
 
 
+# BIA-V2, Fase 4, decisao 5 (docs/superpowers/plans/2026-08-29-bia-v2.md) — CHECK
+# que garante que toda linha em WAITING_HUMAN/HUMAN_ACTIVE tem dono humano
+# coerente (bot desligado, atendente e responsavel preenchidos e iguais, fila
+# registrada). Expressao COPIADA da decisao 5, nao inventada aqui.
+#
+# Esta constante e uma de DUAS copias deliberadas — a outra vive em
+# migrations/m015_conversas_estado_humano_check.py. NAO importar uma da
+# outra, NAO importar de app/v2/estados.py, NAO criar modulo compartilhado so
+# pra hospedar esta string: a decisao 5 troca "single source of truth" por um
+# gate executavel (tests/test_v2_m015_gate.py) que falha se as duas
+# divergirem. Mudar esta expressao sem espelhar a mudanca na m015 quebra
+# aquele teste de proposito.
+_CHECK_ESTADO_HUMANO_SQL = """
+state NOT IN ('WAITING_HUMAN','HUMAN_ACTIVE')
+OR (
+    NOT is_bot_active
+    AND atendente_id IS NOT NULL
+    AND responsavel_id IS NOT NULL
+    AND atendente_id = responsavel_id
+    AND queued_at IS NOT NULL
+)
+"""
+
+
 class Conversation(Base):
     """Uma conversa com um lead via WhatsApp."""
     __tablename__ = "conversations"
@@ -67,8 +91,11 @@ class Conversation(Base):
     last_customer_msg_at = Column(DateTime(timezone=True), nullable=True)  # Janela 24h Meta
     # PACOTE-A: momento em que a conversa ENTROU na fila de atendimento humano.
     # NAO e atividade do cliente (last_customer_msg_at), nem updated_at/created_at.
-    # Preenchido no handoff BIA->humano e no release; zerado na PRIMEIRA RESPOSTA
-    # HUMANA (nao mais ao atribuir — ver a coluna abaixo).
+    # Preenchido no handoff BIA->humano e no release; PRESERVADO na PRIMEIRA
+    # RESPOSTA HUMANA (HOTFIX-01 — deixou de ser zerado ali, para que "tempo em
+    # fila" e "tempo ate a 1a resposta" continuem calculaveis depois do fluxo;
+    # ver conversas/app/services/atendimento.py). So volta a NULL quando o
+    # release devolve a conversa a fila de proposito.
     queued_at = Column(DateTime(timezone=True), nullable=True, index=True)
     # AUDIT-2026-08-WA — ATRIBUIDO != ATENDIDO.
     # Ate aqui o inbox classificava por `atendente_id IS NULL`, o que fazia de
@@ -84,6 +111,21 @@ class Conversation(Base):
     # rota que sabe quem e o `current_user`.
     primeira_resposta_humana_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
+    # BIA-V2, Fase 4 (decisao 2/11 do subgate de 2026-09-02, ver
+    # docs/superpowers/plans/2026-08-29-bia-v2.md) — as tres colunas da
+    # maquina de estados V2. Aditivas de proposito: nullable/com server_default
+    # para que a V1 continue lendo e escrevendo esta linha sem saber que elas
+    # existem (a V1 passa a CARREGAR os campos; independencia e semantica,
+    # nao invisibilidade). `state_version` usa `text("0")` e nao a string nua
+    # "0" pelo mesmo motivo de `send_attempts` abaixo — string nua vira
+    # `DEFAULT '0'` no DDL, nao `DEFAULT 0`. `state` e String livre, sem CHECK
+    # de vocabulario: quem recusa valor desconhecido/NULL e a maquina em
+    # `app/v2/estados.py`, nunca o banco (decisao 10 — fail closed fica na
+    # aplicacao, nao no schema).
+    state = Column(String(32), nullable=True, server_default="LEGACY")
+    state_version = Column(Integer, nullable=True, server_default=text("0"))
+    closed_at = Column(DateTime(timezone=True), nullable=True)
+
     # AUDIT-2026-08-W2E (F1) — declarado como Index(unique=True) e nao como
     # UniqueConstraint de proposito: assim `create_all()` e a migration m011
     # emitem EXATAMENTE o mesmo objeto (`CREATE UNIQUE INDEX uq_...`) nos dois
@@ -92,6 +134,10 @@ class Conversation(Base):
     # (ver m003 vs create_all em `send_attempts`) e nao vamos criar mais um.
     __table_args__ = (
         Index("uq_conversations_whatsapp", "whatsapp", unique=True),
+        # BIA-V2, Fase 4, decisao 5 — nome e expressao sao normativos no
+        # plano; ver o comentario de `_CHECK_ESTADO_HUMANO_SQL` acima (antes
+        # da classe) para o "porque" de ser copia local, nao import.
+        CheckConstraint(_CHECK_ESTADO_HUMANO_SQL, name="ck_conversations_estado_humano"),
     )
 
     # Relationships

@@ -11,13 +11,14 @@ import hmac
 import json
 import logging
 import re
-from datetime import datetime, timezone as tz
+from datetime import datetime, timedelta, timezone as tz
 
 import httpx
 from fastapi import APIRouter, Request, HTTPException, Query, Depends
 from sqlalchemy import exc as sa_exc, or_
 from sqlalchemy.orm import Session
 
+from app.auth import User
 from app.config import ENVIRONMENT, META_APP_SECRET, META_VERIFY_TOKEN, N8N_AGENT_ENABLED, N8N_BASE_URL, N8N_WEBHOOK_AUTH_HEADER, N8N_WEBHOOK_AUTH_VALUE
 from app.database import get_db, SessionLocal
 from app.models.conversation import Conversation, Message, service_window_open
@@ -120,6 +121,28 @@ def _verify_meta_signature(raw_body: bytes, signature_header: str) -> bool:
         hashlib.sha256,
     ).hexdigest()
     return hmac.compare_digest(signature_header, expected)
+
+
+# CONV-EXPEDIENTE-01 (D7) — anti-spam do aviso "Fora do expediente": no maximo UM
+# por conversa a cada 12h. Antes, cada mensagem de madrugada recebia o aviso de
+# novo (ver `_aviso_fora_do_expediente_recente`).
+OUT_OF_HOURS_COOLDOWN = timedelta(hours=12)
+
+# CONV-EXPEDIENTE-01 (D7) — GUARDA DE ENVIO EM VOO do aviso "Fora do expediente".
+#
+# O cooldown acima consulta o aviso JA GRAVADO, mas o registro so e salvo DEPOIS do `await`
+# da Meta (`send_text_message` + `_save_outbound_message`). Quando o cliente manda 2-3
+# mensagens em sequencia, as seguintes chegam NESSA janela, nao enxergam aviso nenhum e cada
+# uma envia o seu (provado: 3 inbounds concorrentes = 3 avisos). O id da conversa entra neste
+# conjunto ANTES do `await` e sai no `finally`: quem chega com o primeiro envio em voo cede.
+# Um envio que falha libera a guarda, e a proxima mensagem tenta de novo.
+#
+# ponytail: estado de UM processo, no mesmo padrao e com a mesma ressalva de `_agent_locks` /
+# `_agent_delivered_until` (mais abaixo): com mais de um worker uvicorn dois inbounds da mesma
+# conversa podem cair em processos diferentes e a guarda nao os enxerga — para valer entre
+# workers isto precisaria virar marcador no banco. Sem TTL de proposito: a entrada so existe
+# durante o `await` do envio e e removida no `finally`.
+_avisos_fora_do_expediente_em_voo: set[int] = set()
 
 
 # ─── Debounce system for batching rapid messages ─────────────
@@ -335,8 +358,6 @@ def _is_within_business_hours(db: Session) -> bool:
     Check if current time falls within configured business hours.
     Uses UTC-3 (Brasilia timezone) for checking.
     """
-    from datetime import timedelta
-
     now_utc = datetime.now(tz.utc)
     # Convert to BRT (UTC-3)
     brt_offset = timedelta(hours=-3)
@@ -377,6 +398,10 @@ def _resolve_auto_reply(
 
     CONV-VAR-01-HARD-01: resolucao TUDO OU NADA — nunca token literal, texto
     mutilado ou string vazia; nunca levanta excecao.
+
+    CONV-EXPEDIENTE-01 (D8): `@NOMEATENDENTE`/`@EMAILATENDENTE` resolvem para o
+    atendente da conversa (`atendente_id`). Sem atendente continuam insoluveis e
+    a resposta e PULADA, como no CONV-VAR-01-HARD-01.
     """
     reply = db.query(AutoReply).filter(
         AutoReply.trigger == trigger,
@@ -386,24 +411,132 @@ def _resolve_auto_reply(
     if not (reply and reply.message and reply.message.strip()):
         return False, None
 
+    # CONV-EXPEDIENTE-01 (D8): o contexto saia com `user=None`, entao as variaveis
+    # do atendente eram SEMPRE insoluveis no webhook e a frase era pulada em
+    # silencio. A consulta e por id e so acontece quando ha atendente. Carrega SO
+    # nome e email (o que `VariableContext` le): a linha inteira de `users` traz o
+    # hash da senha e a API key, que nao tem por que passar por este caminho.
+    atendente = None
+    if conversation is not None and conversation.atendente_id:
+        atendente = db.query(User.nome, User.email).filter(User.id == conversation.atendente_id).first()
+
     return True, variables_service.render_auto_reply(
         db,
         reply.message,
-        variables_service.VariableContext(db, conversation=conversation, user=None),
+        variables_service.VariableContext(db, conversation=conversation, user=atendente),
         trigger=trigger,
     )
+
+
+def _aviso_fora_do_expediente_recente(
+    db: Session, conversation_id: int, texto: str, agora: datetime | None = None
+) -> bool:
+    """
+    CONV-EXPEDIENTE-01 (D7) — o MESMO aviso ja foi enviado nesta conversa dentro
+    de `OUT_OF_HOURS_COOLDOWN`?
+
+    Conta so envio com o mesmo texto e status diferente de `failed`: um aviso que
+    a Meta recusou nao chegou ao cliente e e tentado de novo na proxima mensagem.
+    `NOT_FAILED_STATUSES` NAO serve aqui — ele nao inclui `delivered`/`read`, e um
+    aviso entregue ou lido tambem ja foi enviado.
+
+    `agora` e o relogio (UTC, com tzinfo) e por padrao e o instante atual. Existe para
+    os testes fixarem a fronteira EXATA — enviado ha 12h nao bloqueia, ha 12h menos 1
+    microssegundo bloqueia — e o caminho tz-aware do PostgreSQL, sem mexer no relogio.
+    """
+    if agora is None:
+        agora = datetime.now(tz.utc)
+
+    ultimo = db.query(Message).filter(
+        Message.conversation_id == conversation_id,
+        Message.direction == "outbound",
+        Message.content == texto,
+        Message.status != "failed",
+    ).order_by(Message.created_at.desc()).first()
+    if ultimo is None:
+        return False
+
+    enviado_em = ultimo.created_at
+    if enviado_em.tzinfo is None:
+        # SQLite devolve datetime sem tzinfo; o que se grava e sempre UTC.
+        enviado_em = enviado_em.replace(tzinfo=tz.utc)
+    return agora - enviado_em < OUT_OF_HOURS_COOLDOWN
+
+
+async def _enviar_aviso_fora_do_expediente(
+    conversation: Conversation,
+    message: str,
+    db: Session,
+    *,
+    bia_vai_responder: bool,
+) -> None:
+    """
+    CONV-EXPEDIENTE-01 (D6/D7) — decide se o aviso "Fora do expediente" sai e, saindo, envia e grava.
+
+    Cede, nesta ordem: (1) a Bia vai responder esta mensagem (D6); (2) outro aviso desta
+    conversa esta em envio (guarda em memoria, ver `_avisos_fora_do_expediente_em_voo`); (3) o
+    mesmo aviso ja foi gravado dentro de `OUT_OF_HOURS_COOLDOWN` (D7). Cada cessao loga em INFO,
+    identificando a conversa so pelo id.
+    """
+    # O id e o telefone sao lidos UMA vez, antes de qualquer commit: `_save_outbound_message`
+    # commita e o commit EXPIRA `conversation`. Reler `conversation.id` no `finally` custaria um
+    # SELECT que, com o banco fora do ar, levantaria DENTRO do `finally` — mascara o erro original
+    # e pula o `discard`, deixando o id preso na guarda ate o processo reiniciar.
+    conversation_id = conversation.id
+    phone = conversation.whatsapp
+
+    if bia_vai_responder:
+        logger.info(
+            f"Aviso de fora do expediente nao enviado na conversa "
+            f"{conversation_id}: a Bia vai responder esta mensagem"
+        )
+        return
+
+    if conversation_id in _avisos_fora_do_expediente_em_voo:
+        logger.info(
+            f"Aviso de fora do expediente nao enviado na conversa "
+            f"{conversation_id}: outro aviso desta conversa esta em envio"
+        )
+        return
+
+    if _aviso_fora_do_expediente_recente(db, conversation_id, message):
+        logger.info(
+            f"Aviso de fora do expediente nao enviado na conversa "
+            f"{conversation_id}: ja enviado nas ultimas "
+            f"{OUT_OF_HOURS_COOLDOWN.total_seconds() / 3600:g}h"
+        )
+        return
+
+    # O `add` vem ANTES do `await`, e entre o teste de pertinencia acima e ele so ha codigo
+    # sincrono (a consulta do cooldown): o laco de eventos nao troca de tarefa ali, entao dois
+    # inbounds da mesma conversa nunca passam juntos pela decisao. O registro so e salvo depois da
+    # Meta responder; o `finally` solta a guarda mesmo se o envio ou o salvamento falharem.
+    _avisos_fora_do_expediente_em_voo.add(conversation_id)
+    try:
+        wa_response = await whatsapp.send_text_message(phone, message, db)
+        _save_outbound_message(conversation, message, db, wa_response)
+    finally:
+        _avisos_fora_do_expediente_em_voo.discard(conversation_id)
+    logger.info(f"Auto-reply (fora do expediente) processado para {phone}")
 
 
 async def _send_auto_reply_if_needed(
     conversation: Conversation,
     is_new_conversation: bool,
     db: Session,
-):
+    *,
+    bia_vai_responder: bool,
+) -> None:
     """
     Determine and send the appropriate auto-reply based on:
     1. Business hours (out_of_hours if outside)
     2. New conversation greeting
     3. Waiting for attendant
+
+    CONV-EXPEDIENTE-01 (D6): `bia_vai_responder` diz que esta mensagem segue para
+    a Bia (agente global ligado E Bia ligada na conversa). Nesse caso o aviso de
+    fora do expediente nao sai — a Bia responde — mas ele continua tendo
+    prioridade sobre greeting/waiting.
     """
     phone = conversation.whatsapp
 
@@ -415,10 +548,15 @@ async def _send_auto_reply_if_needed(
     if not _is_within_business_hours(db):
         configured, message = _resolve_auto_reply("out_of_hours", db, conversation)
         if configured:
+            # CONV-EXPEDIENTE-01 (D6/D7): o aviso so sai se a Bia NAO vai responder, se nenhum
+            # outro aviso desta conversa esta em envio e se o mesmo aviso nao foi enviado dentro
+            # de OUT_OF_HOURS_COOLDOWN (a decisao e do helper). Em qualquer caso o `return`
+            # abaixo se mantem: fora do horario com `out_of_hours` configurado,
+            # greeting/waiting continuam suprimidos.
             if message:
-                wa_response = await whatsapp.send_text_message(phone, message, db)
-                _save_outbound_message(conversation, message, db, wa_response)
-                logger.info(f"Auto-reply (fora do expediente) processado para {phone}")
+                await _enviar_aviso_fora_do_expediente(
+                    conversation, message, db, bia_vai_responder=bia_vai_responder,
+                )
             return
 
     # New conversation — send greeting
@@ -443,7 +581,6 @@ async def _send_auto_reply_if_needed(
             ).order_by(Message.created_at.desc()).first()
 
             if recent_outbound:
-                from datetime import timedelta
                 time_since = datetime.now(tz.utc) - (recent_outbound.created_at.replace(tzinfo=tz.utc) if recent_outbound.created_at.tzinfo is None else recent_outbound.created_at)
                 if time_since < timedelta(hours=1):
                     return  # Don't spam the same waiting message
@@ -714,8 +851,12 @@ async def _process_incoming_message(msg: dict, value: dict, db: Session):
     if forward_to_agent:
         _remember_agent_cutoff(conversation.id, db)
 
-    # Send auto-reply if needed
-    await _send_auto_reply_if_needed(conversation, is_new_conversation, db)
+    # Send auto-reply if needed.
+    # CONV-EXPEDIENTE-01 (D6): se a mensagem vai para a Bia, o aviso de fora do
+    # expediente nao sai (ver `_send_auto_reply_if_needed`).
+    await _send_auto_reply_if_needed(
+        conversation, is_new_conversation, db, bia_vai_responder=forward_to_agent,
+    )
 
     # ─── N8N Agent: encaminhar para IA se bot ativo (com debounce) ───
     if forward_to_agent:
@@ -872,6 +1013,13 @@ async def _debounce_then_forward(conversation_id: int, cutoff=None):
 
         if not conversation.is_bot_active:
             logger.info(f"Bot desativado para conversa {conversation_id}, ignorando")
+            return
+
+        # CONV-BIA-FILA-01 (D5): conversa encerrada enquanto o lote esperava (os 15s do debounce
+        # ou a fila do lock) — a Bia nao responde num atendimento fechado. Mesma regra do
+        # descarte de `_forward_to_agent`, que cobre o fechamento DURANTE a chamada ao agente.
+        if conversation.status == "encerrada":
+            logger.info(f"Conversa {conversation_id} encerrada, ignorando")
             return
 
         # AUDIT-2026-08-W1D (F2) — o lote pendente vem do CORTE fotografado no
@@ -1105,6 +1253,11 @@ async def _forward_to_agent(conversation: Conversation, message_text: str, db: S
         "nome": conversation.nome or conversation.whatsapp,
         "mensagem": message_text,
         "historico": historico,
+        # CONV-BIA-FILA-01 (D11) — sinal DETERMINISTICO para o WF-01: a conversa
+        # ja esta na fila humana (`queued_at` preenchido). A Bia continua ligada
+        # na fila, e sem este sinal o n8n nao tem como saber que abrir uma 2a
+        # entrada na fila seria duplicar. Inerte ate o WF-01 le-lo.
+        "na_fila_humana": conversation.queued_at is not None,
     }
 
     agent_url = f"{N8N_BASE_URL}/webhook/agent-bia"
@@ -1162,6 +1315,27 @@ async def _forward_to_agent(conversation: Conversation, message_text: str, db: S
         )
         return
 
+    # CONV-BIA-FILA-01 (D5) — A BIA NAO FALA POR CIMA DA VENDEDORA.
+    #
+    # A Bia continua ligada na fila humana, entao a vendedora pode clicar em
+    # "Desativar Bot" (ou assumir a conversa) enquanto a chamada ao agente esta em
+    # voo — e ela dura ate AGENT_TIMEOUT.read (240s). A resposta que volta depois
+    # disso pertence a uma decisao vencida: envia-la seria a Bia atropelando a
+    # humana, e o fallback degradado idem. Descarta TUDO, sem tocar em nenhum
+    # campo e sem commit — o que a vendedora decidiu vale.
+    #
+    # A mesma regra vale quando a conversa foi ENCERRADA durante a espera: encerrar nao
+    # mexe em `is_bot_active`, entao a Bia ainda parece ligada, mas responder (ou mandar o
+    # fallback, que ainda poria a conversa na fila) num atendimento fechado e falar por cima
+    # da decisao de quem o encerrou.
+    if not conversation.is_bot_active or conversation.status == "encerrada":
+        motivo = "Bia desligada" if not conversation.is_bot_active else "Conversa encerrada"
+        logger.info(
+            f"{motivo} durante a chamada ao agente na conversa {conversation_id}: "
+            f"resposta descartada"
+        )
+        return
+
     # CONV-08b: cada parte e persistida com status fiel ao envio;
     # preview/unread so mudam se ao menos uma parte foi aceita.
     last_ok_part = None
@@ -1205,11 +1379,14 @@ async def _forward_to_agent(conversation: Conversation, message_text: str, db: S
     # torna isto idempotente: falhas repetidas nao empurram a conversa para o
     # fim da fila.
     #
-    # Nao atribuimos atendente aqui de proposito: isto e uma excecao, nao um
-    # handoff de triagem concluida. Ela entra na fila sem dono e qualquer
-    # atendente pode assumir.
+    # Nao atribuimos atendente NOVO aqui de proposito: isto e uma excecao, nao um
+    # handoff de triagem concluida. Sem dono, ela entra na fila sem dono e
+    # qualquer atendente pode assumir.
+    # CONV-BIA-FILA-01: quem JA era dono continua. Com a Bia ligada na fila a
+    # conversa pode ja ter atendente, e passar `None` aqui o zeraria por causa de
+    # uma falha da automacao.
     if degraded and not conversation.primeira_resposta_humana_at:
-        aplicar_estado_humano(conversation, None, keep_queue_position=True)
+        aplicar_estado_humano(conversation, conversation.atendente_id, keep_queue_position=True)
         logger.warning(
             f"Bia degradada na conversa {conversation.id} — conversa movida "
             f"para a FILA DE ESPERA humana (bot desligado)"

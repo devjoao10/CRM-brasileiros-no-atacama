@@ -599,6 +599,113 @@ def test_nome_com_script_nao_vira_html_no_drawer():
         f"detailName tem que usar textContent, usa {m.group(1) if m else '?'}")
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# 7. Mascara do WhatsApp com numero COM DDI (CONV-LEAD-FONE-01)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# A mascara cortava em 11 digitos ANTES de tirar o DDI 55. Colar
+# `+55 48 98871-1776` (13 digitos) virava `(55) 48988-7117` e o saveLead gravava
+# `5555489887117`: DDD 55 falso e os 2 ultimos digitos perdidos, um numero que
+# nenhuma busca por whatsapp acha depois — o Conversas nao reconhece o lead e
+# abre um duplicado.
+
+def _mascara(modo, texto):
+    """Passa `texto` pela formatWhatsappInput e pela normalizeWhatsapp REAIS do partial.
+
+    modo "colar":   um unico evento `input` com o texto inteiro (Ctrl+V).
+    modo "digitar": uma tecla por vez, anexada ao valor JA mascarado do campo e
+                    re-mascarada a cada tecla, como o `oninput` faz no browser —
+                    o estado intermediario alimenta a tecla seguinte.
+    Devolve {"campo": o que o usuario ve no input, "salvo": o que o PUT manda}.
+    """
+    return _roda("""
+        const mascarar = (valor) => {
+            const input = { value: valor };      // o oninput so le e escreve .value
+            formatWhatsappInput(input);
+            return input.value;
+        };
+        const [modo, texto] = valores.__entrada;
+        let campo = '';
+        if (modo === 'colar') campo = mascarar(texto);
+        else for (const tecla of texto) campo = mascarar(campo + tecla);
+        console.log(JSON.stringify({ campo, salvo: normalizeWhatsapp(campo) }));
+    """, valores={"__entrada": [modo, texto]},
+        extras="\n" + _fn("formatWhatsappInput", PARTIAL))
+
+
+def _confere_whatsapp(modo, texto, campo, salvo):
+    r = _mascara(modo, texto)
+    assert r["campo"] == campo, (
+        f"{modo} {texto!r}: o campo ficou {r['campo']!r}, esperado {campo!r}")
+    assert r["salvo"] == salvo, (
+        f"{modo} {texto!r}: o PUT mandaria {r['salvo']!r}, esperado {salvo!r}")
+
+
+def test_whatsapp_colado_com_ddi_nao_perde_digito():
+    _confere_whatsapp("colar", "+55 48 98871-1776", "(48) 98871-1776", "5548988711776")
+    _confere_whatsapp("colar", "5548988711776", "(48) 98871-1776", "5548988711776")
+
+
+def test_whatsapp_colado_wa_id_da_meta_sem_o_nono_digito():
+    """wa_id de varios DDDs vem com 10 digitos nacionais: 55 + 48 + 88711776.
+
+    So o numero salvo e conferido. Com 10 digitos a mascara divide 5+3
+    (`(48) 88711-776`), um acabamento visual que ja era assim e nao e o assunto.
+    """
+    r = _mascara("colar", "+55 48 8871-1776")
+    assert r["salvo"] == "554888711776", (
+        f"colar com DDI sem o 9: o PUT mandaria {r['salvo']!r}")
+
+
+def test_whatsapp_digitado_sem_ddi_continua_igual():
+    """Sem DDI nada muda: a correcao so age em numero com mais de 11 digitos."""
+    _confere_whatsapp("digitar", "48 98871-1776", "(48) 98871-1776", "5548988711776")
+
+
+def test_whatsapp_ddd_55_nao_e_confundido_com_ddi():
+    """55 tambem e o DDD do RS: com 11 digitos ele fica; so com 12+ e DDI."""
+    for modo in ("colar", "digitar"):
+        _confere_whatsapp(modo, "55 99999-9999", "(55) 99999-9999", "5555999999999")
+        _confere_whatsapp(modo, "+55 55 99999-9999", "(55) 99999-9999", "5555999999999")
+
+
+def test_whatsapp_digitado_com_ddi_tecla_a_tecla():
+    """Ate o 11o digito o campo mostra `(55) 48988-7117`, um numero valido de DDD 55.
+
+    So no 12o digito a mascara descobre que o 55 era DDI, e tem que refazer o valor
+    a partir do campo JA mascarado (o browser nao devolve o texto cru a cada tecla).
+    """
+    _confere_whatsapp("digitar", "+55 48 98871-1776", "(48) 98871-1776", "5548988711776")
+
+
+def test_whatsapp_com_digito_a_mais_nao_confunde_o_ddd_com_ddi():
+    """12 digitos que NAO comecam em 55 (um digito a mais): so o corte em 11 age.
+
+    E a metade `startsWith('55')` da guarda: sem ela o `slice(2)` trataria qualquer
+    numero de 12+ digitos como se o DDD fosse um DDI, comeria o `48` e o campo viraria
+    `(98) 87117-61`. O `length > 11` sozinho nao distingue DDI de digito sobrando.
+    """
+    for modo in ("colar", "digitar"):
+        _confere_whatsapp(modo, "48 98871-17761", "(48) 98871-1776", "5548988711776")
+
+
+def test_input_do_whatsapp_cabe_um_numero_colado_com_formatacao():
+    """O `maxlength` corta a colagem ANTES da mascara rodar.
+
+    Com 20, colar um numero formatado de 21+ caracteres (`+55 (48) 98871-1776` mais
+    espacos, por exemplo) perdia o final no navegador; o resto passava pela mascara e o
+    saveLead gravava um numero errado, como o `5555489887117`. O limite tem que dar folga
+    a um numero com DDI e pontuacao.
+    """
+    tag = re.search(r'<input[^>]*id="leadWhatsapp"[^>]*>', PARTIAL)
+    assert tag, "input do WhatsApp (id=leadWhatsapp) nao encontrado no partial"
+    limite = re.search(r'maxlength="(\d+)"', tag.group(0))
+    assert limite, f"o input do WhatsApp perdeu o maxlength: {tag.group(0)}"
+    assert int(limite.group(1)) >= 25, (
+        f"maxlength={limite.group(1)}: uma colagem de 21+ caracteres seria truncada antes "
+        f"da mascara (esperado >= 25)")
+
+
 ALL_TESTS = [v for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]
 

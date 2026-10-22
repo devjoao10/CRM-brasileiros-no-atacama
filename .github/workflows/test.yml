@@ -65,7 +65,12 @@ jobs:
           # `|| true`: `run:` roda com `bash -e`, e `grep -L` sai 1 quando nao
           # casa nada. Sem isto o step abortava ANTES do guard abaixo, com o
           # log generico do bash em vez da mensagem que explica a causa.
-          files=$(grep -L CONVERSAS_DIR tests/test_*.py || true)
+          # `test_v2_rb_cas_postgres.py` sai daqui de proposito: e o unico teste
+          # do repo que FALHA (nao pula) sem PostgreSQL, por exigencia do desenho
+          # BIA-V2 R-B secao 8 — em SQLite o SQLAlchemy DESCARTA `FOR UPDATE` em
+          # silencio, entao um skip gracioso viraria um gate inerte. Ele tem job
+          # proprio (`rb-cas-postgres`, abaixo), com servico PostgreSQL.
+          files=$(grep -L CONVERSAS_DIR tests/test_*.py | grep -v '^tests/test_v2_rb_cas_postgres\.py$' || true)
           [ -n "$files" ] || { echo "::error::selecao vazia — o discriminador CONVERSAS_DIR mudou?"; exit 1; }
           echo "arquivos selecionados: $(echo "$files" | wc -l)"
           fail=0
@@ -75,8 +80,146 @@ jobs:
           done
           exit $fail
 
+  # TERCEIRO job, e o unico com banco de verdade. Existe porque o desenho
+  # BIA-V2 R-B (secoes 2.3 e 8) proibe que a prova do compare-and-swap use o
+  # molde de skip-gracioso dos outros dois testes de infraestrutura
+  # (test_v2_r12_postgres_proof.py, check 3e de test_v2_workers.py): o dialeto
+  # SQLite do SQLAlchemy DESCARTA `FOR UPDATE` sem erro nenhum, e a forma errada
+  # do idioma tambem passa em qualquer cenario nao concorrente — um gate que
+  # pula quando falta Postgres reportaria verde sobre exatamente nada.
+  # `tests/test_v2_rb_cas_postgres.py` FALHA sem `DATABASE_URL_RB_CAS_PROOF`,
+  # e por isso o job provisiona o banco em vez de deixar o teste se acomodar.
+  rb-cas-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: proof
+          POSTGRES_PASSWORD: proof
+          POSTGRES_DB: rbcasproof
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U proof -d rbcasproof"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'   # = Dockerfile do CRM, igual ao job `crm`
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install httpx
+
+      - name: Prova de concorrencia do CAS contra PostgreSQL real
+        env:
+          ENVIRONMENT: development
+          DATABASE_URL_RB_CAS_PROOF: postgresql://proof:proof@localhost:5432/rbcasproof
+        run: python tests/test_v2_rb_cas_postgres.py
+
+  # QUARTO job. Mesma razao do `rb-cas-postgres` para nao fazer skip gracioso
+  # (desenho BIA-V2, secoes 2.3 e 8), mais uma exigencia que nenhum outro job
+  # deste arquivo consegue atender: `tests/test_v2_e2e_distribuido.py` sobe o
+  # CRM **e** o Conversas ao mesmo tempo, cada um em seu processo, e faz os dois
+  # conversarem por HTTP real. Isso precisa dos DOIS ambientes — e eles nao
+  # podem ser instalados juntos (os pins de fastapi/sqlalchemy/python-jose/
+  # jinja2 conflitam e o pip aborta; ver o cabecalho deste arquivo e o
+  # CLAUDE.md do repo). A saida e um venv por servico, exatamente como em
+  # producao: 3.11 + requirements.txt para o CRM, 3.12 +
+  # conversas/requirements.txt para o Conversas. O teste recebe o caminho de
+  # cada interpretador por env var e escolhe qual usar em cada subprocesso.
+  #
+  # O arquivo casa `grep -l` do job `conversas` (ele insere conversas/ no
+  # sys.path de verdade), entao precisa ser EXCLUIDO la — senao rodaria com o
+  # ambiente do Conversas apenas e o CRM morreria em ModuleNotFoundError.
+  e2e-distribuido:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: e2e
+          POSTGRES_PASSWORD: e2e
+          POSTGRES_DB: e2edist
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U e2e -d e2edist"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python 3.11 (CRM)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'   # = Dockerfile do CRM
+
+      - name: Virtualenv do CRM
+        # httpx entra aqui pelo mesmo motivo do job `crm`: e dependencia so de
+        # teste (o lancador do CRM nao a usa, mas app/services/conversas_bridge
+        # a importa), e nao pode entrar na imagem de producao.
+        run: |
+          python -m venv .venv-crm
+          .venv-crm/bin/python -m pip install --upgrade pip
+          .venv-crm/bin/python -m pip install -r requirements.txt
+          .venv-crm/bin/python -m pip install httpx
+
+      - name: Python 3.12 (Conversas)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'   # = Dockerfile do Conversas
+
+      - name: Virtualenv do Conversas
+        run: |
+          python -m venv .venv-conversas
+          .venv-conversas/bin/python -m pip install --upgrade pip
+          .venv-conversas/bin/python -m pip install -r conversas/requirements.txt
+
+      - name: E2E distribuido (dois apps reais, HTTP real, PostgreSQL real)
+        # O PROCESSO DO TESTE roda no venv do Conversas: ele importa os workers
+        # R15/R16 de verdade (pacote `app` do Conversas) e fala com o CRM so por
+        # SQL cru e HTTP.
+        env:
+          ENVIRONMENT: development
+          DATABASE_URL_E2E_DIST: postgresql://e2e:e2e@localhost:5432/e2edist
+          E2E_DIST_PYTHON_CRM: .venv-crm/bin/python
+          E2E_DIST_PYTHON_CONVERSAS: .venv-conversas/bin/python
+        run: .venv-conversas/bin/python tests/test_v2_e2e_distribuido.py
+
   conversas:
     runs-on: ubuntu-latest
+    # O check 3e de test_v2_workers.py e a UNICA prova comportamental de
+    # `FOR UPDATE SKIP LOCKED` (3a-3d rodam em SQLite, que descarta a clausula
+    # no proprio compilador — 3c/3d medem o lock de ARQUIVO do SQLite, nao a
+    # exclusao entre workers). Ele e opt-in por DATABASE_URL_WORKERS_PROOF e,
+    # sem esta env var, nunca rodava no CI: um gate committado e inerte. O
+    # servico abaixo o liga. Sem a var o arquivo continua passando (skip
+    # gracioso proprio dele) — ao contrario do gate do R-B, que FALHA sem banco,
+    # porque la a forma errada tambem passa em cenario nao concorrente.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: proof
+          POSTGRES_PASSWORD: proof
+          POSTGRES_DB: workersproof
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U proof -d workersproof"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -94,13 +237,48 @@ jobs:
       - name: Instalar dependencias
         run: python -m pip install -r conversas/requirements.txt
 
+      - name: Criar segundo banco no mesmo servico Postgres (gate de schema, bloco D)
+        # O bloco D (opcional, gated por DATABASE_URL_CHECK_BIA_V2_SCHEMA_PROOF)
+        # de test_check_bia_v2_schema.py faz `DROP SCHEMA public CASCADE` para
+        # garantir uma folha em branco antes de provar NULLS FIRST no catalogo
+        # real (pg_indexes.indexdef) — unica forma de distinguir a forma
+        # corrigida da m020 da forma superada da m019 (SQLite nao representa
+        # NULLS FIRST/LAST em CREATE INDEX). Rodar esse DROP no MESMO banco de
+        # DATABASE_URL_WORKERS_PROOF apagaria, na mesma passada, a tabela
+        # `handoff_operations` que o check 3e precisa — os dois arquivos rodam
+        # em SEQUENCIA dentro do loop do proximo step (glob + `grep -l`, sem
+        # ordem explicita garantida), e nao ha necessidade de depender disso.
+        # Banco SEPARADO no MESMO servico resolve de vez: bases diferentes sao
+        # namespaces inteiramente isolados no PostgreSQL, entao o DROP SCHEMA
+        # de uma nunca alcanca a outra. psycopg2 ja e dependencia obrigatoria
+        # deste bloco (ver docstring do teste) — reusa-lo aqui evita depender
+        # de `psql` estar instalado no runner.
+        run: |
+          python -c "import psycopg2; conn = psycopg2.connect('postgresql://proof:proof@localhost:5432/workersproof'); conn.autocommit = True; cur = conn.cursor(); cur.execute('CREATE DATABASE schemaproof'); cur.close(); conn.close()"
+
       - name: Rodar suite Conversas
         env:
           ENVIRONMENT: development
+          # Liga o check 3e (SKIP LOCKED contra PostgreSQL real). Banco
+          # DESCARTAVEL do servico deste job: o teste DROPA e recria
+          # `handoff_operations` a cada execucao.
+          DATABASE_URL_WORKERS_PROOF: postgresql://proof:proof@localhost:5432/workersproof
+          # Liga o bloco D (opcional) de test_check_bia_v2_schema.py — prova
+          # NULLS FIRST contra o catalogo REAL do PostgreSQL, gate que ate
+          # aqui nunca tinha rodado contra um banco de verdade no CI deste
+          # projeto. Banco PROPRIO (`schemaproof`, criado no step acima) no
+          # MESMO servico deste job — nunca `workersproof`, que o DROP SCHEMA
+          # CASCADE deste bloco apagaria.
+          DATABASE_URL_CHECK_BIA_V2_SCHEMA_PROOF: postgresql://proof:proof@localhost:5432/schemaproof
         run: |
           python --version
           # Ver o comentario equivalente no job crm.
-          files=$(grep -l CONVERSAS_DIR tests/test_*.py || true)
+          # `test_v2_e2e_distribuido.py` sai daqui de proposito: ele casa o grep
+          # (insere conversas/ no sys.path de verdade), mas sobe TAMBEM o app do
+          # CRM num processo proprio — e este ambiente nao tem as dependencias
+          # dele (slowapi, passlib, bcrypt...). Tem job proprio
+          # (`e2e-distribuido`, acima), com um venv por servico.
+          files=$(grep -l CONVERSAS_DIR tests/test_*.py | grep -v '^tests/test_v2_e2e_distribuido\.py$' || true)
           [ -n "$files" ] || { echo "::error::selecao vazia — o discriminador CONVERSAS_DIR mudou?"; exit 1; }
           echo "arquivos selecionados: $(echo "$files" | wc -l)"
           fail=0

@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 
@@ -16,8 +17,22 @@ from app.models.template import MessageTemplate, ServiceTemplate  # noqa: F401 �
 from app.models.auto_reply import AutoReply, BusinessHours  # noqa: F401
 from app.models.api_config import ApiConfig  # noqa: F401
 from app.models.message_variable import MessageVariable  # noqa: F401 — CONV-VAR-01
-from app.routers import webhook, conversations, pages, auth, quick_replies, templates, settings, api_config, media, tags, notes, variables
+from app.models.evento import ConversationEvent  # noqa: F401 — BIA-V2 Fase 0
+from app.models.handoff_op import HandoffOperation  # noqa: F401 — BIA-V2 Fase 6
+from app.routers import webhook, conversations, pages, auth, quick_replies, templates, settings, api_config, media, tags, notes, variables, v2_agent, v2_agent_sombra
 from app.seed import seed_dev_user, seed_quick_replies, seed_templates, seed_auto_replies, seed_business_hours, CONVERSAS_SEED_DEV_DATA
+from app.logging_config import configurar_logging
+from app.v2.eventos import EventoDuplicado
+from app.v2.eventos_validacao import CampoInvalido, PayloadInvalido
+# BIA-V2 R8/R10 — importar REGISTRA o listener `before_flush` da barreira de
+# escrita operacional (o modulo se auto-registra na `SessionLocal`). E por isso
+# que o import existe sem uso aparente: nenhum dos oito arquivos protegidos
+# chama nada daqui, e nem deve — ver o docstring de `app/v2/compat.py`.
+from app.v2 import compat  # noqa: F401
+
+# BIA-V2 Fase 0 — sem isto o root logger fica em WARNING sem handler, e toda a
+# trilha `.info` que este servico ja escreve morre dentro do processo.
+configurar_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +76,44 @@ app = FastAPI(
     description=DESCRIPTION,
     docs_url="/docs" if ENVIRONMENT == "development" else None,
     redoc_url="/redoc" if ENVIRONMENT == "development" else None,
+    # Mesmo gate que docs_url/redoc_url acima: sem isto, /openapi.json (schema
+    # completo, incluindo o header de auth e os contratos de /webhook/agent-bia-v2)
+    # continuaria publico em producao mesmo com os dois acima desligados.
+    openapi_url="/openapi.json" if ENVIRONMENT == "development" else None,
     lifespan=lifespan,
 )
+
+# ─── Excecoes de dominio da V2 → status HTTP (BIA-V2 Fase 10) ─────────
+# Registrado na instancia FastAPI RAIZ (a variavel `app` acima) — nunca num
+# `APIRouter` (ex.: o `router` de `v2_agent.py`): um handler registrado num
+# APIRouter NUNCA e chamado, mesmo para rota daquele proprio router — cairia
+# direto no 500 default do Starlette, exatamente o que este mapeamento existe
+# para evitar. Mesmo molde do CRM (`app/main.py`, `HandoffIndeterminado`).
+#
+# `EventoDuplicado` — colisao de idempotency key (event_id ja existe), nao
+# erro de validacao do cliente: 409 Conflict.
+async def _evento_duplicado_handler(request: StarletteRequest, exc: EventoDuplicado):
+    return JSONResponse(
+        status_code=409,
+        content={"detail": "event_id duplicado", "event_id": exc.event_id},
+    )
+
+
+app.add_exception_handler(EventoDuplicado, _evento_duplicado_handler)
+
+
+# `CampoInvalido`/`PayloadInvalido` — violacao de forma/contrato do payload,
+# mesma semantica do `RequestValidationError` nativo do FastAPI: 422.
+async def _campo_invalido_handler(request: StarletteRequest, exc: CampoInvalido):
+    return JSONResponse(status_code=422, content={"detail": str(exc), "campo": exc.campo})
+
+
+async def _payload_invalido_handler(request: StarletteRequest, exc: PayloadInvalido):
+    return JSONResponse(status_code=422, content={"detail": str(exc), "chave": exc.chave})
+
+
+app.add_exception_handler(CampoInvalido, _campo_invalido_handler)
+app.add_exception_handler(PayloadInvalido, _payload_invalido_handler)
 
 # CORS
 # AUDIT-2026-08-W1B — F8: `["*"]` com `allow_credentials=True` era o default (e nao
@@ -153,6 +204,8 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Routers
 app.include_router(webhook.router)
+app.include_router(v2_agent.router)  # BIA-V2 Fase 10 — POST /webhook/agent-bia-v2
+app.include_router(v2_agent_sombra.router)  # BIA-V2 SOMBRA — POST /webhook/agent-bia-v2-shadow (zero efeito)
 app.include_router(conversations.router)
 app.include_router(auth.router)  # Login endpoint (local em dev, PostgreSQL em prod)
 app.include_router(quick_replies.router)
